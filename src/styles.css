@@ -51,6 +51,8 @@
   --rune-ansuz: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 44 96'%3E%3Cpath d='M12 4 V92 M12 12 L36 2 M12 32 L36 22' stroke='%23000' stroke-width='8' stroke-linecap='round' fill='none'/%3E%3C/svg%3E");
   --rune-tiwaz: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 44 96'%3E%3Cpath d='M22 4 V92 M22 4 L6 24 M22 4 L38 24' stroke='%23000' stroke-width='8' stroke-linecap='round' fill='none'/%3E%3C/svg%3E");
   --rune-div: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 12'%3E%3Cg fill='%23000'%3E%3Crect x='4' y='3' width='6' height='6' transform='rotate(45 7 6)'/%3E%3Crect x='28' y='2' width='8' height='8' transform='rotate(45 32 6)'/%3E%3Crect x='54' y='3' width='6' height='6' transform='rotate(45 57 6)'/%3E%3C/g%3E%3C/svg%3E");
+  /* фьорд-пейзаж: два слоя гор + драккар с парусом и щитами, тональные заливки — работают в обеих темах */
+  --fjordline: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 900 90' preserveAspectRatio='none'%3E%3Cpath d='M0 90 L0 55 L90 28 L180 60 L260 35 L340 62 L430 30 L520 58 L620 26 L720 55 L810 38 L900 60 L900 90 Z' fill='%23ffffff' fill-opacity='.06'/%3E%3Cpath d='M0 90 L0 70 L120 45 L230 72 L330 50 L450 75 L560 48 L680 74 L780 55 L900 72 L900 90 Z' fill='%23000000' fill-opacity='.20'/%3E%3Cg fill='%23000000' fill-opacity='.30'%3E%3Cpath d='M600 76 Q640 90 682 76 L674 83 Q640 92 608 83 Z'/%3E%3Crect x='639' y='50' width='2.5' height='27'/%3E%3Cpath d='M643 52 L668 66 L643 66 Z'/%3E%3Ccircle cx='614' cy='77' r='2.6'/%3E%3Ccircle cx='626' cy='79' r='2.6'/%3E%3Ccircle cx='652' cy='80' r='2.6'/%3E%3Ccircle cx='664' cy='78' r='2.6'/%3E%3C/g%3E%3C/svg%3E");
 
   --r: 16px; --r-lg: 20px; --r-xl: 24px;
   --font: 'Nunito', -apple-system, 'SF Pro Rounded', system-ui, sans-serif;
@@ -121,6 +123,8 @@ body::before {
 }
 
 #root { height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
+.route { display: flex; flex-direction: column; flex: 1; min-height: 0; animation: route-in .22s ease-out; }
+@keyframes route-in { from { opacity: 0; transform: translateY(6px); } }
 
 .boot { display: grid; place-items: center; min-height: 100dvh; color: var(--text2); font-weight: 800; }
 
@@ -150,6 +154,7 @@ body::before {
   top: 0; height: calc(env(safe-area-inset-top) + 170px);
   background:
     var(--sparkle) repeat-x,
+    var(--fjordline) bottom center / 100% 88px no-repeat,
     linear-gradient(165deg, var(--band-a) 0%, var(--band-b) 100%);
   border-radius: 0 0 44% 44% / 0 0 40px 40px;
   box-shadow: 0 10px 30px var(--band-glow);
@@ -226,6 +231,10 @@ body::before {
   animation: settle .35s cubic-bezier(.2, .9, .3, 1.15) backwards;
 }
 @keyframes settle { from { opacity: 0; transform: translateY(8px) scale(.985); } }
+/* стаггер: карточки приземляются друг за другом — рука, а не вспышка */
+.screen > .card ~ .card { animation-delay: .07s; }
+.screen > .card ~ .card ~ .card { animation-delay: .14s; }
+.home-actions { animation: settle .35s cubic-bezier(.2, .9, .3, 1.15) .2s backwards; }
 
 .row { display: flex; gap: 12px; }
 .row > * { flex: 1; }
@@ -700,6 +709,14 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
   36%, 86% { transform: translateY(-1.5px); }
 }
 /* моргание: одиночное + изредка двойное — живее метронома */
+/* внутреннее пламя лижет воздух независимо от тела */
+.bd-inner-flame { transform-origin: 60px 120px; animation: inner-lick 2.1s ease-in-out infinite alternate; }
+@keyframes inner-lick {
+  0% { transform: scale(1, 1); }
+  55% { transform: scale(1.035, .985) translateY(.5px); }
+  100% { transform: scale(.985, 1.02); }
+}
+
 .buddy-eyes { animation: buddy-blink 7.6s infinite; transform-origin: 60px 86px; }
 @keyframes buddy-blink {
   0%, 42%, 46%, 90%, 94%, 96.5%, 100% { transform: scaleY(1); }

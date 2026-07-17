@@ -9,12 +9,16 @@ import SettingsScreen from './screens/Settings'
 export default function App() {
   const app = useApp()
   if (!app.ready) return <div className="boot">Загрузка…</div>
-  switch (app.screen) {
-    case 'review': return <Review />
-    case 'summary': return <Summary />
-    case 'add': return <AddCard />
-    case 'stats': return <Stats />
-    case 'settings': return <SettingsScreen />
-    default: return <Home />
-  }
+  const screen = (() => {
+    switch (app.screen) {
+      case 'review': return <Review />
+      case 'summary': return <Summary />
+      case 'add': return <AddCard />
+      case 'stats': return <Stats />
+      case 'settings': return <SettingsScreen />
+      default: return <Home />
+    }
+  })()
+  // мягкий переход между экранами
+  return <div className="route" key={app.screen}>{screen}</div>
 }

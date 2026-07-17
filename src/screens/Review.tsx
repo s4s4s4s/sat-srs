@@ -334,10 +334,11 @@ export default function Review() {
   const answerWord = isPrep ? card.prep : task.format === 'mc' && card.choices.length >= 2 ? task.answer : card.word
   const isNumeric = !!card.answerNum
   const isAuthored = card.choices.length >= 2
+  // у ввода слова цель задана значением: иначе «popular» вместо «ubiquitous» — честный ответ носителя, а не ошибка
   const taskHint =
     task.format === 'mc' ? (isAuthored ? 'Выберите правильный вариант' : 'Какое слово подходит в пропуск?')
     : task.format === 'prep' ? 'Какой предлог здесь правильный?'
-    : task.format === 'type' ? (isNumeric ? 'Решите и введите ответ' : 'Впишите слово, подходящее в пропуск')
+    : task.format === 'type' ? (isNumeric ? 'Решите и введите ответ' : card.meaning_ru ? `Впишите слово со значением «${card.meaning_ru}»` : 'Впишите слово, подходящее в пропуск')
     : 'Вспомните слово — потом проверьте себя'
 
   // зачётное время: база дня + закрытые карточки (с капом) + текущая карточка (с капом)

@@ -61,8 +61,9 @@ export default function FlameBuddy({ size = 96, mood = 'idle' }: { size?: number
         d="M60 6C60 6 22 47 22 84C22 111 39 130 60 130C81 130 98 111 98 84C98 47 60 6 60 6Z"
         fill="url(#bd-outer)"
       />
-      {/* внутреннее пламя-лицо */}
+      {/* внутреннее пламя-лицо (живёт своей жизнью — лижет воздух) */}
       <path
+        className="bd-inner-flame"
         d="M60 52C60 52 38 74 38 95C38 111 48 122 60 122C72 122 82 111 82 95C82 74 60 52 60 52Z"
         fill="url(#bd-inner)"
       />
