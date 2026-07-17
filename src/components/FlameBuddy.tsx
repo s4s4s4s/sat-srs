@@ -32,6 +32,10 @@ export default function FlameBuddy({ size = 96, mood = 'idle' }: { size?: number
           <stop offset="0" stopColor="#ffe066" />
           <stop offset="1" stopColor="#ffc800" />
         </linearGradient>
+        <linearGradient id="bd-helm" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#9aa8b6" />
+          <stop offset="1" stopColor="#5c6b78" />
+        </linearGradient>
       </defs>
       {/* тень-подложка */}
       <ellipse cx="60" cy="132" rx="30" ry="6" fill="currentColor" opacity=".12" />
@@ -45,6 +49,21 @@ export default function FlameBuddy({ size = 96, mood = 'idle' }: { size?: number
         d="M60 52C60 52 38 74 38 95C38 111 48 122 60 122C72 122 82 111 82 95C82 74 60 52 60 52Z"
         fill="url(#bd-inner)"
       />
+      {/* викингский шлем */}
+      <g className="buddy-helm">
+        {/* рога */}
+        <path d="M34 66 C24 62 18 52 20 42 C28 46 34 54 36 62 Z" fill="#e8e0d0" stroke="#c9bfa8" strokeWidth="1.5" />
+        <path d="M86 66 C96 62 102 52 100 42 C92 46 86 54 84 62 Z" fill="#e8e0d0" stroke="#c9bfa8" strokeWidth="1.5" />
+        {/* купол */}
+        <path d="M36 72 C36 56 46 46 60 46 C74 46 84 56 84 72 Z" fill="url(#bd-helm)" />
+        {/* обод с заклёпками */}
+        <rect x="33" y="69" width="54" height="8" rx="4" fill="#4a5763" />
+        <circle cx="42" cy="73" r="1.6" fill="#9aa8b6" />
+        <circle cx="60" cy="73" r="1.6" fill="#9aa8b6" />
+        <circle cx="78" cy="73" r="1.6" fill="#9aa8b6" />
+        {/* руна на куполе */}
+        <path d="M60 52 V66 M60 55 L66 59 M60 61 L66 65" stroke="#d9dfe6" strokeWidth="2.2" strokeLinecap="round" fill="none" opacity=".85" />
+      </g>
       {/* щёчки */}
       {(mood === 'happy' || mood === 'party') && (
         <>

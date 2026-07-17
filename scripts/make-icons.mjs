@@ -11,11 +11,19 @@ const svg = (pad) => `
     </linearGradient>
   </defs>
   <rect x="${pad}" y="${pad}" width="${512 - 2 * pad}" height="${512 - 2 * pad}" rx="${pad > 0 ? 110 : 0}" fill="url(#bg)"/>
-  <g transform="translate(256 210) scale(11.2) translate(-12 -12)">
-    <path d="M12 1.8C12 1.8 5.2 8.7 5.2 14.3C5.2 18.4 8.2 21.8 12 21.8C15.8 21.8 18.8 18.4 18.8 14.3C18.8 8.7 12 1.8 12 1.8Z" fill="#ff9600"/>
-    <path d="M12 9.8C12 9.8 8.8 13.3 8.8 16C8.8 18 10.2 19.6 12 19.6C13.8 19.6 15.2 18 15.2 16C15.2 13.3 12 9.8 12 9.8Z" fill="#ffc800"/>
+  <g transform="translate(256 196) scale(2.55) translate(-60 -70)">
+    <path d="M60 6C60 6 22 47 22 84C22 111 39 130 60 130C81 130 98 111 98 84C98 47 60 6 60 6Z" fill="#ff9600"/>
+    <path d="M60 52C60 52 38 74 38 95C38 111 48 122 60 122C72 122 82 111 82 95C82 74 60 52 60 52Z" fill="#ffc800"/>
+    <path d="M34 66 C24 62 18 52 20 42 C28 46 34 54 36 62 Z" fill="#e8e0d0"/>
+    <path d="M86 66 C96 62 102 52 100 42 C92 46 86 54 84 62 Z" fill="#e8e0d0"/>
+    <path d="M36 72 C36 56 46 46 60 46 C74 46 84 56 84 72 Z" fill="#77879a"/>
+    <rect x="33" y="69" width="54" height="8" rx="4" fill="#4a5763"/>
+    <path d="M60 52 V66 M60 55 L66 59 M60 61 L66 65" stroke="#d9dfe6" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+    <rect x="47" y="80" width="7" height="13" rx="3.5" fill="#7a3d00"/>
+    <rect x="66" y="80" width="7" height="13" rx="3.5" fill="#7a3d00"/>
+    <path d="M50 104 Q60 114 70 104" stroke="#7a3d00" stroke-width="4" stroke-linecap="round" fill="none"/>
   </g>
-  <text x="256" y="436" font-family="Arial, sans-serif" font-size="96" font-weight="900" fill="#ffffff" text-anchor="middle" letter-spacing="6">SAT</text>
+  <text x="256" y="452" font-family="Arial, sans-serif" font-size="88" font-weight="900" fill="#ffffff" text-anchor="middle" letter-spacing="6">SAT</text>
 </svg>`
 
 mkdirSync('public', { recursive: true })

@@ -97,7 +97,7 @@ export default function Home() {
           <div className="hero-main">
             <div className="hero-head" style={{ marginBottom: 8 }}>
               <span className="hero-title">Сегодня</span>
-              <span className="hero-sub">до SAT: {daysToExam} дн · завтра: {cAll.revTomorrow}</span>
+              <span className="hero-sub">до SAT: {daysToExam} дн ᛫ завтра: {cAll.revTomorrow}</span>
             </div>
             <div className="minbar-row" style={{ marginTop: 0 }}>
               <div className="minbar"><div style={{ width: `${Math.min(100, (mins / MIN_MINUTES) * 100)}%` }} /></div>
@@ -111,8 +111,8 @@ export default function Home() {
         </div>
       </div>
 
-      <SectionBlock title="Слова и правила" icon={<Bolt size={18} />} badge="badge-blue" glyph="⚡" cards={rw} budget={budget} onStart={go('rw')} />
-      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="∑" cards={math} budget={budget} onStart={go('math')} />
+      <SectionBlock title="Слова и правила" icon={<Bolt size={18} />} badge="badge-blue" glyph="ᚨ" cards={rw} budget={budget} onStart={go('rw')} />
+      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="ᛞ" cards={math} budget={budget} onStart={go('math')} />
 
       <div className="home-actions">
         <div className="row">

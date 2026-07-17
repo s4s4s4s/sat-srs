@@ -41,7 +41,9 @@
   --flame-off-a: #d6c9bc;
   --flame-off-b: #c2b3a3;
 
-  --sparkle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cg fill='%23ffffff' fill-opacity='.10'%3E%3Cpath d='M22 14l2.2 5.8L30 22l-5.8 2.2L22 30l-2.2-5.8L14 22l5.8-2.2z'/%3E%3Cpath d='M86 58l1.6 4.4 4.4 1.6-4.4 1.6-1.6 4.4-1.6-4.4-4.4-1.6 4.4-1.6z'/%3E%3Ccircle cx='58' cy='96' r='3'/%3E%3Ccircle cx='104' cy='18' r='2'/%3E%3C/g%3E%3C/svg%3E");
+  /* руны старшего футарка (ᚠ ᚢ ᚦ ᚨ) пасами — рендерятся везде одинаково */
+  --sparkle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cg stroke='%23ffffff' stroke-opacity='.12' stroke-width='2.4' stroke-linecap='round' fill='none'%3E%3Cg transform='translate(18 12) rotate(-8)'%3E%3Cpath d='M0 0 V24 M0 5 L9 0 M0 12 L9 7'/%3E%3C/g%3E%3Cg transform='translate(88 30) rotate(6)'%3E%3Cpath d='M0 0 V24 M0 0 L10 7 L10 24'/%3E%3C/g%3E%3Cg transform='translate(46 74) rotate(-5)'%3E%3Cpath d='M0 0 V24 M0 7 L9 12 L0 17'/%3E%3C/g%3E%3Cg transform='translate(108 92) rotate(9)'%3E%3Cpath d='M0 0 V24 M0 4 L9 9 M0 12 L9 17'/%3E%3C/g%3E%3Ccircle cx='70' cy='16' r='1.6' fill='%23ffffff' fill-opacity='.14' stroke='none'/%3E%3Ccircle cx='20' cy='116' r='1.6' fill='%23ffffff' fill-opacity='.14' stroke='none'/%3E%3C/g%3E%3C/svg%3E");
+  --rune-gold: #c99a3a;
 
   --r: 16px; --r-lg: 20px; --r-xl: 24px;
   --font: 'Nunito', -apple-system, 'SF Pro Rounded', system-ui, sans-serif;
@@ -67,8 +69,9 @@
     --orange: #ff9600; --streak-ink: #ffb020;
     --purple: #ce82ff; --purple-sh: #a763d6; --purple-soft: #31213f; --purple-line: #4c3363; --purple-text: #dda6ff;
 
-    --band-a: #204913;
-    --band-b: #14313a;
+    --band-a: #274b60; /* фьорд: стальная синева в глубину */
+    --band-b: #132b3a;
+    --rune-gold: #e0b055;
     --band-chip: rgba(0, 0, 0, .32);
     --band-btn: rgba(255, 255, 255, .10);
 
@@ -217,11 +220,11 @@ body::before {
   box-shadow: 0 4px 0 var(--shadow), var(--card-float);
   margin-bottom: 18px;
 }
-/* призрачная шва — маленький характер в углу hero */
+/* призрачная руна ансуз (речь, знание) в углу hero */
 .card.hero::after {
-  content: 'ə'; position: absolute; z-index: -1;
-  right: -4px; top: -26px;
-  font-size: 104px; font-weight: 800; color: var(--text2); opacity: .08;
+  content: 'ᚨ'; position: absolute; z-index: -1;
+  right: 2px; top: -20px;
+  font-size: 96px; font-weight: 400; color: var(--rune-gold); opacity: .10;
   pointer-events: none;
 }
 
@@ -514,6 +517,11 @@ body::before {
 }
 
 .sum-title { font-size: 28px; font-weight: 800; color: var(--text-strong); margin: 0; }
+.sum-title::after {
+  content: '᛫ ᛬ ᛫'; display: block;
+  font-size: 15px; font-weight: 400; color: var(--rune-gold); opacity: .8;
+  letter-spacing: 6px; margin-top: 6px;
+}
 .sum-sub { font-size: 15px; font-weight: 700; color: var(--text2); margin-top: 4px; }
 
 .tiles { display: flex; gap: 10px; justify-content: center; }
@@ -686,9 +694,9 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 /* глиф-вотермарка в углу секционной карточки */
 .section-card { position: relative; overflow: hidden; }
 .sec-glyph {
-  position: absolute; right: -8px; bottom: -26px; z-index: 0;
-  font-size: 110px; font-weight: 800; line-height: 1;
-  color: var(--text2); opacity: .07; pointer-events: none;
+  position: absolute; right: 2px; bottom: -18px; z-index: 0;
+  font-size: 108px; font-weight: 400; line-height: 1;
+  color: var(--rune-gold); opacity: .10; pointer-events: none;
 }
 .section-card > *:not(.sec-glyph) { position: relative; z-index: 1; }
 
