@@ -318,7 +318,7 @@ export default function Review() {
           task.format === 'reveal' ? (
             <>
               <button className="btn btn-green" onClick={() => setRevealed(true)}>Показать ответ</button>
-              <div className="hint-keys">Space — показать</div>
+              <div className="hint-keys kb-only">Space — показать</div>
             </>
           ) : task.format === 'type' ? (
             <>
@@ -373,7 +373,9 @@ export default function Review() {
               ))}
             </div>
             <div className="hint-keys">
-              {suggested ? 'Enter — подтвердить · 1–4 — своя оценка' : 'Оценка решает, когда слово вернётся · клавиши 1–4'}
+              {suggested
+                ? <span className="kb-only">Enter — подтвердить · 1–4 — своя оценка</span>
+                : <>Оценка решает, когда слово вернётся<span className="kb-only"> · клавиши 1–4</span></>}
             </div>
           </>
         )}

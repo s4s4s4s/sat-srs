@@ -365,6 +365,10 @@ body::before {
 .rev-bottom.is-wrong { background: var(--red-soft); border-top-color: var(--red-line); }
 
 .hint-keys { text-align: center; font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 10px; }
+/* клавиатурные подсказки не показываем на тач-устройствах */
+@media (hover: none) and (pointer: coarse) {
+  .kb-only { display: none; }
+}
 
 /* варианты MC — стопка, реакции pop/shake */
 .mc-stack { display: flex; flex-direction: column; gap: 10px; }
