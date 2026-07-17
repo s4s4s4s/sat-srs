@@ -73,14 +73,17 @@ export async function applyPull(
       const m = merge({ fm: f.fm, body: f.body }, cur)
       await tx.store.put({ path: f.path, sha: f.sha, fm: m.fm, body: m.body, dirty: 1, broken: f.broken })
     } else {
-      // чистая запись: fsrs/my_sentence принадлежат приложению — если тьютор переписал файл
-      // и потерял их, восстанавливаем из локальной копии и пушим обратно (dirty=1)
-      const hadFsrs = cur && !cur.broken && cur.fm.fsrs && typeof cur.fm.fsrs === 'object'
-      const lostFsrs = hadFsrs && !f.broken && (!f.fm.fsrs || typeof f.fm.fsrs !== 'object')
-      const lostSentence = cur && !cur.broken && !f.broken && cur.fm.my_sentence && !f.fm.my_sentence
-      if (lostFsrs || lostSentence) {
+      // чистая запись: fsrs-блоки/my_sentence принадлежат приложению — если тьютор переписал
+      // файл и потерял их, восстанавливаем из локальной копии и пушим обратно (dirty=1).
+      // fsrs_prep восстанавливаем только пока prep-поля живы: их удаление — осознанное.
+      const ok = cur && !cur.broken && !f.broken
+      const lostFsrs = ok && cur.fm.fsrs && typeof cur.fm.fsrs === 'object' && (!f.fm.fsrs || typeof f.fm.fsrs !== 'object')
+      const lostPrep = ok && cur.fm.fsrs_prep && f.fm.prep && f.fm.prep_context && !f.fm.fsrs_prep
+      const lostSentence = ok && cur.fm.my_sentence && !f.fm.my_sentence
+      if (lostFsrs || lostPrep || lostSentence) {
         const fm = { ...f.fm }
         if (lostFsrs) fm.fsrs = cur!.fm.fsrs
+        if (lostPrep) fm.fsrs_prep = cur!.fm.fsrs_prep
         if (lostSentence) fm.my_sentence = cur!.fm.my_sentence
         await tx.store.put({ path: f.path, sha: f.sha, fm, body: f.body, dirty: 1, broken: f.broken })
       } else {

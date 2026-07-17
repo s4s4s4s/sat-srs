@@ -183,6 +183,38 @@ h1.logo { font-size: 24px; font-weight: 800; color: var(--green); margin: 0; let
 .grade-btn .iv { display: block; font-size: 11px; font-weight: 700; text-transform: none; letter-spacing: 0; opacity: .85; margin-top: 2px; }
 .hint-keys { text-align: center; font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 10px; }
 
+/* ── Форматы упражнений ─────────────────────────────────────────── */
+.type-input {
+  width: 100%; font-family: var(--font); font-size: 20px; font-weight: 800;
+  color: var(--text-strong); background: var(--surface); text-align: center;
+  border: 2px solid var(--line); border-radius: var(--radius); padding: 13px 14px;
+  outline: none;
+}
+.type-input:focus { border-color: var(--blue); background: var(--bg); }
+
+.mc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mc-grid.answered { margin-bottom: 12px; }
+.mc-option { text-transform: none; letter-spacing: 0; font-size: 17px; }
+.mc-right {
+  background: var(--green-soft); color: var(--green);
+  border: 2px solid var(--green); box-shadow: 0 4px 0 var(--green-sh);
+  opacity: 1;
+}
+.mc-wrong {
+  background: var(--red-soft); color: var(--red);
+  border: 2px solid var(--red); box-shadow: 0 4px 0 var(--red-sh);
+  opacity: 1;
+}
+.mc-option:disabled { cursor: default; }
+.mc-option.btn-white:disabled { background: var(--bg); color: var(--text2); box-shadow: 0 4px 0 var(--line); }
+
+.verdict { font-size: 16px; font-weight: 800; margin-bottom: 8px; }
+.verdict-correct { color: var(--green); }
+.verdict-typo { color: var(--orange); }
+.verdict-wrong { color: var(--red); }
+
+.grade-btn.suggested { outline: 3px solid var(--text-strong); outline-offset: 2px; }
+
 /* ── Итог сессии ────────────────────────────────────────────────── */
 .sum-wrap { flex: 1; display: flex; flex-direction: column; justify-content: center; text-align: center; gap: 14px; }
 .sum-emoji { font-size: 56px; }

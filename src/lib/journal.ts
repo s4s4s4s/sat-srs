@@ -90,11 +90,13 @@ export function trueRetention30(lines: JournalLine[], today: string = dayKey()):
   return { pct: total ? Math.round((pass / total) * 100) : null, n: total }
 }
 
-/** Сколько новых карточек уже введено в этот учебный день */
+/** Сколько новых учебных единиц (слово × навык) уже введено в этот учебный день */
 export function newIntroducedOn(lines: JournalLine[], day: string): number {
   const seen = new Set<string>()
   for (const l of lines) {
-    if (l.type === 'review' && l.day === day && l.prev_state === State.New && l.slug) seen.add(l.slug)
+    if (l.type === 'review' && l.day === day && l.prev_state === State.New && l.slug) {
+      seen.add(`${l.slug}#${l.skill ?? 'recall'}`)
+    }
   }
   return seen.size
 }

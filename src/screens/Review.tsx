@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Rating, State, type Grade } from 'ts-fsrs'
-import { useApp, views, rateCard, finishSession, setScreen } from '../lib/store'
-import { buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES } from '../lib/scheduler'
-import { newIntroducedOn, MIN_MINUTES } from '../lib/journal'
+import { useApp, views, rateItem, finishSession, setScreen } from '../lib/store'
+import {
+  buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
+  pickFormat, mcDistractors, prepOptions, checkTyped, suggestedGrade
+} from '../lib/scheduler'
+import { newIntroducedOn } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
-import type { CardView, SessionResult } from '../lib/types'
+import type { Format, SessionResult, StudyItem } from '../lib/types'
 
 const GRADE_CLASS: Record<number, string> = {
   [Rating.Again]: 'btn-red',
@@ -13,12 +16,19 @@ const GRADE_CLASS: Record<number, string> = {
   [Rating.Easy]: 'btn-blue'
 }
 
+function shuffleOnce<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 /** Предложение с пропуском / с подставленным словом */
 function Sentence({ context, word, revealed }: { context: string; word: string; revealed: boolean }) {
   const parts = context.split(/_{3,}/)
-  if (parts.length === 1) {
-    return <div className="rev-sentence">{context}</div>
-  }
+  if (parts.length === 1) return <div className="rev-sentence">{context}</div>
   return (
     <div className="rev-sentence">
       {parts.map((p, i) => (
@@ -32,26 +42,69 @@ function Sentence({ context, word, revealed }: { context: string; word: string; 
   )
 }
 
+/** Задание текущего показа: формат и варианты фиксируются в момент показа карточки */
+interface Task {
+  item: StudyItem
+  format: Format
+  options: string[] // mc/prep
+  answer: string    // слово или предлог
+}
+
+function makeTask(item: StudyItem, deck: ReturnType<typeof views>): Task {
+  const format = pickFormat(item, deck.map(r => r))
+  if (format === 'mc') {
+    return { item, format, options: shuffleOnce([item.view.word, ...mcDistractors(item.view, deck)]), answer: item.view.word }
+  }
+  if (format === 'prep') {
+    return { item, format, options: prepOptions(item.view.prep), answer: item.view.prep }
+  }
+  return { item, format, options: [], answer: item.view.word }
+}
+
+const FORMAT_HINT: Record<Format, string> = {
+  reveal: 'Вспомни слово',
+  mc: 'Выбери слово',
+  type: 'Впиши слово',
+  prep: 'Выбери предлог'
+}
+
 export default function Review() {
   const app = useApp()
   const scheduler = useMemo(() => makeScheduler(app.settings.requestRetention), [app.settings.requestRetention])
+  const deck = views()
 
-  const [queue, setQueue] = useState<CardView[]>(() => {
+  const [queue, setQueue] = useState<StudyItem[]>(() => {
     const budget = Math.max(0, app.settings.newPerDay - newIntroducedOn(app.journal, dayKey()))
     return buildQueue(views(), budget)
   })
+  const [task, setTask] = useState<Task | null>(() => null)
   const [revealed, setRevealed] = useState(false)
+  const [picked, setPicked] = useState<string | null>(null) // выбранный вариант mc/prep
+  const [typed, setTyped] = useState('')
+  const [verdict, setVerdict] = useState<'correct' | 'typo' | 'wrong' | null>(null)
   const [done, setDone] = useState(0)
   const [activeSec, setActiveSec] = useState(0)
   const res = useRef<SessionResult>({ day: dayKey(), reviews: 0, newSeen: 0, again: 0, passRev: 0, totalRev: 0, durMs: 0, queueEmpty: false })
   const shownAt = useRef(Date.now())
   const busy = useRef(false)
   const finished = useRef(false)
+  const inputRef = useRef<HTMLInputElement>(null)
 
-  const card = queue[0] ?? null
+  const head = queue[0] ?? null
+  // задание пересобирается при смене головы очереди
+  useEffect(() => {
+    if (!head) { setTask(null); return }
+    setTask(makeTask(head, deck))
+    setRevealed(false)
+    setPicked(null)
+    setTyped('')
+    setVerdict(null)
+    shownAt.current = Date.now()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [head && `${head.view.path}#${head.skill}#${done}`])
+
   const total = done + queue.length
 
-  // таймер активного времени (пауза при сворачивании)
   useEffect(() => {
     const t = setInterval(() => {
       if (document.visibilityState === 'visible') setActiveSec(s => s + 1)
@@ -59,9 +112,7 @@ export default function Review() {
     return () => clearInterval(t)
   }, [])
 
-  useEffect(() => {
-    shownAt.current = Date.now()
-  }, [card?.path, done])
+  const suggested = task && verdict !== null ? suggestedGrade(task.format, verdict === 'correct', verdict === 'typo') : null
 
   async function finish(queueEmpty: boolean) {
     if (finished.current) return // двойной тап ✕ / финиш после финиша не пишет дубль session-строки
@@ -71,12 +122,11 @@ export default function Review() {
     await finishSession(res.current)
   }
 
-  function advance(next: CardView | null) {
+  function advance(next: StudyItem | null) {
     const rest = queue.slice(1)
     if (next && shouldRequeue(next.fsrs, new Date())) {
       rest.splice(requeuePosition(rest.length, next.fsrs, new Date()), 0, next)
     }
-    setRevealed(false)
     setDone(d => d + 1)
     if (rest.length === 0) {
       setQueue([])
@@ -86,15 +136,26 @@ export default function Review() {
     }
   }
 
+  /** Ответ в объективных форматах: фиксируем результат и открываем ответ с предложенной оценкой */
+  function submitObjective(value: string) {
+    if (!task || revealed) return
+    const ok = task.format === 'type'
+      ? checkTyped(value, task.answer)
+      : value.trim().toLowerCase() === task.answer.toLowerCase() ? 'correct' : 'wrong'
+    setPicked(value)
+    setVerdict(ok as 'correct' | 'typo' | 'wrong')
+    setRevealed(true)
+  }
+
   async function grade(g: Grade) {
-    if (!card || busy.current || finished.current) return
+    if (!task || busy.current || finished.current) return
     busy.current = true
     try {
       const elapsed = Date.now() - shownAt.current
-      const prevState = card.fsrs.state
+      const prevState = task.item.fsrs.state
       let next
       try {
-        next = await rateCard(card, g, elapsed)
+        next = await rateItem(task.item, g, elapsed, task.format, verdict === null ? undefined : verdict !== 'wrong')
       } catch {
         // карточка исчезла (синк удалил/тьютор переименовал) — пропускаем, не блокируя сессию
         advance(null)
@@ -110,19 +171,25 @@ export default function Review() {
         if (g > Rating.Again) r.passRev++
       }
 
-      advance({ ...card, fsrs: next })
+      advance({ ...task.item, fsrs: next })
     } finally {
       busy.current = false
     }
   }
 
-  // клавиатура: Space/Enter — показать, 1–4 — оценка
+  // клавиатура: Space/Enter — показать/подтвердить, 1–4 — оценка
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.code === 'Space' || e.code === 'Enter') {
+      if (!task) return
+      const typing = document.activeElement === inputRef.current
+      if (e.code === 'Enter' && typing && !revealed) {
         e.preventDefault()
-        if (!revealed) setRevealed(true)
-      } else if (revealed && ['1', '2', '3', '4'].includes(e.key)) {
+        submitObjective(typed)
+      } else if ((e.code === 'Space' && !typing) || (e.code === 'Enter' && !typing)) {
+        e.preventDefault()
+        if (!revealed && task.format === 'reveal') setRevealed(true)
+        else if (revealed && suggested) void grade(suggested)
+      } else if (revealed && !typing && ['1', '2', '3', '4'].includes(e.key)) {
         e.preventDefault()
         void grade(GRADES[Number(e.key) - 1].rating)
       }
@@ -131,7 +198,7 @@ export default function Review() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
-  if (!card) {
+  if (!head || !task) {
     return (
       <div className="screen">
         <div className="rev-body" style={{ textAlign: 'center' }}>
@@ -142,7 +209,12 @@ export default function Review() {
     )
   }
 
-  const minLeft = Math.max(0, MIN_MINUTES * 60 - activeSec)
+  const card = task.item.view
+  const isPrep = task.format === 'prep'
+  const sentence = isPrep ? card.prepContext : card.context
+  const answerWord = isPrep ? card.prep : card.word
+
+  const minLeft = Math.max(0, 15 * 60 - activeSec)
   const mm = String(Math.floor(minLeft / 60)).padStart(2, '0')
   const ss = String(minLeft % 60).padStart(2, '0')
 
@@ -155,35 +227,86 @@ export default function Review() {
       </div>
 
       <div className="rev-body">
-        <div className="rev-source">{card.fsrs.state === State.New ? 'Новое слово' : 'Вспомни слово'} · {card.source}</div>
-        <Sentence context={card.context} word={card.word} revealed={revealed} />
+        <div className="rev-source">
+          {task.item.fsrs.state === State.New ? 'Новое' : FORMAT_HINT[task.format]}
+          {isPrep && <> · <b>{card.word}</b></>} · {card.source}
+        </div>
+        <Sentence context={sentence} word={answerWord} revealed={revealed} />
+
         {revealed && (
           <div className="rev-answer">
-            <div className="rev-word">{card.word}<span className="pos">{card.pos}</span></div>
-            {card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
-            {card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
-            {card.roots && <div className="rev-roots">🌱 {card.roots}</div>}
+            {verdict && (
+              <div className={`verdict verdict-${verdict}`}>
+                {verdict === 'correct' ? 'Верно!' : verdict === 'typo' ? `Почти — опечатка: вы ввели «${typed.trim()}»` : isPrep ? `Правильно: ${card.word} ${card.prep}` : 'Мимо'}
+              </div>
+            )}
+            <div className="rev-word">{isPrep ? `${card.word} ${card.prep}` : card.word}<span className="pos">{card.pos}</span></div>
+            {!isPrep && card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
+            {!isPrep && card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
+            {!isPrep && card.roots && <div className="rev-roots">🌱 {card.roots}</div>}
           </div>
         )}
       </div>
 
       <div className="rev-bottom">
         {!revealed ? (
-          <>
-            <button className="btn btn-green" onClick={() => setRevealed(true)}>Показать ответ</button>
-            <div className="hint-keys">Space — показать</div>
-          </>
+          task.format === 'reveal' ? (
+            <>
+              <button className="btn btn-green" onClick={() => setRevealed(true)}>Показать ответ</button>
+              <div className="hint-keys">Space — показать</div>
+            </>
+          ) : task.format === 'type' ? (
+            <>
+              <input
+                ref={inputRef}
+                className="type-input"
+                value={typed}
+                onChange={e => setTyped(e.target.value)}
+                placeholder="Введите слово…"
+                autoFocus
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              <button className="btn btn-green" style={{ marginTop: 10 }} onClick={() => submitObjective(typed)} disabled={!typed.trim()}>
+                Проверить
+              </button>
+            </>
+          ) : (
+            <div className="mc-grid">
+              {task.options.map(o => (
+                <button key={o} className="btn btn-white mc-option" onClick={() => submitObjective(o)}>{o}</button>
+              ))}
+            </div>
+          )
         ) : (
           <>
+            {(task.format === 'mc' || task.format === 'prep') && (
+              <div className="mc-grid answered">
+                {task.options.map(o => {
+                  const isAnswer = o.toLowerCase() === task.answer.toLowerCase()
+                  const isPicked = picked !== null && o === picked
+                  return (
+                    <button key={o} disabled className={`btn mc-option ${isAnswer ? 'mc-right' : isPicked ? 'mc-wrong' : 'btn-white'}`}>
+                      {o}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
             <div className="grades">
               {GRADES.map(g => (
-                <button key={g.key} className={`btn grade-btn ${GRADE_CLASS[g.rating]}`} onClick={() => void grade(g.rating)}>
+                <button
+                  key={g.key}
+                  className={`btn grade-btn ${GRADE_CLASS[g.rating]}${suggested === g.rating ? ' suggested' : ''}`}
+                  onClick={() => void grade(g.rating)}
+                >
                   {g.label}
-                  <span className="iv">{intervalLabel(scheduler, card.fsrs, g.rating, new Date())}</span>
+                  <span className="iv">{intervalLabel(scheduler, task.item.fsrs, g.rating, new Date())}</span>
                 </button>
               ))}
             </div>
-            <div className="hint-keys">1 · 2 · 3 · 4</div>
+            <div className="hint-keys">{suggested ? 'Enter — подтвердить · 1–4 — своя оценка' : '1 · 2 · 3 · 4'}</div>
           </>
         )}
       </div>

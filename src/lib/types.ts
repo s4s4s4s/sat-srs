@@ -23,6 +23,23 @@ export interface CardView {
   source: string
   suspended: boolean
   fsrs: FsrsCard
+  /** Управление/предлог (опционально): prep — ответ, prepContext — предложение с пропуском предлога */
+  prep: string
+  prepContext: string
+  fsrsPrep: FsrsCard | null
+}
+
+/** Навык — отдельное знание со своим FSRS-графиком */
+export type Skill = 'recall' | 'prep'
+
+/** Формат упражнения (как именно спрашиваем) */
+export type Format = 'reveal' | 'mc' | 'type' | 'prep'
+
+/** Единица очереди: (карточка × навык) */
+export interface StudyItem {
+  view: CardView
+  skill: Skill
+  fsrs: FsrsCard
 }
 
 /** Строка журнала ревью (ndjson в vault). */
@@ -33,6 +50,9 @@ export interface JournalLine {
   day: string  // локальный день с rollover 04:00, YYYY-MM-DD — фиксируется при записи
   // review:
   slug?: string
+  skill?: string       // recall | prep (отсутствует в старых строках = recall)
+  format?: string      // reveal | mc | type | prep
+  correct?: boolean    // объективный результат (mc/type/prep); у reveal отсутствует
   rating?: number      // 1 Again · 2 Hard · 3 Good · 4 Easy
   prev_state?: number  // 0 New · 1 Learning · 2 Review · 3 Relearning
   new_state?: number

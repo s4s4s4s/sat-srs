@@ -2,11 +2,11 @@ import { useSyncExternalStore } from 'react'
 import { type Grade, type Card as FsrsCard } from 'ts-fsrs'
 import * as db from './db'
 import { sync, type SyncStatus } from './sync'
-import { cardView, fsrsFromFm, fsrsToFm } from './yamlfm'
+import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
 import { makeScheduler } from './scheduler'
 import { dayKey, isoLocal } from './daytime'
 import { newId } from './journal'
-import type { CardRec, CardView, JournalRec, Screen, SessionResult, Settings } from './types'
+import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS } from './types'
 
 const SETTINGS_KEY = 'sat-srs-settings'
@@ -113,13 +113,14 @@ export function views(): CardView[] {
   return state.cards.map(cardView)
 }
 
-/** Оценка карточки: FSRS → запись в файл (dirty) → строка журнала. Возвращает новое fsrs-состояние. */
-export async function rateCard(view: CardView, grade: Grade, elapsedMs: number): Promise<FsrsCard> {
-  const rec = state.cards.find(c => c.path === view.path)
-  if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${view.path}`)
+/** Оценка учебной единицы (карточка × навык): FSRS → запись в свой fsrs-блок файла (dirty) → строка журнала. */
+export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, correct?: boolean): Promise<FsrsCard> {
+  const rec = state.cards.find(c => c.path === item.view.path)
+  if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${item.view.path}`)
+  const fsrsKey = item.skill === 'prep' ? 'fsrs_prep' : 'fsrs'
   const f = makeScheduler(state.settings.requestRetention)
   const now = new Date()
-  const prev = fsrsFromFm(rec.fm)
+  const prev = fsrsFromKey(rec.fm, fsrsKey)
   const { card: next } = f.next(prev, now, grade)
 
   // строка журнала строится ДО записи карточки: любой сбой здесь не рассинхронизирует БД и UI
@@ -128,7 +129,10 @@ export async function rateCard(view: CardView, grade: Grade, elapsedMs: number):
     type: 'review',
     ts: isoLocal(now),
     day: dayKey(now),
-    slug: view.slug,
+    slug: item.view.slug,
+    skill: item.skill,
+    format,
+    ...(correct === undefined ? {} : { correct }),
     rating: grade,
     prev_state: prev.state,
     new_state: next.state,
@@ -138,7 +142,7 @@ export async function rateCard(view: CardView, grade: Grade, elapsedMs: number):
     synced: 0
   }
 
-  const updated: CardRec = { ...rec, fm: { ...rec.fm, fsrs: fsrsToFm(next) }, dirty: 1 }
+  const updated: CardRec = { ...rec, fm: { ...rec.fm, [fsrsKey]: fsrsToFm(next) }, dirty: 1 }
   await db.putCard(updated)
   state.cards = state.cards.map(c => (c.path === rec.path ? updated : c))
   await db.putJournal([line])

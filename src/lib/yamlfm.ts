@@ -84,6 +84,7 @@ export function slugFromPath(path: string): string {
 
 export function cardView(rec: CardRec): CardView {
   const fm = rec.fm
+  const hasPrep = !!(fm.prep && fm.prep_context)
   return {
     path: rec.path,
     slug: slugFromPath(rec.path),
@@ -95,17 +96,27 @@ export function cardView(rec: CardRec): CardView {
     roots: String(fm.roots ?? ''),
     source: String(fm.source ?? 'manual'),
     suspended: fm.suspended === true || !!rec.broken,
-    fsrs: fsrsFromFm(fm)
+    fsrs: fsrsFromFm(fm),
+    prep: hasPrep ? String(fm.prep).trim().toLowerCase() : '',
+    prepContext: hasPrep ? String(fm.prep_context) : '',
+    fsrsPrep: hasPrep ? fsrsFromKey(fm, 'fsrs_prep') : null
   }
+}
+
+/** Как fsrsFromFm, но для произвольного fsrs-блока (fsrs_prep и будущие навыки) */
+export function fsrsFromKey(fm: Record<string, any>, key: string): FsrsCard {
+  return fsrsFromFm({ added: fm.added, fsrs: fm[key] })
 }
 
 /**
  * Слияние при конфликте: удалённая версия файла — база (тьютор мог править текст),
- * наш вклад — только fsrs-блок и my_sentence (то, чем владеет приложение).
+ * наш вклад — только fsrs-блоки и my_sentence (то, чем владеет приложение).
+ * fsrs_prep сохраняем лишь пока у карточки есть prep-поля: их удаление тьютором — осознанное.
  */
 export function mergeCard(remote: { fm: Record<string, any>; body: string }, local: CardRec): { fm: Record<string, any>; body: string } {
   const fm = { ...remote.fm }
   if (local.fm.fsrs) fm.fsrs = local.fm.fsrs
+  if (local.fm.fsrs_prep && fm.prep && fm.prep_context) fm.fsrs_prep = local.fm.fsrs_prep
   if (local.fm.my_sentence) fm.my_sentence = local.fm.my_sentence
   return { fm, body: remote.body }
 }

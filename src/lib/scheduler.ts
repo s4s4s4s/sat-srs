@@ -1,5 +1,5 @@
 import { fsrs, generatorParameters, Rating, State, type Grade, type Card as FsrsCard, type FSRS } from 'ts-fsrs'
-import type { CardView } from './types'
+import type { CardView, Format, StudyItem } from './types'
 import { endOfStudyDay } from './daytime'
 
 export function makeScheduler(requestRetention: number): FSRS {
@@ -43,30 +43,52 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 /**
- * Очередь сессии: Learning/Relearning (просроченные) → Review (due сегодня) → New (лимит).
- * Review и New перемешаны interleaving-ом (не блоками по source), learning — впереди по due.
+ * Развёртка колоды в учебные единицы (карточка × навык).
+ * prep-навык подключается, когда слово уже знакомо (recall в Review) —
+ * или сразу, если prep-график уже начат (не бросаем начатое).
  */
-export function buildQueue(cards: CardView[], newBudget: number, now: Date = new Date()): CardView[] {
-  const eod = endOfStudyDay(now)
-  const active = cards.filter(c => !c.suspended)
+export function expandItems(cards: CardView[]): StudyItem[] {
+  const items: StudyItem[] = []
+  for (const c of cards) {
+    if (c.suspended) continue
+    items.push({ view: c, skill: 'recall', fsrs: c.fsrs })
+    if (c.prep && c.fsrsPrep) {
+      const started = c.fsrsPrep.state !== State.New
+      if (started || c.fsrs.state === State.Review) {
+        items.push({ view: c, skill: 'prep', fsrs: c.fsrsPrep })
+      }
+    }
+  }
+  return items
+}
 
-  const learning = active
-    .filter(c => isLearning(c.fsrs.state) && c.fsrs.due.getTime() <= now.getTime() + LEARN_AHEAD_MS)
+export const itemKey = (i: StudyItem) => `${i.view.path}#${i.skill}`
+
+/**
+ * Очередь сессии: Learning/Relearning → Review (due сегодня) → New (лимит).
+ * Review и New перемешаны interleaving-ом, learning — впереди по due.
+ */
+export function buildQueue(cards: CardView[], newBudget: number, now: Date = new Date()): StudyItem[] {
+  const eod = endOfStudyDay(now)
+  const items = expandItems(cards)
+
+  const learning = items
+    .filter(i => isLearning(i.fsrs.state) && i.fsrs.due.getTime() <= now.getTime() + LEARN_AHEAD_MS)
     .sort((a, b) => a.fsrs.due.getTime() - b.fsrs.due.getTime())
 
-  const review = shuffle(active.filter(c => c.fsrs.state === State.Review && c.fsrs.due.getTime() < eod.getTime()))
+  const review = shuffle(items.filter(i => i.fsrs.state === State.Review && i.fsrs.due.getTime() < eod.getTime()))
 
-  // выбор новых детерминированный (FIFO по slug), случайна только подача
-  const fresh = active
-    .filter(c => c.fsrs.state === State.New)
-    .sort((a, b) => a.slug.localeCompare(b.slug))
-  const newCards = shuffle(fresh.slice(0, Math.max(0, newBudget)))
+  // выбор новых детерминированный (FIFO: recall раньше prep, затем по slug), случайна только подача
+  const fresh = items
+    .filter(i => i.fsrs.state === State.New)
+    .sort((a, b) => (a.skill === b.skill ? a.view.slug.localeCompare(b.view.slug) : a.skill === 'recall' ? -1 : 1))
+  const newItems = shuffle(fresh.slice(0, Math.max(0, newBudget)))
 
   // interleaving: новые распределяем равномерно среди review, не пачкой в конце
-  const mixed: CardView[] = [...review]
-  if (newCards.length) {
-    const step = (mixed.length + newCards.length) / newCards.length
-    newCards.forEach((c, i) => mixed.splice(Math.min(mixed.length, Math.round(i * step)), 0, c))
+  const mixed: StudyItem[] = [...review]
+  if (newItems.length) {
+    const step = (mixed.length + newItems.length) / newItems.length
+    newItems.forEach((it, i) => mixed.splice(Math.min(mixed.length, Math.round(i * step)), 0, it))
   }
   return [...learning, ...mixed]
 }
@@ -85,17 +107,83 @@ export function shouldRequeue(next: FsrsCard, now: Date): boolean {
   return isLearning(next.state) && next.due.getTime() - now.getTime() < 30 * 60000
 }
 
-/** Счётчики для главного экрана */
+/**
+ * Формат упражнения:
+ * - prep-навык → всегда prep (выбор предлога);
+ * - recall в New/Learning/Relearning → reveal (слово сначала выучивается с показом);
+ * - recall в Review → чередование по reps: MC (формат Words in Context цифрового SAT,
+ *   дистракторы из колоды) и ввод с клавиатуры (production + написание).
+ */
+export function pickFormat(item: StudyItem, deck: CardView[]): Format {
+  if (item.skill === 'prep') return 'prep'
+  if (item.fsrs.state !== State.Review) return 'reveal'
+  const wantMc = item.fsrs.reps % 2 === 0
+  if (wantMc && mcDistractors(item.view, deck).length >= 3) return 'mc'
+  return 'type'
+}
+
+/** Дистракторы для MC: слова той же части речи (или любые, если своих мало) */
+export function mcDistractors(card: CardView, deck: CardView[], n = 3): string[] {
+  const pool = deck.filter(c => !c.suspended && c.word !== card.word)
+  const samePos = pool.filter(c => c.pos === card.pos)
+  const src = samePos.length >= n ? samePos : pool
+  return shuffle(src.map(c => c.word)).slice(0, n)
+}
+
+const COMMON_PREPS = ['about', 'against', 'at', 'by', 'for', 'from', 'in', 'of', 'on', 'to', 'toward', 'with']
+
+/** Варианты для prep-упражнения: правильный + 3 частотных предлога */
+export function prepOptions(answer: string, n = 3): string[] {
+  const distractors = shuffle(COMMON_PREPS.filter(p => p !== answer)).slice(0, n)
+  return shuffle([answer, ...distractors])
+}
+
+/** Расстояние Левенштейна — «опечатка» это 1 правка при длине слова ≥ 5 */
+export function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length
+  if (!m) return n
+  if (!n) return m
+  let prev = Array.from({ length: n + 1 }, (_, j) => j)
+  for (let i = 1; i <= m; i++) {
+    const cur = [i]
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+    }
+    prev = cur
+  }
+  return prev[n]
+}
+
+export type TypeVerdict = 'correct' | 'typo' | 'wrong'
+
+export function checkTyped(typed: string, word: string): TypeVerdict {
+  const t = typed.trim().toLowerCase()
+  const w = word.trim().toLowerCase()
+  if (t === w) return 'correct'
+  if (w.length >= 5 && levenshtein(t, w) <= 1) return 'typo'
+  return 'wrong'
+}
+
+/** Предлагаемая оценка по объективному результату (пользователь может переопределить) */
+export function suggestedGrade(format: Format, correct: boolean, typo: boolean): Grade | null {
+  if (format === 'reveal') return null
+  if (correct) return Rating.Good
+  if (typo) return Rating.Hard
+  return Rating.Again
+}
+
+/** Счётчики для главного экрана (в учебных единицах: карточка × навык) */
 export function homeCounts(cards: CardView[], newBudget: number, now: Date = new Date()) {
   const eod = endOfStudyDay(now)
+  const items = expandItems(cards)
+  const learnDue = items.filter(i => isLearning(i.fsrs.state) && i.fsrs.due.getTime() <= now.getTime() + LEARN_AHEAD_MS).length
+  const revDue = items.filter(i => i.fsrs.state === State.Review && i.fsrs.due.getTime() < eod.getTime()).length
+  const newAvail = Math.min(items.filter(i => i.fsrs.state === State.New).length, Math.max(0, newBudget))
+  const revTomorrow = items.filter(i => {
+    const t = i.fsrs.due.getTime()
+    return i.fsrs.state === State.Review && t >= eod.getTime() && t < eod.getTime() + 86400_000
+  }).length + items.filter(i => isLearning(i.fsrs.state) && i.fsrs.due.getTime() > now.getTime() + LEARN_AHEAD_MS && i.fsrs.due.getTime() < eod.getTime() + 86400_000).length
   const active = cards.filter(c => !c.suspended)
-  const learnDue = active.filter(c => isLearning(c.fsrs.state) && c.fsrs.due.getTime() <= now.getTime() + LEARN_AHEAD_MS).length
-  const revDue = active.filter(c => c.fsrs.state === State.Review && c.fsrs.due.getTime() < eod.getTime()).length
-  const newAvail = Math.min(active.filter(c => c.fsrs.state === State.New).length, Math.max(0, newBudget))
-  const revTomorrow = active.filter(c => {
-    const t = c.fsrs.due.getTime()
-    return c.fsrs.state === State.Review && t >= eod.getTime() && t < eod.getTime() + 86400_000
-  }).length + active.filter(c => isLearning(c.fsrs.state) && c.fsrs.due.getTime() > now.getTime() + LEARN_AHEAD_MS && c.fsrs.due.getTime() < eod.getTime() + 86400_000).length
   const byState = {
     new: active.filter(c => c.fsrs.state === State.New).length,
     learning: active.filter(c => isLearning(c.fsrs.state)).length,
