@@ -383,6 +383,22 @@ export default function Review() {
         </span>
         <Sentence context={sentence} word={answerWord} revealed={revealed} />
         {!revealed && <div className="rev-task">{taskHint}</div>}
+        {!revealed && task.format === 'type' && (
+          // ввод ПОД предложением: при открытии клавиатуры iOS держит их в кадре вместе
+          <input
+            ref={inputRef}
+            className="type-input"
+            value={typed}
+            onChange={e => setTyped(e.target.value)}
+            onFocus={e => e.currentTarget.scrollIntoView({ block: 'nearest' })}
+            placeholder={isNumeric ? 'Ваш ответ…' : 'Введите слово…'}
+            inputMode={isNumeric ? 'decimal' : 'text'}
+            autoFocus
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+        )}
           </>
         )}
 
@@ -442,23 +458,9 @@ export default function Review() {
               <div className="hint-keys kb-only">Space — показать</div>
             </>
           ) : task.format === 'type' ? (
-            <>
-              <input
-                ref={inputRef}
-                className="type-input"
-                value={typed}
-                onChange={e => setTyped(e.target.value)}
-                placeholder={isNumeric ? 'Ваш ответ…' : 'Введите слово…'}
-                inputMode={isNumeric ? 'decimal' : 'text'}
-                autoFocus
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-              />
-              <button className="btn btn-green" style={{ marginTop: 10 }} onClick={() => submitObjective(typed)} disabled={!typed.trim()}>
-                Проверить
-              </button>
-            </>
+            <button className="btn btn-green" onClick={() => submitObjective(typed)} disabled={!typed.trim()}>
+              Проверить
+            </button>
           ) : (
             <div className="mc-stack">
               {task.options.map(o => (
