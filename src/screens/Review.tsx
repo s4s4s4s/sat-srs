@@ -212,8 +212,15 @@ export default function Review() {
 
   const card = task.item.view
   const isPrep = task.format === 'prep'
+  const isNew = task.item.fsrs.state === State.New
   const sentence = isPrep ? card.prepContext : card.context
   const answerWord = isPrep ? card.prep : card.word
+  const taskHint =
+    task.format === 'mc' ? 'Какое слово подходит в пропуск?'
+    : task.format === 'prep' ? 'Какой предлог здесь правильный?'
+    : task.format === 'type' ? 'Впишите слово, подходящее в пропуск'
+    : isNew ? 'Попробуйте угадать по контексту — потом откройте слово'
+    : 'Вспомните слово — потом проверьте себя'
 
   const minLeft = Math.max(0, 15 * 60 - activeSec)
   const mm = String(Math.floor(minLeft / 60)).padStart(2, '0')
@@ -233,6 +240,7 @@ export default function Review() {
           {isPrep && <> · {card.word}</>}
         </span>
         <Sentence context={sentence} word={answerWord} revealed={revealed} />
+        {!revealed && <div className="rev-task">{taskHint}</div>}
 
         {revealed && (
           <div className="rev-answer">
@@ -253,7 +261,7 @@ export default function Review() {
         {!revealed ? (
           task.format === 'reveal' ? (
             <>
-              <button className="btn btn-green" onClick={() => setRevealed(true)}>Показать ответ</button>
+              <button className="btn btn-green" onClick={() => setRevealed(true)}>{isNew ? 'Показать слово' : 'Показать ответ'}</button>
               <div className="hint-keys">Space — показать</div>
             </>
           ) : task.format === 'type' ? (
@@ -308,7 +316,9 @@ export default function Review() {
                 </button>
               ))}
             </div>
-            <div className="hint-keys">{suggested ? 'Enter — подтвердить · 1–4 — своя оценка' : '1 · 2 · 3 · 4'}</div>
+            <div className="hint-keys">
+              {suggested ? 'Enter — подтвердить · 1–4 — своя оценка' : 'Оценка решает, когда слово вернётся · клавиши 1–4'}
+            </div>
           </>
         )}
       </div>

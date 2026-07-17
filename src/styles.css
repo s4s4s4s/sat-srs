@@ -309,6 +309,8 @@ body::before {
 }
 .rev-filled { color: var(--green-text); border-bottom: 3px solid var(--green); border-radius: 2px; padding: 0 2px; }
 
+.rev-task { font-size: 14px; font-weight: 700; color: var(--text2); padding-left: 4px; }
+
 .rev-answer { animation: fadein .18s ease-out; }
 @keyframes fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
