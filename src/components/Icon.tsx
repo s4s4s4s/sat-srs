@@ -86,6 +86,16 @@ export function Sprout({ size = 18 }: { size?: number }) {
   )
 }
 
+export function Speaker({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...S}>
+      <path d="M11 5.5 6.5 9H3.5v6h3L11 18.5z" fill="currentColor" strokeLinejoin="round" />
+      <path d="M15 9.2a4 4 0 0 1 0 5.6" />
+      <path d="M17.8 6.5a8 8 0 0 1 0 11" />
+    </svg>
+  )
+}
+
 export function Timer({ size = 18 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" {...S}>

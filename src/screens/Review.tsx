@@ -9,7 +9,8 @@ import {
 import { newIntroducedOn } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
 import type { Format, SessionResult, StudyItem } from '../lib/types'
-import { Close, Sprout, Timer } from '../components/Icon'
+import { Close, Sprout, Timer, Speaker } from '../components/Icon'
+import { speak, canSpeak } from '../lib/speech'
 
 const GRADE_CLASS: Record<number, string> = {
   [Rating.Again]: 'btn-red',
@@ -312,7 +313,13 @@ export default function Review() {
           <>
             <span className="pill pill-green">Новое слово</span>
             <div className="intro">
-              <div className="intro-word">{card.word}<span className="pos">{card.pos}</span></div>
+              {card.kind === 'vocab' && canSpeak() ? (
+                <button className="speak-word intro-word" onClick={() => speak(card.word)} aria-label="Произнести">
+                  {card.word}<span className="speak-ic"><Speaker /></span><span className="pos">{card.pos}</span>
+                </button>
+              ) : (
+                <div className="intro-word">{card.word}<span className="pos">{card.pos}</span></div>
+              )}
               {card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
               {card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
               {card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
@@ -338,7 +345,13 @@ export default function Review() {
                 {verdict === 'correct' ? 'Верно!' : verdict === 'typo' ? `Почти — опечатка: вы ввели «${typed.trim()}»` : isPrep ? `Правильно: ${card.word} ${card.prep}` : 'Мимо'}
               </div>
             )}
-            <div className="rev-word">{isPrep ? `${card.word} ${card.prep}` : card.word}<span className="pos">{card.pos}</span></div>
+            {card.kind === 'vocab' && canSpeak() ? (
+              <button className="speak-word rev-word" onClick={() => speak(isPrep ? `${card.word} ${card.prep}` : card.word)} aria-label="Произнести">
+                {isPrep ? `${card.word} ${card.prep}` : card.word}<span className="speak-ic"><Speaker size={19} /></span><span className="pos">{card.pos}</span>
+              </button>
+            ) : (
+              <div className="rev-word">{isPrep ? `${card.word} ${card.prep}` : card.word}<span className="pos">{card.pos}</span></div>
+            )}
             {!isPrep && card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
             {!isPrep && card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
             {!isPrep && card.explain && <div className="rev-explain">{card.explain}</div>}
