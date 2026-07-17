@@ -7,11 +7,11 @@ export function Flame({ size = 24, off = false }: { size?: number; off?: boolean
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
       <path
         d="M12 1.8C12 1.8 5.2 8.7 5.2 14.3C5.2 18.4 8.2 21.8 12 21.8C15.8 21.8 18.8 18.4 18.8 14.3C18.8 8.7 12 1.8 12 1.8Z"
-        fill={off ? '#d6c9bc' : '#ff9600'}
+        fill={off ? 'var(--flame-off-a)' : '#ff9600'}
       />
       <path
         d="M12 9.8C12 9.8 8.8 13.3 8.8 16C8.8 18 10.2 19.6 12 19.6C13.8 19.6 15.2 18 15.2 16C15.2 13.3 12 9.8 12 9.8Z"
-        fill={off ? '#c2b3a3' : '#ffc800'}
+        fill={off ? 'var(--flame-off-b)' : '#ffc800'}
       />
     </svg>
   )

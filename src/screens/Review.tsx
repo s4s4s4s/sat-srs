@@ -7,10 +7,10 @@ import {
   pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf
 } from '../lib/scheduler'
 import Tex from '../components/Tex'
-import { newIntroducedOn } from '../lib/journal'
+import { newIntroducedOn, minutesToday, MIN_MINUTES } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
 import type { Format, SessionResult, StudyItem } from '../lib/types'
-import { Close, Sprout, Timer, Speaker } from '../components/Icon'
+import { Close, Sprout, Timer, Speaker, Flame } from '../components/Icon'
 import { speak, canSpeak } from '../lib/speech'
 
 const GRADE_CLASS: Record<number, string> = {
@@ -29,12 +29,13 @@ function shuffleOnce<T>(arr: T[]): T[] {
   return a
 }
 
-/** Предложение с пропуском / с подставленным словом; $...$ рендерится KaTeX-ом */
+/** Предложение с пропуском / с подставленным словом; $...$ рендерится KaTeX-ом; длинный текст — мельче */
 function Sentence({ context, word, revealed }: { context: string; word: string; revealed: boolean }) {
   const parts = context.split(/_{3,}/)
-  if (parts.length === 1) return <div className="rev-sentence"><Tex text={context} /></div>
+  const cls = `rev-sentence${context.length > 140 ? ' long' : ''}`
+  if (parts.length === 1) return <div className={cls}><Tex text={context} /></div>
   return (
-    <div className="rev-sentence">
+    <div className={cls}>
       {parts.map((p, i) => (
         <span key={i}>
           <Tex text={p} />
@@ -129,6 +130,8 @@ export default function Review() {
   const [activeSec, setActiveSec] = useState(0)
   const [causeFor, setCauseFor] = useState<string | null>(null)
   const pendingAdvance = useRef<{ next: StudyItem; atFront: boolean } | null>(null)
+  // минуты, уже сделанные сегодня ДО этой сессии — таймер минимума общедневной, не сессионный
+  const baseSec = useMemo(() => Math.floor(minutesToday(currentJournal()) * 60), [])
   const res = useRef<SessionResult>({ day: dayKey(), reviews: 0, newSeen: 0, again: 0, passRev: 0, totalRev: 0, durMs: 0, queueEmpty: false })
   const shownAt = useRef(Date.now())
   const busy = useRef(false)
@@ -280,11 +283,14 @@ export default function Review() {
     )
   }
   if (!head || !task) {
+    // НЕ .sum-wrap — иначе сработает конфетти из :has(.sum-wrap)
     return (
       <div className="screen">
-        <div className="rev-body" style={{ textAlign: 'center' }}>
-          <div>Очередь пуста ✓</div>
-          <button className="btn btn-green" onClick={() => setScreen('home')}>Домой</button>
+        <div className="rev-body" style={{ textAlign: 'center', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="sum-art"><Flame size={64} /></div>
+          <h2 className="sum-title">Очередь пуста ✓</h2>
+          <div className="sum-sub">На сегодня всё повторено — карточки вернутся по графику</div>
+          <button className="btn btn-green btn-lg" style={{ maxWidth: 320 }} onClick={() => setScreen('home')}>Домой</button>
         </div>
       </div>
     )
@@ -303,7 +309,7 @@ export default function Review() {
     : task.format === 'type' ? (isNumeric ? 'Решите и введите ответ' : 'Впишите слово, подходящее в пропуск')
     : 'Вспомните слово — потом проверьте себя'
 
-  const minLeft = Math.max(0, 15 * 60 - activeSec)
+  const minLeft = Math.max(0, MIN_MINUTES * 60 - baseSec - activeSec)
   const mm = String(Math.floor(minLeft / 60)).padStart(2, '0')
   const ss = String(minLeft % 60).padStart(2, '0')
 
@@ -315,7 +321,7 @@ export default function Review() {
         <div className={`rev-timer${minLeft === 0 ? ' done' : ''}`}><Timer size={15} />{minLeft === 0 ? '✓' : `${mm}:${ss}`}</div>
       </div>
 
-      <div className="rev-body">
+      <div className="rev-body" key={done}>
         {isIntro ? (
           <>
             <span className="pill pill-green">Новое слово</span>
@@ -354,6 +360,7 @@ export default function Review() {
                   : verdict === 'typo' ? `Почти — опечатка: вы ввели «${typed.trim()}»`
                   : isPrep ? `Правильно: ${card.word} ${card.prep}`
                   : isNumeric ? <>Мимо — ответ: <Tex text={task.answer} /></>
+                  : task.format === 'type' ? <>Мимо — вы ввели «{typed.trim()}»</>
                   : 'Мимо'}
               </div>
             )}
@@ -373,7 +380,7 @@ export default function Review() {
         )}
       </div>
 
-      <div className={`rev-bottom${revealed && verdict ? (verdict === 'wrong' ? ' is-wrong' : ' is-right') : ''}`}>
+      <div className={`rev-bottom${revealed && verdict ? (verdict === 'wrong' ? ' is-wrong' : verdict === 'typo' ? ' is-typo' : ' is-right') : ''}`}>
         {causeFor ? (
           <div className="cause-wrap">
             <div className="cause-title">Почему ошибка?</div>

@@ -24,9 +24,9 @@ function SectionBlock({ title, icon, badge, cards, budget, onStart }: {
         <span className="hero-sub">{c.total ? `${c.total} карт.` : 'пока пусто'}</span>
       </div>
       <div className="stats3">
-        <div className="stat stat-red"><div className="n">{c.learnDue}</div><div className="t">учу</div></div>
-        <div className="stat stat-blue"><div className="n">{c.revDue}</div><div className="t">повторить</div></div>
-        <div className="stat stat-green"><div className="n">{c.newAvail}</div><div className="t">новых</div></div>
+        <div className={`stat stat-red${c.learnDue ? '' : ' is-zero'}`}><div className="n">{c.learnDue}</div><div className="t">учу</div></div>
+        <div className={`stat stat-blue${c.revDue ? '' : ' is-zero'}`}><div className="n">{c.revDue}</div><div className="t">повторить</div></div>
+        <div className={`stat stat-green${c.newAvail ? '' : ' is-zero'}`}><div className="n">{c.newAvail}</div><div className="t">новых</div></div>
       </div>
       <button className="btn btn-green section-btn" onClick={onStart} disabled={due === 0}>
         {due === 0 ? <><Check size={18} /> Всё</> : 'Учить'}

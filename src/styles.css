@@ -38,6 +38,8 @@
   --glow-b: rgba(28, 176, 246, .13);
   --ring: rgba(28, 176, 246, .32);
   --card-float: 0 14px 30px rgba(31, 60, 12, .10);
+  --flame-off-a: #d6c9bc;
+  --flame-off-b: #c2b3a3;
 
   --sparkle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cg fill='%23ffffff' fill-opacity='.10'%3E%3Cpath d='M22 14l2.2 5.8L30 22l-5.8 2.2L22 30l-2.2-5.8L14 22l5.8-2.2z'/%3E%3Cpath d='M86 58l1.6 4.4 4.4 1.6-4.4 1.6-1.6 4.4-1.6-4.4-4.4-1.6 4.4-1.6z'/%3E%3Ccircle cx='58' cy='96' r='3'/%3E%3Ccircle cx='104' cy='18' r='2'/%3E%3C/g%3E%3C/svg%3E");
 
@@ -74,6 +76,8 @@
     --glow-b: rgba(28, 176, 246, .10);
     --ring: rgba(76, 194, 255, .35);
     --card-float: 0 14px 30px rgba(0, 0, 0, .45);
+    --flame-off-a: #42545f;
+    --flame-off-b: #33434d;
   }
 }
 
@@ -232,6 +236,8 @@ body::before {
 .stat-red    { background: var(--red-soft);    border-color: var(--red-line);    color: var(--red-text); }
 .stat-blue   { background: var(--blue-soft);   border-color: var(--blue-line);   color: var(--blue-text); }
 .stat-green  { background: var(--green-soft);  border-color: var(--green-line);  color: var(--green-text); }
+/* нулевые чипы молчат — цвет остаётся сигналом */
+.stat.is-zero { background: var(--surface2); border-color: var(--line); color: var(--text2); }
 .stat-yellow { background: var(--yellow-soft); border-color: var(--yellow-line); color: var(--amber-text); }
 .stat-purple { background: var(--purple-soft); border-color: var(--purple-line); color: var(--purple-text); }
 
@@ -284,7 +290,14 @@ body::before {
 }
 .rev-timer.done { color: var(--green-text); }
 
-.rev-body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 16px; padding: 8px 0; }
+/* верхняя треть, не центр: пузырь не прыгает при ревиле, длинный ответ скроллится */
+.rev-body {
+  flex: 1; display: flex; flex-direction: column; justify-content: flex-start;
+  gap: 16px; padding: clamp(8px, 5dvh, 40px) 0 8px;
+  overflow-y: auto; min-height: 0;
+  animation: task-in .3s cubic-bezier(.2, .9, .3, 1.15);
+}
+@keyframes task-in { from { opacity: 0; transform: translateX(26px); } }
 
 .pill {
   align-self: flex-start;
@@ -312,6 +325,7 @@ body::before {
   background: var(--surface); border: 2px solid var(--line);
   border-top: 0; border-left: 0; border-radius: 0 0 4px 0; transform: rotate(45deg);
 }
+.rev-sentence.long { font-size: 17px; line-height: 1.55; }
 .rev-blank {
   display: inline-block; min-width: 92px; border-bottom: 3px solid var(--blue);
   border-radius: 2px; margin: 0 2px; color: var(--blue);
@@ -389,9 +403,14 @@ body::before {
   border-radius: var(--r-xl) var(--r-xl) 0 0;
   border-top: 2px solid transparent;
   transition: background .2s, border-color .2s;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  min-height: 150px; /* оценки не гуляют по вертикали между состояниями */
 }
 .rev-bottom.is-right { background: var(--green-soft); border-top-color: var(--green-line); }
 .rev-bottom.is-wrong { background: var(--red-soft); border-top-color: var(--red-line); }
+.rev-bottom.is-typo { background: var(--yellow-soft); border-top-color: var(--yellow-line); }
+.rev-bottom.is-right, .rev-bottom.is-wrong, .rev-bottom.is-typo { animation: sheet-in .3s cubic-bezier(.2, .9, .3, 1.15); }
+@keyframes sheet-in { from { transform: translateY(14px); opacity: .5; } }
 
 .hint-keys { text-align: center; font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 10px; }
 /* клавиатурные подсказки не показываем на тач-устройствах */
@@ -438,9 +457,12 @@ body::before {
 .type-input:focus { border-color: var(--blue); background: var(--surface); box-shadow: 0 0 0 3px var(--ring); }
 
 .grades { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.grade-btn { padding: 10px 4px 8px; font-size: 13px; letter-spacing: .4px; flex-direction: column; gap: 1px; }
-.grade-btn .iv { display: block; font-size: 11px; font-weight: 700; text-transform: none; letter-spacing: 0; opacity: .85; }
+.grade-btn { padding: 10px 4px 8px; font-size: 14px; text-transform: none; letter-spacing: .2px; flex-direction: column; gap: 1px; }
+.grade-btn .iv { display: block; font-size: 11px; font-weight: 700; text-transform: none; letter-spacing: 0; opacity: .85; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .grade-btn.suggested { outline: 3px solid var(--ring); outline-offset: 2px; animation: pop .35s ease-out; }
+/* при подсказанной оценке остальные кнопки приглушаются — глазу есть куда падать */
+.grades:has(.suggested) .grade-btn:not(.suggested) { opacity: .7; }
+.grades:has(.suggested) .grade-btn:not(.suggested):active { opacity: 1; }
 
 /* ── Итог сессии — праздник ─────────────────────────────────────── */
 .sum-wrap { flex: 1; display: flex; flex-direction: column; justify-content: center; text-align: center; gap: 16px; }
