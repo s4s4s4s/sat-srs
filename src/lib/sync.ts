@@ -1,6 +1,7 @@
 import { GitHubClient, GhError, type TreeEntry } from './github'
 import { parseMd, serializeMd, mergeCard } from './yamlfm'
 import { parseNdjson, toNdjson } from './journal'
+import { buildReport } from './report'
 import * as db from './db'
 import type { JournalRec, Settings } from './types'
 import { monthOfDay } from './daytime'
@@ -57,6 +58,9 @@ async function doSync(settings: Settings): Promise<SyncResult> {
         const lines = journal.filter(j => monthOfDay(j.day) === mo)
         files.push({ path: `${settings.basePath}/${JOURNAL_DIR}/${mo}.ndjson`, content: toNdjson(lines) })
       }
+
+      // отчёт для тьютора — перегенерируется при каждом push-е
+      files.push({ path: `${settings.basePath}/_отчёт.md`, content: buildReport(cards, journal, new Date()) })
 
       const blobs: { path: string; sha: string }[] = []
       for (const f of files) blobs.push({ path: f.path, sha: await gh.createBlob(f.content) })

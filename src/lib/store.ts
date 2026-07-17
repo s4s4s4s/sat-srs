@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { type Grade, type Card as FsrsCard } from 'ts-fsrs'
+import { State, type Grade, type Card as FsrsCard } from 'ts-fsrs'
 import * as db from './db'
 import { sync, type SyncStatus } from './sync'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
@@ -142,7 +142,12 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     synced: 0
   }
 
-  const updated: CardRec = { ...rec, fm: { ...rec.fm, [fsrsKey]: fsrsToFm(next) }, dirty: 1 }
+  const fmPatch: Record<string, any> = { [fsrsKey]: fsrsToFm(next) }
+  // день первого показа слова — фиксируется один раз при первой оценке recall из New
+  if (item.skill === 'recall' && prev.state === State.New && !rec.fm.first_seen) {
+    fmPatch.first_seen = dayKey(now)
+  }
+  const updated: CardRec = { ...rec, fm: { ...rec.fm, ...fmPatch }, dirty: 1 }
   await db.putCard(updated)
   state.cards = state.cards.map(c => (c.path === rec.path ? updated : c))
   await db.putJournal([line])

@@ -118,5 +118,6 @@ export function mergeCard(remote: { fm: Record<string, any>; body: string }, loc
   if (local.fm.fsrs) fm.fsrs = local.fm.fsrs
   if (local.fm.fsrs_prep && fm.prep && fm.prep_context) fm.fsrs_prep = local.fm.fsrs_prep
   if (local.fm.my_sentence) fm.my_sentence = local.fm.my_sentence
+  if (local.fm.first_seen && !fm.first_seen) fm.first_seen = local.fm.first_seen
   return { fm, body: remote.body }
 }

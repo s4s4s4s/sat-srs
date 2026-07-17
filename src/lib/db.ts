@@ -80,11 +80,13 @@ export async function applyPull(
       const lostFsrs = ok && cur.fm.fsrs && typeof cur.fm.fsrs === 'object' && (!f.fm.fsrs || typeof f.fm.fsrs !== 'object')
       const lostPrep = ok && cur.fm.fsrs_prep && f.fm.prep && f.fm.prep_context && !f.fm.fsrs_prep
       const lostSentence = ok && cur.fm.my_sentence && !f.fm.my_sentence
-      if (lostFsrs || lostPrep || lostSentence) {
+      const lostFirstSeen = ok && cur.fm.first_seen && !f.fm.first_seen
+      if (lostFsrs || lostPrep || lostSentence || lostFirstSeen) {
         const fm = { ...f.fm }
         if (lostFsrs) fm.fsrs = cur!.fm.fsrs
         if (lostPrep) fm.fsrs_prep = cur!.fm.fsrs_prep
         if (lostSentence) fm.my_sentence = cur!.fm.my_sentence
+        if (lostFirstSeen) fm.first_seen = cur!.fm.first_seen
         await tx.store.put({ path: f.path, sha: f.sha, fm, body: f.body, dirty: 1, broken: f.broken })
       } else {
         await tx.store.put({ path: f.path, sha: f.sha, fm: f.fm, body: f.body, dirty: 0, broken: f.broken })
