@@ -156,6 +156,15 @@ export default function SettingsScreen() {
         </div>
       </div>
       <div className="field"><div className="note">Пауза (переезд): серия не рвётся и не растёт, заморозки не тратятся.</div></div>
+      <div className="field">
+        <label>Учебный пояс</label>
+        <select className="sel" value={s.homeOffset} onChange={e => setS({ ...s, homeOffset: e.target.value })}>
+          <option value="180">Москва (UTC+3)</option>
+          <option value="240">Ереван (UTC+4)</option>
+          <option value="">Часы устройства</option>
+        </select>
+        <div className="note">Фиксирует границу учебного дня (04:00) независимо от часов устройства — важно при кривых часах ПК и переездах.</div>
+      </div>
 
       {err && <div className="form-error">{err}</div>}
       {msg && <div className="form-ok">{msg}</div>}
@@ -163,7 +172,10 @@ export default function SettingsScreen() {
       <button className="btn btn-green btn-lg" onClick={() => void connect()} disabled={busy}>
         {busy ? 'Проверяю…' : firstRun ? 'Подключить' : 'Сохранить'}
       </button>
-      <div className="syncline" style={{ marginTop: 12 }}>FSRS-6 · retention {app.settings.requestRetention} · SAT SRS v0.1</div>
+      <div className="syncline" style={{ marginTop: 12 }}>
+        FSRS-6 · retention {app.settings.requestRetention} · сборка {__BUILD_ID__}
+        {app.tokenExpiresAt && <> · токен до {app.tokenExpiresAt.slice(0, 10)}</>}
+      </div>
     </div>
   )
 }

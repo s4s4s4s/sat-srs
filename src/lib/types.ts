@@ -56,6 +56,7 @@ export interface StudyItem {
 /** Строка журнала ревью (ndjson в vault). */
 export interface JournalLine {
   id: string
+  v?: number // версия схемы строки
   type: 'review' | 'session'
   ts: string   // ISO с локальным смещением
   day: string  // локальный день с rollover 04:00, YYYY-MM-DD — фиксируется при записи
@@ -96,6 +97,7 @@ export interface Settings {
   requestRetention: number
   pauseFrom: string // плановая пауза (переезд): серия не рвётся и не растёт, YYYY-MM-DD
   pauseTo: string
+  homeOffset: string // домашний пояс в минутах от UTC ('' = часы устройства, '180' = Москва, '240' = Ереван)
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -108,7 +110,8 @@ export const DEFAULT_SETTINGS: Settings = {
   newPerLesson: 4,
   requestRetention: 0.9,
   pauseFrom: '2026-07-29',
-  pauseTo: '2026-08-02'
+  pauseTo: '2026-08-02',
+  homeOffset: '180'
 }
 
 export type Screen = 'home' | 'review' | 'summary' | 'add' | 'stats' | 'settings'

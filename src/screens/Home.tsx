@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useApp, views, setScreen, startSync, startLesson, creditEmptyDay } from '../lib/store'
+import { useApp, views, setScreen, startSync, startLesson, creditEmptyDay, unsyncedCount } from '../lib/store'
 import { homeCounts, sectionOf, EXAM_DATE, type Section } from '../lib/scheduler'
 import { streak, newIntroducedOn, minutesToday, MIN_MINUTES, type PauseRange } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
@@ -114,6 +114,17 @@ export default function Home() {
       </div>
 
       <div className={`syncline${app.syncStatus === 'error' ? ' err' : ''}`}>{syncText}</div>
+      {(() => {
+        const n = unsyncedCount()
+        if (n > 0 && app.syncStatus !== 'syncing' && app.syncStatus !== 'ok') {
+          return <div className="syncline err">⚠ {n} изменений не синхронизировано — они в безопасности локально</div>
+        }
+        const exp = app.tokenExpiresAt ? new Date(app.tokenExpiresAt).getTime() : null
+        if (exp && exp - Date.now() < 7 * 86400_000) {
+          return <div className="syncline err">⚠ Токен GitHub истекает {app.tokenExpiresAt!.slice(0, 10)} — создайте новый заранее</div>
+        }
+        return null
+      })()}
     </div>
   )
 }

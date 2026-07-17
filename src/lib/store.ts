@@ -2,9 +2,10 @@ import { useSyncExternalStore } from 'react'
 import { State, Rating, type Grade, type Card as FsrsCard } from 'ts-fsrs'
 import * as db from './db'
 import { sync, type SyncStatus } from './sync'
+import { tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
 import { makeScheduler, effectiveRetention, homeCounts, DUE_CAP, type Section } from './scheduler'
-import { dayKey, isoLocal } from './daytime'
+import { dayKey, isoLocal, setHomeOffset } from './daytime'
 import { newId, newIntroducedOn } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS } from './types'
@@ -21,6 +22,7 @@ interface AppState {
   syncStatus: SyncStatus
   syncError: string
   lastSyncAt: number | null
+  tokenExpiresAt: string | null
   session: SessionResult | null
 }
 
@@ -34,6 +36,7 @@ let state: AppState = {
   syncStatus: 'idle',
   syncError: '',
   lastSyncAt: null,
+  tokenExpiresAt: null,
   session: null
 }
 
@@ -62,6 +65,7 @@ function loadSettings(): Settings {
 export function saveSettings(s: Settings) {
   state.settings = s
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(s))
+  setHomeOffset(s.homeOffset ? Number(s.homeOffset) : null)
   emit()
 }
 
@@ -81,6 +85,7 @@ export async function init() {
   // настройки перечитываются здесь, а не только при загрузке модуля:
   // порядок инициализации не должен зависеть от порядка импортов
   state.settings = loadSettings()
+  setHomeOffset(state.settings.homeOffset ? Number(state.settings.homeOffset) : null)
   // без persist iOS может выселить IndexedDB — вместе с несинхронизированными ревью
   if (navigator.storage?.persist) void navigator.storage.persist().catch(() => {})
   try {
@@ -120,7 +125,8 @@ export async function startSync(): Promise<void> {
   state.journal = await db.getAllJournal()
   state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? state.lastSyncAt
   state.syncStatus = res.status
-  state.syncError = res.error ?? (res.conflicts ? `Конфликт имён с тьютором: ваша карточка сохранена с суффиксом -2 (${res.conflicts})` : '')
+  state.syncError = res.error ?? res.warning ?? (res.conflicts ? `Конфликт имён с тьютором: ваша карточка сохранена с суффиксом -2 (${res.conflicts})` : '')
+  state.tokenExpiresAt = tokenExpiration
   emit()
   updateBadge()
 }
@@ -132,6 +138,11 @@ export function views(): CardView[] {
 /** Актуальный журнал (для чтения после await, минуя снапшот useApp) */
 export function currentJournal() {
   return state.journal
+}
+
+/** Несинхронизированные изменения: строки журнала + dirty-карточки */
+export function unsyncedCount(): number {
+  return state.journal.filter(j => !j.synced).length + state.cards.filter(c => c.dirty && !c.broken).length
 }
 
 /** Оценка учебной единицы (карточка × навык): FSRS → запись в свой fsrs-блок файла (dirty) → строка журнала. */
@@ -154,6 +165,7 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
   // строка журнала строится ДО записи карточки: любой сбой здесь не рассинхронизирует БД и UI
   const line: JournalRec = {
     id: newId(),
+    v: 1,
     type: 'review',
     ts: isoLocal(now),
     day: dayKey(now),
@@ -177,9 +189,12 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
   if (item.skill === 'recall' && prev.state === State.New && !rec.fm.first_seen) {
     fmPatch.first_seen = dayKey(now)
   }
-  // пиявка: 6+ провалов — повторение не лечит интерференцию, нужна переформулировка тьютором
-  if (grade === Rating.Again && next.lapses >= 6 && !rec.fm.leech) {
+  // пиявка: +6 провалов сверх прошлого бюджета — повторение не лечит интерференцию,
+  // нужна переформулировка тьютором; после снятия флага бюджет начинается заново
+  const leechBase = Number(rec.fm.leech_lapses) || 0
+  if (grade === Rating.Again && next.lapses >= leechBase + 6 && !rec.fm.leech) {
     fmPatch.leech = dayKey(now)
+    fmPatch.leech_lapses = next.lapses
   }
   const updated: CardRec = { ...rec, fm: { ...rec.fm, ...fmPatch }, dirty: 1 }
   await db.putCard(updated)
@@ -205,7 +220,8 @@ export async function markIntroduced(item: StudyItem): Promise<void> {
     state.cards = state.cards.map(c => (c.path === rec.path ? updated : c))
   }
   const line: JournalRec = {
-    id: newId(), type: 'review', ts: isoLocal(now), day: dayKey(now),
+    id: newId(),
+    v: 1, type: 'review', ts: isoLocal(now), day: dayKey(now),
     slug: item.view.slug, skill: item.skill, format: 'intro', synced: 0
   }
   await db.putJournal([line])
@@ -219,7 +235,8 @@ export async function creditEmptyDay(): Promise<void> {
   if (state.journal.some(l => l.day === today && l.type === 'session' && l.queue_empty)) return
   const now = new Date()
   const line: JournalRec = {
-    id: newId(), type: 'session', ts: isoLocal(now), day: today,
+    id: newId(),
+    v: 1, type: 'session', ts: isoLocal(now), day: today,
     dur_ms: 0, reviews: 0, new_seen: 0, acc: null, queue_empty: true, synced: 0
   }
   await db.putJournal([line])
@@ -254,6 +271,7 @@ export async function finishSession(r: SessionResult) {
   const now = new Date()
   const line: JournalRec = {
     id: newId(),
+    v: 1,
     type: 'session',
     ts: isoLocal(now),
     // день из старта сессии: финиш в 04:10 не должен уносить queue_empty на следующий учебный день

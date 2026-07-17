@@ -125,7 +125,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   const min7 = week.reduce((a, d) => a + (minutes.get(d) ?? 0), 0)
 
   const out: string[] = []
-  out.push('---', 'type: report', `updated: "${isoLocal(now)}"`, '---', '')
+  out.push('---', 'type: report', 'report_schema: 1', `updated: "${isoLocal(now)}"`, '---', '')
   out.push('# SRS-отчёт (автогенерация)', '')
   out.push('> Файл пишет приложение SAT SRS при каждой синхронизации — не редактировать. Источник сырых данных: `_журнал/*.ndjson` (каждая оценка: ts, слово, навык, формат, correct, rating, план следующего показа) и frontmatter карточек.', '')
 
@@ -176,6 +176,23 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
     if (badAnswer.length) out.push(`- **answer отсутствует или не совпадает ни с одним choices (карточка невыигрываема):** ${badAnswer.map(v => v.slug).join(', ')}`)
     if (noBlank.length) out.push(`- Нет пропуска ______ в context: ${noBlank.map(v => v.slug).join(', ')}`)
     if (noPrepBlank.length) out.push(`- Нет пропуска ______ в prep_context: ${noPrepBlank.map(v => v.slug).join(', ')}`)
+    out.push('')
+  }
+
+  // закрытие пробелов: error/grammar/math — вычислимый graduation-статус
+  const drill = active.filter(v => v.kind !== 'vocab')
+  if (drill.length) {
+    out.push('## Закрытие пробелов (error/grammar/math)', '')
+    out.push('> Пробел можно помечать закрытым в Карте пробелов при ✅: ≥ 3 успешных повтора в РАЗНЫЕ дни и состояние review.', '')
+    out.push('| карточка | домен | причина | сост. | успешных дней | статус |', '|---|---|---|---|---|---|')
+    for (const v of drill) {
+      const okDays = new Set(
+        lines.filter(l => l.type === 'review' && l.slug === v.slug && (l.correct === true || (l.correct === undefined && (l.rating ?? 0) > 1))).map(l => l.day)
+      ).size
+      const grad = okDays >= 3 && v.fsrs.state === State.Review
+      const rec = cards.find(c => c.path === v.path)
+      out.push(`| ${v.word} | ${v.domain || '—'} | ${rec?.fm.cause ?? '—'} | ${STATE_RU[v.fsrs.state]} | ${okDays} | ${grad ? '✅ закрыт' : '⏳'} |`)
+    }
     out.push('')
   }
 

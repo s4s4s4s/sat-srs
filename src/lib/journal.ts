@@ -16,22 +16,38 @@ export function newId(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-export function parseNdjson(text: string): JournalLine[] {
-  const out: JournalLine[] = []
+/**
+ * Разбор ndjson: валидная строка обязана иметь строковые id, ts и day.
+ * Невалидные-но-непустые строки возвращаются сырыми — при перезаписи месяца
+ * они сохраняются как есть (чужие данные не теряем и не даём одной кривой
+ * строке заблокировать push со всех устройств).
+ */
+export function parseNdjson(text: string): { lines: JournalLine[]; rejects: string[] } {
+  const lines: JournalLine[] = []
+  const rejects: string[] = []
   for (const raw of text.split('\n')) {
     const line = raw.trim()
     if (!line) continue
     try {
       const o = JSON.parse(line)
-      if (o && typeof o === 'object' && o.id) out.push(o as JournalLine)
-    } catch { /* битую строку пропускаем */ }
+      if (o && typeof o === 'object' && typeof o.id === 'string' && typeof o.ts === 'string' && typeof o.day === 'string') {
+        lines.push(o as JournalLine)
+      } else {
+        rejects.push(line)
+      }
+    } catch {
+      rejects.push(line)
+    }
   }
-  return out
+  return { lines, rejects }
 }
 
-export function toNdjson(lines: JournalLine[]): string {
-  const sorted = [...lines].sort((a, b) => a.ts.localeCompare(b.ts))
-  return sorted.map(l => JSON.stringify(stripSynced(l))).join('\n') + (sorted.length ? '\n' : '')
+export function toNdjson(lines: JournalLine[], rawExtras: string[] = []): string {
+  const key = (l: JournalLine) => (typeof l.ts === 'string' ? l.ts : '')
+  const sorted = [...lines].sort((a, b) => key(a).localeCompare(key(b)))
+  const body = sorted.map(l => JSON.stringify(stripSynced(l)))
+  const all = [...body, ...rawExtras]
+  return all.join('\n') + (all.length ? '\n' : '')
 }
 
 function stripSynced(l: JournalLine): JournalLine {

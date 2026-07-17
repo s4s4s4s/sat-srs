@@ -51,12 +51,20 @@ export interface FetchedCard {
  * долгого pull-а, не может быть затёрта или удалена.
  * Возвращает число create/create-конфликтов (локальная карточка переехала на -N путь).
  */
+export class MassDeleteError extends Error {
+  constructor(public count: number, public total: number) {
+    super(`mass delete: ${count}/${total}`)
+  }
+}
+
 export async function applyPull(
   fetched: FetchedCard[],
   remotePaths: Set<string>,
-  merge: (remote: { fm: Record<string, any>; body: string }, local: CardRec) => { fm: Record<string, any>; body: string }
+  merge: (remote: { fm: Record<string, any>; body: string }, local: CardRec) => { fm: Record<string, any>; body: string },
+  allowMassDelete = false
 ): Promise<number> {
   const tx = (await db()).transaction('cards', 'readwrite')
+  const totalBefore = await tx.store.count()
   let conflicts = 0
   for (const f of fetched) {
     const cur = (await tx.store.get(f.path)) as CardRec | undefined
@@ -95,12 +103,20 @@ export async function applyPull(
   }
   // удалённые в repo файлы: удаляем локально; исключение — только ещё не пушенные новые (sha=null).
   // Карточка с sha≠null существовала в repo → её отсутствие это осознанное удаление, оно побеждает даже dirty.
+  // Предохранитель: массовое удаление (кривой basePath, битая ветка, слетевший тьютор) требует подтверждения —
+  // throw откатывает ВСЮ транзакцию, включая уже применённые puts.
+  const toDelete: IDBValidKey[] = []
   let cursor = await tx.store.openCursor()
   while (cursor) {
     const c = cursor.value as CardRec
-    if (!remotePaths.has(c.path) && !(c.dirty && c.sha === null)) await cursor.delete()
+    if (!remotePaths.has(c.path) && !(c.dirty && c.sha === null)) toDelete.push(cursor.key)
     cursor = await cursor.continue()
   }
+  if (!allowMassDelete && toDelete.length > 10 && toDelete.length > totalBefore * 0.2) {
+    try { tx.abort() } catch { /* уже завершена */ }
+    throw new MassDeleteError(toDelete.length, totalBefore)
+  }
+  for (const k of toDelete) await tx.store.delete(k)
   await tx.done
   return conflicts
 }

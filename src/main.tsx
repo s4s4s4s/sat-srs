@@ -12,7 +12,12 @@ import { init } from './lib/store'
 registerSW({
   immediate: true,
   onRegisteredSW(_url, r) {
-    if (r) setInterval(() => void r.update(), 60 * 60 * 1000)
+    if (!r) return
+    setInterval(() => void r.update(), 60 * 60 * 1000)
+    // каждый разворот приложения — проверка обновления (протухшие билды ловились дважды)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') void r.update()
+    })
   }
 })
 

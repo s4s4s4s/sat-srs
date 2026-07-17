@@ -6,6 +6,9 @@ export class GhError extends Error {
   constructor(public status: number, message: string) { super(message) }
 }
 
+/** Срок жизни PAT из заголовка последнего ответа GitHub (ISO-строка или null) */
+export let tokenExpiration: string | null = null
+
 export class GitHubClient {
   constructor(private token: string, private owner: string, private repo: string) {}
 
@@ -26,6 +29,8 @@ export class GitHubClient {
       // status 0 = сетевой отказ самого fetch; только он трактуется как «офлайн»
       throw new GhError(0, `сеть: ${e?.message ?? e}`)
     }
+    const exp = res.headers.get('github-authentication-token-expiration')
+    if (exp) tokenExpiration = exp
     if (!res.ok) {
       let msg = res.statusText
       try { msg = (await res.json()).message ?? msg } catch { /* ignore */ }

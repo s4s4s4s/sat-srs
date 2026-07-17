@@ -543,6 +543,12 @@ body::before {
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, .04);
 }
 .field input:focus, .field textarea:focus { border-color: var(--blue); background: var(--surface); box-shadow: 0 0 0 3px var(--ring); }
+.field .sel {
+  width: 100%; font-family: var(--font); font-size: 16px; font-weight: 700;
+  color: var(--text-strong); background: var(--surface2);
+  border: 2px solid var(--line); border-radius: 14px; padding: 12px 13px;
+  outline: none; appearance: none;
+}
 .field textarea { resize: vertical; min-height: 76px; }
 .field .note { font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 5px; }
 .form-error { color: var(--red-text); font-weight: 800; font-size: 14px; margin: 8px 0; }
