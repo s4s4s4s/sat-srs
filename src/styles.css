@@ -553,6 +553,45 @@ body::before {
 
 h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4px 0 12px; }
 
+/* бейдж раздела */
+.sec-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 11px; margin-right: 2px;
+}
+.badge-blue { background: var(--blue-soft); color: var(--blue); }
+.badge-purple { background: var(--purple-soft); color: var(--purple); }
+.badge-purple .sec-x { color: var(--purple); }
+.stat-cell .freeze { font-size: 13px; color: var(--blue-text); margin-left: 3px; }
+
+/* прогноз нагрузки */
+.fc-chart { display: flex; gap: 6px; align-items: stretch; height: 110px; }
+.fc-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.fc-n { font-size: 11px; font-weight: 800; color: var(--text2); min-height: 14px; }
+.fc-bar-track { flex: 1; width: 100%; display: flex; align-items: flex-end; }
+.fc-bar { width: 100%; background: var(--blue-soft); border: 2px solid var(--blue-line); border-radius: 8px 8px 4px 4px; }
+.fc-bar.today { background: var(--blue); border-color: var(--blue-sh); }
+.fc-day { font-size: 11px; font-weight: 800; color: var(--text2); text-transform: uppercase; }
+
+/* точность по форматам */
+.fmt-row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.fmt-row:last-child { margin-bottom: 0; }
+.fmt-name { font-size: 13px; font-weight: 800; color: var(--text); width: 92px; flex-shrink: 0; }
+.fmt-track { flex: 1; height: 12px; background: var(--surface2); border-radius: 99px; overflow: hidden; }
+.fmt-fill { height: 100%; background: var(--green); border-radius: 99px; }
+.fmt-fill.low { background: var(--red); }
+.fmt-pct { font-size: 13px; font-weight: 800; color: var(--text-strong); min-width: 64px; text-align: right; }
+.fmt-n { font-weight: 700; color: var(--text2); font-size: 11px; }
+
+/* календарь серии */
+.cal-grid { display: grid; grid-template-columns: repeat(14, 1fr); gap: 6px; }
+.cal-dot {
+  width: 100%; aspect-ratio: 1; border-radius: 50%;
+  background: var(--surface2); border: 2px solid var(--line);
+}
+.cal-dot.done { background: var(--green); border-color: var(--green-sh); }
+.cal-dot.today { border-color: var(--orange); border-width: 3px; }
+.cal-dot.void { opacity: .35; border-style: dashed; }
+
 /* ── Доступность ────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

@@ -5,9 +5,10 @@ import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt } from '../components/Icon'
 import type { CardView } from '../lib/types'
 
-function SectionBlock({ title, icon, cards, budget, onStart }: {
+function SectionBlock({ title, icon, badge, cards, budget, onStart }: {
   title: string
   icon: React.ReactNode
+  badge: string
   cards: CardView[]
   budget: number
   onStart: () => void
@@ -17,7 +18,9 @@ function SectionBlock({ title, icon, cards, budget, onStart }: {
   return (
     <div className="card section-card">
       <div className="hero-head">
-        <span className="hero-title section-title">{icon} {title}</span>
+        <span className="hero-title section-title">
+          <span className={`sec-badge ${badge}`}>{icon}</span> {title}
+        </span>
         <span className="hero-sub">{c.total ? `${c.total} карт.` : 'пока пусто'}</span>
       </div>
       <div className="stats3">
@@ -68,6 +71,10 @@ export default function Home() {
       </div>
 
       <div className="card hero hero-slim">
+        <div className="hero-head" style={{ marginBottom: 8 }}>
+          <span className="hero-title">Сегодня</span>
+          <span className="hero-sub">завтра: {homeCounts(all, budget).revTomorrow} к повторению</span>
+        </div>
         <div className="minbar-row" style={{ marginTop: 0 }}>
           <div className="minbar"><div style={{ width: `${Math.min(100, (mins / MIN_MINUTES) * 100)}%` }} /></div>
           <span className={`minbar-label${minsDone ? ' done' : ''}`}>
@@ -76,8 +83,8 @@ export default function Home() {
         </div>
       </div>
 
-      <SectionBlock title="Слова и правила" icon={<Bolt size={18} />} cards={rw} budget={budget} onStart={go('rw')} />
-      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} cards={math} budget={budget} onStart={go('math')} />
+      <SectionBlock title="Слова и правила" icon={<Bolt size={18} />} badge="badge-blue" cards={rw} budget={budget} onStart={go('rw')} />
+      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" cards={math} budget={budget} onStart={go('math')} />
 
       <div className="home-actions">
         <div className="row">

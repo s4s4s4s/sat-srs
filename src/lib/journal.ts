@@ -66,6 +66,7 @@ export interface StreakInfo {
   days: number
   todayDone: boolean
   freezes: number // банк заморозок: 1 за каждые 7 закрытых дней подряд, максимум 2
+  toFreeze: number // дней до следующей заморозки (0 = банк полон)
 }
 
 /**
@@ -78,7 +79,7 @@ export function streak(lines: JournalLine[], today: string = dayKey()): StreakIn
   const empty = emptyDays(lines)
   const done = (d: string) => isDayDone(d, minutes, empty)
   const activeDays = [...new Set(lines.map(l => l.day))].filter(Boolean).sort()
-  if (!activeDays.length) return { days: 0, todayDone: false, freezes: 0 }
+  if (!activeDays.length) return { days: 0, todayDone: false, freezes: 0, toFreeze: 7 }
 
   let run = 0
   let bank = 0
@@ -103,7 +104,24 @@ export function streak(lines: JournalLine[], today: string = dayKey()): StreakIn
     sinceEarn++
     if (sinceEarn >= 7) { bank = Math.min(2, bank + 1); sinceEarn = 0 }
   }
-  return { days: run, todayDone, freezes: bank }
+  return { days: run, todayDone, freezes: bank, toFreeze: bank >= 2 ? 0 : 7 - sinceEarn }
+}
+
+/** Точность по форматам за 30 дней (review-показы): mc/type/prep — по correct, reveal — по rating>1 */
+export function retentionByFormat(lines: JournalLine[], today: string = dayKey()): Record<string, { pass: number; total: number }> {
+  const from = addDaysKey(today, -29)
+  const acc: Record<string, { pass: number; total: number }> = {}
+  for (const l of lines) {
+    if (l.type !== 'review' || !l.day || l.day < from) continue
+    if (l.prev_state !== State.Review) continue
+    const f = l.format ?? 'reveal'
+    if (f === 'intro') continue
+    acc[f] ??= { pass: 0, total: 0 }
+    acc[f].total++
+    const ok = l.correct !== undefined ? l.correct : (l.rating ?? 0) > 1
+    if (ok) acc[f].pass++
+  }
+  return acc
 }
 
 /** True retention за 30 дней: доля rating>1 среди оценок карточек в состоянии Review */

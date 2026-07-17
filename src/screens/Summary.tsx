@@ -20,7 +20,10 @@ export default function Summary() {
         <div className="sum-art"><Flame size={88} off={st.days === 0} /></div>
         <div>
           <h2 className="sum-title">{r.queueEmpty ? 'Очередь пуста!' : 'Сессия завершена'}</h2>
-          <div className="sum-sub">{st.todayDone ? `серия ${st.days} — день зачтён` : 'день ещё не зачтён'}</div>
+          <div className="sum-sub">
+            {st.todayDone ? `серия ${st.days} — день зачтён` : 'день ещё не зачтён'}
+            {st.todayDone && st.toFreeze > 0 && ` · до ❄ ещё ${st.toFreeze} дн`}
+          </div>
         </div>
         <div className="tiles">
           <div className="tile tile-green">

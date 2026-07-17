@@ -1,6 +1,6 @@
 import { fsrs, generatorParameters, Rating, State, type Grade, type Card as FsrsCard, type FSRS } from 'ts-fsrs'
 import type { CardView, Format, StudyItem } from './types'
-import { endOfStudyDay } from './daytime'
+import { endOfStudyDay, dayKey, addDaysKey } from './daytime'
 
 export function makeScheduler(requestRetention: number): FSRS {
   return fsrs(generatorParameters({ request_retention: requestRetention }))
@@ -220,6 +220,21 @@ export function suggestedGrade(format: Format, correct: boolean, typo: boolean):
   if (correct) return Rating.Good
   if (typo) return Rating.Hard
   return Rating.Again
+}
+
+/** Прогноз нагрузки: сколько учебных единиц придёт на повтор в ближайшие N дней (просрочка → сегодня) */
+export function loadForecast(cards: CardView[], days = 7, now: Date = new Date()): number[] {
+  const out = new Array(days).fill(0)
+  const today = dayKey(now)
+  const dayKeys = Array.from({ length: days }, (_, k) => addDaysKey(today, k))
+  for (const i of expandItems(cards)) {
+    if (i.fsrs.state === State.New) continue
+    let d = dayKey(i.fsrs.due)
+    if (d < today) d = today
+    const idx = dayKeys.indexOf(d)
+    if (idx >= 0) out[idx]++
+  }
+  return out
 }
 
 /** Счётчики для главного экрана (в учебных единицах: карточка × навык) */
