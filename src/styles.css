@@ -1,0 +1,215 @@
+/* ── Дизайн-токены (Duolingo-стиль) ─────────────────────────────── */
+:root {
+  --bg: #ffffff;
+  --surface: #f7f7f7;
+  --text: #4b4b4b;
+  --text-strong: #3c3c3c;
+  --text2: #afafaf;
+  --line: #e5e5e5;
+  --line2: #d8d8d8;
+
+  --green: #58cc02;  --green-sh: #46a302;  --green-soft: #d7ffb8;
+  --blue: #1cb0f6;   --blue-sh: #1899d6;   --blue-soft: #ddf4ff;
+  --red: #ff4b4b;    --red-sh: #ea2b2b;    --red-soft: #ffdfe0;
+  --yellow: #ffc800; --yellow-sh: #e6a800; --yellow-soft: #fff1c1;
+  --orange: #ff9600;
+  --purple: #ce82ff;
+
+  --radius: 16px;
+  --font: 'Nunito', -apple-system, 'SF Pro Rounded', system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131f24;
+    --surface: #202f36;
+    --text: #dce6ec;
+    --text-strong: #f1f7fb;
+    --text2: #52656d;
+    --line: #37464f;
+    --line2: #3f5460;
+    --green-soft: #1f3a13;
+    --blue-soft: #123546;
+    --red-soft: #431e1e;
+    --yellow-soft: #3d3208;
+  }
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 17px;
+  line-height: 1.45;
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root { min-height: 100dvh; display: flex; flex-direction: column; }
+
+.boot { display: grid; place-items: center; min-height: 100dvh; color: var(--text2); font-weight: 700; }
+
+/* ── Каркас экрана ──────────────────────────────────────────────── */
+.screen {
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: calc(env(safe-area-inset-top) + 12px) 16px calc(env(safe-area-inset-bottom) + 16px);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 100dvh;
+}
+
+.topbar { display: flex; align-items: center; gap: 12px; padding: 4px 0 12px; }
+.topbar .spacer { flex: 1; }
+
+.iconbtn {
+  border: none; background: none; cursor: pointer; padding: 8px;
+  border-radius: 12px; font-size: 22px; line-height: 1; color: var(--text2);
+  font-family: var(--font); font-weight: 800;
+}
+.iconbtn:active { background: var(--surface); }
+
+h1.logo { font-size: 24px; font-weight: 800; color: var(--green); margin: 0; letter-spacing: .5px; }
+
+/* ── Кнопки (3D-нажатие) ────────────────────────────────────────── */
+.btn {
+  display: block; width: 100%;
+  font-family: var(--font); font-size: 17px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .8px;
+  border-radius: var(--radius); border: none; cursor: pointer;
+  padding: 14px 16px; color: #fff;
+  transition: filter .12s;
+  touch-action: manipulation;
+  user-select: none; -webkit-user-select: none;
+}
+.btn:active { transform: translateY(4px); box-shadow: none !important; }
+.btn:disabled { background: var(--surface); color: var(--text2); box-shadow: 0 4px 0 var(--line); cursor: default; }
+.btn:disabled:active { transform: none; }
+
+.btn-green  { background: var(--green);  box-shadow: 0 4px 0 var(--green-sh); }
+.btn-blue   { background: var(--blue);   box-shadow: 0 4px 0 var(--blue-sh); }
+.btn-red    { background: var(--red);    box-shadow: 0 4px 0 var(--red-sh); }
+.btn-yellow { background: var(--yellow); box-shadow: 0 4px 0 var(--yellow-sh); color: #7a5b00; }
+.btn-white  {
+  background: var(--bg); color: var(--blue);
+  border: 2px solid var(--line); border-bottom-width: 2px;
+  box-shadow: 0 4px 0 var(--line);
+}
+
+/* ── Карточки-панели ────────────────────────────────────────────── */
+.panel {
+  background: var(--bg);
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: 0 3px 0 var(--line);
+}
+
+.row { display: flex; gap: 12px; }
+.row > * { flex: 1; }
+
+/* ── Главный экран ──────────────────────────────────────────────── */
+.streak-card { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+.streak-flame { font-size: 40px; }
+.streak-n { font-size: 30px; font-weight: 800; color: var(--orange); line-height: 1; }
+.streak-label { font-size: 13px; color: var(--text2); font-weight: 700; }
+
+.due-nums { display: flex; gap: 10px; margin: 12px 0; }
+.due-chip {
+  flex: 1; text-align: center; border-radius: var(--radius);
+  padding: 12px 6px; font-weight: 800;
+}
+.due-chip .n { font-size: 26px; line-height: 1.15; }
+.due-chip .t { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; opacity: .8; }
+.chip-blue { background: var(--blue-soft); color: var(--blue); }
+.chip-green { background: var(--green-soft); color: var(--green); }
+.chip-red { background: var(--red-soft); color: var(--red); }
+.chip-yellow { background: var(--yellow-soft); color: var(--orange); }
+
+.minbar { height: 14px; background: var(--surface); border-radius: 99px; overflow: hidden; margin-top: 8px; }
+.minbar > div { height: 100%; background: var(--orange); border-radius: 99px; transition: width .3s; }
+.minbar-label { font-size: 13px; font-weight: 700; color: var(--text2); margin-top: 6px; }
+
+.syncline { font-size: 13px; color: var(--text2); font-weight: 700; text-align: center; margin-top: 10px; min-height: 18px; }
+.syncline.err { color: var(--red); }
+
+.home-actions { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+
+/* ── Экран ревью ────────────────────────────────────────────────── */
+.rev-top { display: flex; align-items: center; gap: 10px; padding: 4px 0 14px; }
+.rev-close { font-size: 22px; color: var(--text2); background: none; border: none; cursor: pointer; padding: 6px; font-family: var(--font); }
+.progress { flex: 1; height: 16px; background: var(--surface); border-radius: 99px; overflow: hidden; }
+.progress > div {
+  height: 100%; background: var(--green); border-radius: 99px;
+  transition: width .25s; position: relative; min-width: 16px;
+}
+.progress > div::after {
+  content: ''; position: absolute; top: 4px; left: 8px; right: 8px; height: 4px;
+  border-radius: 99px; background: rgba(255, 255, 255, .35);
+}
+.rev-timer { font-size: 14px; font-weight: 800; color: var(--text2); min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; }
+.rev-timer.done { color: var(--green); }
+
+.rev-body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 18px; padding: 8px 0; }
+
+.rev-source { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: var(--text2); }
+.rev-sentence { font-size: 21px; font-weight: 700; color: var(--text-strong); }
+.rev-blank {
+  display: inline-block; min-width: 88px; border-bottom: 3px solid var(--blue);
+  border-radius: 2px; margin: 0 2px; color: var(--blue);
+}
+.rev-filled { color: var(--green); border-bottom: 3px solid var(--green); border-radius: 2px; padding: 0 2px; }
+
+.rev-answer { animation: fadein .15s ease-out; }
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+
+.rev-word { font-size: 30px; font-weight: 800; color: var(--text-strong); }
+.rev-word .pos { font-size: 15px; font-weight: 700; color: var(--text2); margin-left: 8px; }
+.rev-meaning-en { font-size: 17px; color: var(--text); margin-top: 6px; }
+.rev-meaning-ru { font-size: 17px; font-weight: 700; color: var(--text-strong); margin-top: 4px; }
+.rev-roots { font-size: 14px; color: var(--text2); margin-top: 8px; font-weight: 700; }
+
+.rev-bottom { padding-top: 12px; }
+.grades { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.grade-btn { padding: 10px 4px 8px; font-size: 14px; }
+.grade-btn .iv { display: block; font-size: 11px; font-weight: 700; text-transform: none; letter-spacing: 0; opacity: .85; margin-top: 2px; }
+.hint-keys { text-align: center; font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 10px; }
+
+/* ── Итог сессии ────────────────────────────────────────────────── */
+.sum-wrap { flex: 1; display: flex; flex-direction: column; justify-content: center; text-align: center; gap: 14px; }
+.sum-emoji { font-size: 56px; }
+.sum-title { font-size: 26px; font-weight: 800; color: var(--text-strong); margin: 0; }
+.sum-grid { display: flex; gap: 10px; justify-content: center; }
+
+/* ── Формы ──────────────────────────────────────────────────────── */
+.field { margin-bottom: 12px; }
+.field label { display: block; font-size: 13px; font-weight: 800; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px; }
+.field input, .field textarea {
+  width: 100%; font-family: var(--font); font-size: 16px; font-weight: 700;
+  color: var(--text-strong); background: var(--surface);
+  border: 2px solid var(--line); border-radius: 12px; padding: 11px 12px;
+  outline: none;
+}
+.field input:focus, .field textarea:focus { border-color: var(--blue); background: var(--bg); }
+.field textarea { resize: vertical; min-height: 72px; }
+.field .note { font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 4px; }
+.form-error { color: var(--red); font-weight: 700; font-size: 14px; margin: 8px 0; }
+.form-ok { color: var(--green); font-weight: 700; font-size: 14px; margin: 8px 0; }
+
+/* ── Статистика ─────────────────────────────────────────────────── */
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.stat-cell { background: var(--surface); border-radius: var(--radius); padding: 12px; text-align: center; }
+.stat-cell .n { font-size: 24px; font-weight: 800; color: var(--text-strong); }
+.stat-cell .t { font-size: 12px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; }
+
+.settings-help { font-size: 14px; color: var(--text2); font-weight: 600; }
+.settings-help ol { padding-left: 20px; margin: 8px 0; }
+.settings-help a { color: var(--blue); font-weight: 800; }
+
+h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4px 0 12px; }
