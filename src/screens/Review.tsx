@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Rating, State, type Grade } from 'ts-fsrs'
-import { useApp, views, rateItem, finishSession, setScreen } from '../lib/store'
+import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal } from '../lib/store'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
   pickFormat, mcDistractors, prepOptions, checkTyped, suggestedGrade
@@ -75,10 +75,22 @@ export default function Review() {
   const scheduler = useMemo(() => makeScheduler(app.settings.requestRetention), [app.settings.requestRetention])
   const deck = views()
 
-  const [queue, setQueue] = useState<StudyItem[]>(() => {
-    const budget = Math.max(0, app.settings.newPerDay - newIntroducedOn(app.journal, dayKey()))
-    return buildQueue(views(), budget)
-  })
+  // очередь строится ПОСЛЕ синка на старте урока (свежие карточки тьютора попадают
+  // в эту же сессию); офлайн или медленная сеть не блокируют — таймаут 3.5 c
+  const [queue, setQueue] = useState<StudyItem[] | null>(null)
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      if (app.settings.pat && navigator.onLine) {
+        await Promise.race([startSync(), new Promise(r => setTimeout(r, 3500))])
+      }
+      if (!alive) return
+      const budget = Math.max(0, app.settings.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
+      setQueue(buildQueue(views(), budget))
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [task, setTask] = useState<Task | null>(() => null)
   const [revealed, setRevealed] = useState(false)
   const [picked, setPicked] = useState<string | null>(null) // выбранный вариант mc/prep
@@ -92,7 +104,7 @@ export default function Review() {
   const finished = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const head = queue[0] ?? null
+  const head = queue?.[0] ?? null
   // задание пересобирается при смене головы очереди
   useEffect(() => {
     if (!head) { setTask(null); return }
@@ -105,7 +117,7 @@ export default function Review() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [head && `${head.view.path}#${head.skill}#${done}`])
 
-  const total = done + queue.length
+  const total = done + (queue?.length ?? 0)
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -125,7 +137,7 @@ export default function Review() {
   }
 
   function advance(next: StudyItem | null) {
-    const rest = queue.slice(1)
+    const rest = (queue ?? []).slice(1)
     if (next && shouldRequeue(next.fsrs, new Date())) {
       rest.splice(requeuePosition(rest.length, next.fsrs, new Date()), 0, next)
     }
@@ -207,6 +219,15 @@ export default function Review() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  if (!queue || (head && !task)) {
+    return (
+      <div className="screen">
+        <div className="rev-body" style={{ textAlign: 'center', alignItems: 'center' }}>
+          <div className="sync-wait">Синхронизация…</div>
+        </div>
+      </div>
+    )
+  }
   if (!head || !task) {
     return (
       <div className="screen">

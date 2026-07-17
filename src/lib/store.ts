@@ -91,9 +91,10 @@ export async function init() {
   window.addEventListener('online', () => {
     if (state.settings.pat && state.screen !== 'review') void startSync()
   })
+  // каждый заход в приложение (foreground) — синк; в ревью нельзя (карточки под ногами)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && state.settings.pat) {
-      const stale = !state.lastSyncAt || Date.now() - state.lastSyncAt > 5 * 60000
+      const stale = !state.lastSyncAt || Date.now() - state.lastSyncAt > 30_000
       if (stale && state.screen !== 'review') void startSync()
     }
   })
@@ -114,6 +115,11 @@ export async function startSync(): Promise<void> {
 
 export function views(): CardView[] {
   return state.cards.map(cardView)
+}
+
+/** Актуальный журнал (для чтения после await, минуя снапшот useApp) */
+export function currentJournal() {
+  return state.journal
 }
 
 /** Оценка учебной единицы (карточка × навык): FSRS → запись в свой fsrs-блок файла (dirty) → строка журнала. */
