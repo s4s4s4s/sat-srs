@@ -3,7 +3,7 @@ import { State, type Grade, type Card as FsrsCard } from 'ts-fsrs'
 import * as db from './db'
 import { sync, type SyncStatus } from './sync'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
-import { makeScheduler, effectiveRetention, homeCounts, DUE_CAP } from './scheduler'
+import { makeScheduler, effectiveRetention, homeCounts, DUE_CAP, type Section } from './scheduler'
 import { dayKey, isoLocal } from './daytime'
 import { newId, newIntroducedOn } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
@@ -14,6 +14,7 @@ const SETTINGS_KEY = 'sat-srs-settings'
 interface AppState {
   ready: boolean
   screen: Screen
+  sessionSection: Section
   settings: Settings
   cards: CardRec[]
   journal: JournalRec[]
@@ -26,6 +27,7 @@ interface AppState {
 let state: AppState = {
   ready: false,
   screen: 'home',
+  sessionSection: 'rw',
   settings: loadSettings(),
   cards: [],
   journal: [],
@@ -65,6 +67,13 @@ export function saveSettings(s: Settings) {
 
 export function setScreen(s: Screen) {
   state.screen = s
+  emit()
+}
+
+/** Старт урока в конкретном разделе (слова/математика) */
+export function startLesson(section: Section) {
+  state.sessionSection = section
+  state.screen = 'review'
   emit()
 }
 

@@ -4,7 +4,7 @@ import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJo
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade
+  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf
 } from '../lib/scheduler'
 import Tex from '../components/Tex'
 import { newIntroducedOn } from '../lib/journal'
@@ -99,7 +99,8 @@ const FORMAT_HINT: Record<Format, { text: string; cls: string }> = {
 export default function Review() {
   const app = useApp()
   const scheduler = useMemo(() => makeScheduler(app.settings.requestRetention), [app.settings.requestRetention])
-  const deck = views()
+  const section = app.sessionSection
+  const deck = views().filter(v => sectionOf(v) === section)
 
   // очередь строится ПОСЛЕ синка на старте урока (свежие карточки тьютора попадают
   // в эту же сессию); офлайн или медленная сеть не блокируют — таймаут 3.5 c
@@ -114,7 +115,7 @@ export default function Review() {
       // новых за урок — не больше newPerLesson (и не больше остатка дневного лимита)
       const dayLeft = Math.max(0, app.settings.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
       const budget = Math.min(dayLeft, app.settings.newPerLesson || 4)
-      setQueue(buildQueue(views(), budget))
+      setQueue(buildQueue(views().filter(v => sectionOf(v) === section), budget))
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps

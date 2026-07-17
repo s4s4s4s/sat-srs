@@ -31,16 +31,23 @@ export async function maybeDemo(): Promise<{ screen: string | null } | null> {
   if (!p.has('demo')) return null
 
   const v = p.get('v') ?? 'mc'
+  const mathCard = (slug: string, dueOff: number): CardRec => ({
+    path: `Учёба/Карточки/${slug}.md`, sha: 'demo-' + slug, dirty: 0, body: '', fm: {
+      type: 'card', kind: 'math', word: 'системы: подстановка',
+      context: 'Система: $y = 2x + 1$ и $3x + y = 16$. Самый быстрый первый шаг?',
+      choices: ['подставить $2x+1$ вместо $y$', 'сложить уравнения почленно', 'выразить $x$ из второго', 'перебирать целые $x$'],
+      answer: 'подставить $2x+1$ вместо $y$',
+      explain: 'Подстановка: $3x + (2x+1) = 16$ даёт $x = 3$.',
+      domain: 'ALG', desmos: false, source: 'seed-math', added: '2026-07-18', suspended: false,
+      fsrs: { state: 2, due: day(dueOff).toISOString(), stability: 5, difficulty: 5, elapsed_days: 0, scheduled_days: 1, learning_steps: 0, reps: 1, lapses: 0, last_review: day(-2).toISOString() } }
+  })
   const cards: CardRec[] =
-    v === 'math' ? [
-      { path: 'Учёба/Карточки/math-sys.md', sha: 'demo-m1', dirty: 0, body: '', fm: {
-        type: 'card', kind: 'math', word: 'системы: подстановка',
-        context: 'Система: $y = 2x + 1$ и $3x + y = 16$. Самый быстрый первый шаг?',
-        choices: ['подставить $2x+1$ вместо $y$', 'сложить уравнения почленно', 'выразить $x$ из второго', 'перебирать целые $x$'],
-        answer: 'подставить $2x+1$ вместо $y$',
-        explain: 'Подстановка: $3x + (2x+1) = 16$ даёт $x = 3$ за один шаг.',
-        domain: 'ALG', desmos: false, source: 'seed-math', added: '2026-07-18', suspended: false,
-        fsrs: { state: 2, due: day(-1).toISOString(), stability: 5, difficulty: 5, elapsed_days: 0, scheduled_days: 1, learning_steps: 0, reps: 1, lapses: 0, last_review: day(-2).toISOString() } } }
+    v === 'mix' ? [
+      card('ephemeral', 'недолговечный', 'lasting a very short time', 'The fame of trends is ______, fading fast.', 2, 2, -1),
+      card('tenuous', 'шаткий', 'very weak', 'The link remains ______ at best.', 0, 0, 0),
+      mathCard('math-sys', -1)
+    ] : v === 'math' ? [
+      mathCard('math-sys', -1)
     ] : v === 'new' ? [
       card('ephemeral', 'недолговечный, мимолётный', 'lasting for a very short time', 'The fame of most online trends is ______, fading within weeks.', 0, 0, 0)
     ] : v === 'type' ? [

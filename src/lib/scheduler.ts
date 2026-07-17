@@ -40,6 +40,14 @@ export function intervalLabel(f: FSRS, card: FsrsCard, rating: Grade, now: Date)
 
 const isLearning = (s: State) => s === State.Learning || s === State.Relearning
 
+/** Раздел: слова/RW отдельно от математики — межпредметного перемешивания нет,
+    interleaving работает внутри раздела (домены математики перемешаны между собой) */
+export type Section = 'rw' | 'math'
+const MATH_DOMAINS = new Set(['ALG', 'AM', 'PSDA', 'GEO'])
+export function sectionOf(v: CardView): Section {
+  return v.kind === 'math' || MATH_DOMAINS.has(v.domain) ? 'math' : 'rw'
+}
+
 /** Learning-карточки показываем чуть раньше срока (Anki learn-ahead), чтобы шаг не терялся на конце сессии/дня */
 export const LEARN_AHEAD_MS = 30 * 60000
 

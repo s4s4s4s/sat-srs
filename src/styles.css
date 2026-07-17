@@ -244,6 +244,15 @@ body::before {
 /* блок действий гравитирует к низу — большая CTA в зоне большого пальца */
 .home-actions { display: flex; flex-direction: column; gap: 12px; margin-top: auto; padding-top: 16px; }
 
+/* карточки разделов на главном */
+.section-card { margin-bottom: 14px; }
+.section-title { display: inline-flex; align-items: center; gap: 7px; }
+.section-title svg, .sec-x { color: var(--blue); }
+.sec-x { font-size: 19px; font-weight: 800; line-height: 1; }
+.section-btn { margin-top: 12px; }
+.card.hero-slim { padding: 14px 16px; margin-bottom: 14px; }
+.card.hero-slim::after { content: none; }
+
 .syncline { font-size: 13px; color: var(--text2); font-weight: 700; text-align: center; margin-top: 12px; min-height: 18px; }
 .syncline.err { color: var(--red-text); }
 

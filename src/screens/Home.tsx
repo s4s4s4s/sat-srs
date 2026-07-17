@@ -1,17 +1,46 @@
-import { useApp, views, setScreen, startSync } from '../lib/store'
-import { homeCounts } from '../lib/scheduler'
+import { useApp, views, setScreen, startSync, startLesson } from '../lib/store'
+import { homeCounts, sectionOf, type Section } from '../lib/scheduler'
 import { streak, newIntroducedOn, minutesToday, MIN_MINUTES } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
-import { Flame, Gear, Chart, Plus, Check } from '../components/Icon'
+import { Flame, Gear, Chart, Plus, Check, Bolt } from '../components/Icon'
+import type { CardView } from '../lib/types'
+
+function SectionBlock({ title, icon, cards, budget, onStart }: {
+  title: string
+  icon: React.ReactNode
+  cards: CardView[]
+  budget: number
+  onStart: () => void
+}) {
+  const c = homeCounts(cards, budget)
+  const due = c.learnDue + c.revDue + c.newAvail
+  return (
+    <div className="card section-card">
+      <div className="hero-head">
+        <span className="hero-title section-title">{icon} {title}</span>
+        <span className="hero-sub">{c.total ? `${c.total} карт.` : 'пока пусто'}</span>
+      </div>
+      <div className="stats3">
+        <div className="stat stat-red"><div className="n">{c.learnDue}</div><div className="t">учу</div></div>
+        <div className="stat stat-blue"><div className="n">{c.revDue}</div><div className="t">повторить</div></div>
+        <div className="stat stat-green"><div className="n">{c.newAvail}</div><div className="t">новых</div></div>
+      </div>
+      <button className="btn btn-green section-btn" onClick={onStart} disabled={due === 0}>
+        {due === 0 ? <><Check size={18} /> Всё</> : 'Учить'}
+      </button>
+    </div>
+  )
+}
 
 export default function Home() {
   const app = useApp()
   const today = dayKey()
   const budget = Math.max(0, app.settings.newPerDay - newIntroducedOn(app.journal, today))
-  const c = homeCounts(views(), budget)
+  const all = views()
+  const rw = all.filter(v => sectionOf(v) === 'rw')
+  const math = all.filter(v => sectionOf(v) === 'math')
   const st = streak(app.journal)
   const mins = minutesToday(app.journal)
-  const dueNow = c.learnDue + c.revDue + c.newAvail
   const minsDone = mins >= MIN_MINUTES || st.todayDone
 
   const syncText =
@@ -19,8 +48,10 @@ export default function Home() {
     : app.syncStatus === 'offline' ? 'Офлайн — изменения сохранены локально'
     : app.syncStatus === 'error' ? `Ошибка синхронизации: ${app.syncError}`
     : app.syncError ? app.syncError
-    : app.lastSyncAt ? `Синхронизировано ${new Date(app.lastSyncAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })} · слов: ${c.total}`
+    : app.lastSyncAt ? `Синхронизировано ${new Date(app.lastSyncAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}`
     : ''
+
+  const go = (s: Section) => () => startLesson(s)
 
   return (
     <div className="screen">
@@ -36,17 +67,8 @@ export default function Home() {
         <button className="iconbtn" onClick={() => setScreen('settings')} aria-label="Настройки"><Gear /></button>
       </div>
 
-      <div className="card hero">
-        <div className="hero-head">
-          <span className="hero-title">Сегодня</span>
-          <span className="hero-sub">завтра: {c.revTomorrow} к повторению</span>
-        </div>
-        <div className="stats3">
-          <div className="stat stat-red"><div className="n">{c.learnDue}</div><div className="t">учу</div></div>
-          <div className="stat stat-blue"><div className="n">{c.revDue}</div><div className="t">повторить</div></div>
-          <div className="stat stat-green"><div className="n">{c.newAvail}</div><div className="t">новых</div></div>
-        </div>
-        <div className="minbar-row">
+      <div className="card hero hero-slim">
+        <div className="minbar-row" style={{ marginTop: 0 }}>
           <div className="minbar"><div style={{ width: `${Math.min(100, (mins / MIN_MINUTES) * 100)}%` }} /></div>
           <span className={`minbar-label${minsDone ? ' done' : ''}`}>
             {st.todayDone ? 'день зачтён' : `${Math.floor(mins)}/${MIN_MINUTES} мин`}
@@ -54,10 +76,10 @@ export default function Home() {
         </div>
       </div>
 
+      <SectionBlock title="Слова и правила" icon={<Bolt size={18} />} cards={rw} budget={budget} onStart={go('rw')} />
+      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} cards={math} budget={budget} onStart={go('math')} />
+
       <div className="home-actions">
-        <button className="btn btn-green btn-lg" onClick={() => setScreen('review')} disabled={dueNow === 0}>
-          {dueNow === 0 ? <><Check size={20} /> На сегодня всё</> : 'Начать'}
-        </button>
         <div className="row">
           <button className="btn btn-white" onClick={() => setScreen('add')}><Plus size={18} /> Слово</button>
           <button className="btn btn-white" onClick={() => void startSync()}>Синк</button>
