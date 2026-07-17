@@ -4,8 +4,9 @@ import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJo
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickFormat, mcDistractors, prepOptions, checkTyped, suggestedGrade
+  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade
 } from '../lib/scheduler'
+import Tex from '../components/Tex'
 import { newIntroducedOn } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
 import type { Format, SessionResult, StudyItem } from '../lib/types'
@@ -28,17 +29,17 @@ function shuffleOnce<T>(arr: T[]): T[] {
   return a
 }
 
-/** Предложение с пропуском / с подставленным словом */
+/** Предложение с пропуском / с подставленным словом; $...$ рендерится KaTeX-ом */
 function Sentence({ context, word, revealed }: { context: string; word: string; revealed: boolean }) {
   const parts = context.split(/_{3,}/)
-  if (parts.length === 1) return <div className="rev-sentence">{context}</div>
+  if (parts.length === 1) return <div className="rev-sentence"><Tex text={context} /></div>
   return (
     <div className="rev-sentence">
       {parts.map((p, i) => (
         <span key={i}>
-          {p}
+          <Tex text={p} />
           {i < parts.length - 1 &&
-            (revealed ? <span className="rev-filled">{word}</span> : <span className="rev-blank">&nbsp;</span>)}
+            (revealed ? <span className="rev-filled"><Tex text={word} /></span> : <span className="rev-blank">&nbsp;</span>)}
         </span>
       ))}
     </div>
@@ -80,6 +81,9 @@ function makeTask(item: StudyItem, deck: ReturnType<typeof views>): Task {
   }
   if (format === 'prep') {
     return { item, format, options: prepOptions(item.view.prep), answer: item.view.prep, ctx }
+  }
+  if (format === 'type' && item.view.answerNum) {
+    return { item, format, options: [], answer: item.view.answerNum, ctx }
   }
   return { item, format, options: [], answer: item.view.word, ctx }
 }
@@ -191,7 +195,7 @@ export default function Review() {
   function submitObjective(value: string) {
     if (!task || revealed) return
     const ok = task.format === 'type'
-      ? checkTyped(value, task.answer)
+      ? (task.item.view.answerNum ? checkNumeric(value, task.answer) : checkTyped(value, task.answer))
       : value.trim().toLowerCase() === task.answer.toLowerCase() ? 'correct' : 'wrong'
     setPicked(value)
     setVerdict(ok as 'correct' | 'typo' | 'wrong')
@@ -290,10 +294,12 @@ export default function Review() {
   const isIntro = task.format === 'intro'
   const sentence = task.ctx
   const answerWord = isPrep ? card.prep : task.format === 'mc' && card.choices.length >= 2 ? task.answer : card.word
+  const isNumeric = !!card.answerNum
+  const isAuthored = card.choices.length >= 2
   const taskHint =
-    task.format === 'mc' ? 'Какое слово подходит в пропуск?'
+    task.format === 'mc' ? (isAuthored ? 'Выберите правильный вариант' : 'Какое слово подходит в пропуск?')
     : task.format === 'prep' ? 'Какой предлог здесь правильный?'
-    : task.format === 'type' ? 'Впишите слово, подходящее в пропуск'
+    : task.format === 'type' ? (isNumeric ? 'Решите и введите ответ' : 'Впишите слово, подходящее в пропуск')
     : 'Вспомните слово — потом проверьте себя'
 
   const minLeft = Math.max(0, 15 * 60 - activeSec)
@@ -330,8 +336,9 @@ export default function Review() {
         ) : (
           <>
         <span className={`pill ${FORMAT_HINT[task.format].cls}`}>
-          {FORMAT_HINT[task.format].text}
+          {isAuthored || isNumeric ? (card.domain || 'Задание') : FORMAT_HINT[task.format].text}
           {isPrep && <> · {card.word}</>}
+          {card.desmos && <> · Desmos</>}
         </span>
         <Sentence context={sentence} word={answerWord} revealed={revealed} />
         {!revealed && <div className="rev-task">{taskHint}</div>}
@@ -342,7 +349,11 @@ export default function Review() {
           <div className="rev-answer">
             {verdict && (
               <div className={`verdict verdict-${verdict}`}>
-                {verdict === 'correct' ? 'Верно!' : verdict === 'typo' ? `Почти — опечатка: вы ввели «${typed.trim()}»` : isPrep ? `Правильно: ${card.word} ${card.prep}` : 'Мимо'}
+                {verdict === 'correct' ? 'Верно!'
+                  : verdict === 'typo' ? `Почти — опечатка: вы ввели «${typed.trim()}»`
+                  : isPrep ? `Правильно: ${card.word} ${card.prep}`
+                  : isNumeric ? <>Мимо — ответ: <Tex text={task.answer} /></>
+                  : 'Мимо'}
               </div>
             )}
             {card.kind === 'vocab' && canSpeak() ? (
@@ -352,9 +363,10 @@ export default function Review() {
             ) : (
               <div className="rev-word">{isPrep ? `${card.word} ${card.prep}` : card.word}<span className="pos">{card.pos}</span></div>
             )}
+            {!isPrep && isNumeric && verdict === 'correct' && <div className="rev-meaning-ru">Ответ: <Tex text={task.answer} /></div>}
             {!isPrep && card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
             {!isPrep && card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
-            {!isPrep && card.explain && <div className="rev-explain">{card.explain}</div>}
+            {!isPrep && card.explain && <div className="rev-explain"><Tex text={card.explain} /></div>}
             {!isPrep && card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
           </div>
         )}
@@ -389,7 +401,8 @@ export default function Review() {
                 className="type-input"
                 value={typed}
                 onChange={e => setTyped(e.target.value)}
-                placeholder="Введите слово…"
+                placeholder={isNumeric ? 'Ваш ответ…' : 'Введите слово…'}
+                inputMode={isNumeric ? 'decimal' : 'text'}
                 autoFocus
                 autoCapitalize="none"
                 autoCorrect="off"
@@ -402,7 +415,7 @@ export default function Review() {
           ) : (
             <div className="mc-stack">
               {task.options.map(o => (
-                <button key={o} className="mc-option" onClick={() => submitObjective(o)}>{o}</button>
+                <button key={o} className="mc-option" onClick={() => submitObjective(o)}><Tex text={o} /></button>
               ))}
             </div>
           )
@@ -416,7 +429,7 @@ export default function Review() {
                     const isAnswer = o.toLowerCase() === task.answer.toLowerCase()
                     return (
                       <button key={o} disabled className={`mc-option ${isAnswer ? 'mc-right' : 'mc-wrong'}`}>
-                        {o}
+                        <Tex text={o} />
                       </button>
                     )
                   })}

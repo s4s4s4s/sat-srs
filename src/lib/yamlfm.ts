@@ -103,6 +103,8 @@ export function cardView(rec: CardRec): CardView {
     domain: String(fm.domain ?? ''),
     choices: Array.isArray(fm.choices) ? fm.choices.map(String) : [],
     answerText: String(fm.answer ?? ''),
+    answerNum: fm.answer_num != null ? String(fm.answer_num) : '',
+    desmos: fm.desmos === true,
     explain: String(fm.explain ?? ''),
     suspended: fm.suspended === true || !!rec.broken,
     fsrs: fsrsFromFm(fm),

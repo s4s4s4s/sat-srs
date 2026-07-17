@@ -24,8 +24,10 @@ export interface CardView {
   source: string
   kind: string          // vocab | error | grammar | …
   domain: string        // домен College Board (II/CS/EOI/SEC/ALG/AM/PSDA/GEO)
-  choices: string[]     // авторские MC-варианты (error/grammar); пусто = дистракторы из колоды
+  choices: string[]     // авторские MC-варианты (error/grammar/math); пусто = дистракторы из колоды
   answerText: string    // правильный вариант для авторских choices
+  answerNum: string     // числовой ответ (math): "15", "0.8", "4/5" — ввод с клавиатуры
+  desmos: boolean       // задача решается через Desmos — бейдж в вопросе
   explain: string       // объяснение после ответа
   suspended: boolean
   fsrs: FsrsCard

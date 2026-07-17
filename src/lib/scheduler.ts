@@ -131,8 +131,10 @@ export function shouldRequeue(next: FsrsCard, now: Date): boolean {
  */
 export function pickFormat(item: StudyItem, deck: CardView[]): Format {
   if (item.skill === 'prep') return 'prep'
-  // авторские варианты (error/grammar-карточки) — всегда MC, включая первый показ
+  // авторские варианты (error/grammar/math) — всегда MC, включая первый показ
   if (item.view.choices.length >= 2) return 'mc'
+  // числовой ответ (math) — всегда ввод, включая первый показ
+  if (item.view.answerNum) return 'type'
   if (item.fsrs.state === State.New) return 'intro'
   if (item.fsrs.state !== State.Review) return 'reveal'
   const wantMc = item.fsrs.reps % 2 === 0
@@ -180,6 +182,28 @@ export function checkTyped(typed: string, word: string): TypeVerdict {
   if (t === w) return 'correct'
   if (w.length >= 5 && levenshtein(t, w) <= 1) return 'typo'
   return 'wrong'
+}
+
+/** Парсинг числового ответа: "15", "-2.5", ".75", "3/4", запятая как точка */
+export function parseNum(s: string): number | null {
+  const t = s.trim().replace(',', '.')
+  const frac = t.match(/^(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)$/)
+  if (frac) {
+    const d = Number(frac[2])
+    return d ? Number(frac[1]) / d : null
+  }
+  const n = Number(t)
+  return Number.isFinite(n) && t !== '' ? n : null
+}
+
+/** Числовая проверка с относительным допуском (эквивалентные формы: 0.8 = 4/5) */
+export function checkNumeric(typed: string, answer: string): TypeVerdict {
+  const a = parseNum(answer)
+  const t = parseNum(typed)
+  if (a === null || t === null) {
+    return typed.trim().toLowerCase() === answer.trim().toLowerCase() ? 'correct' : 'wrong'
+  }
+  return Math.abs(a - t) <= 1e-6 * Math.max(1, Math.abs(a)) ? 'correct' : 'wrong'
 }
 
 /** Предлагаемая оценка по объективному результату (пользователь может переопределить) */
