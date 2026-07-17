@@ -258,6 +258,9 @@ body::before {
 .section-btn { margin-top: 12px; }
 .card.hero-slim { padding: 14px 16px; margin-bottom: 14px; }
 .card.hero-slim::after { content: none; }
+.hero-row { display: flex; align-items: center; gap: 12px; }
+.hero-main { flex: 1; min-width: 0; }
+.hero-slim .hero-head { flex-direction: column; align-items: flex-start; gap: 1px; }
 
 .syncline { font-size: 13px; color: var(--text2); font-weight: 700; text-align: center; margin-top: 12px; min-height: 18px; }
 .syncline.err { color: var(--red-text); }
@@ -399,6 +402,7 @@ body::before {
 .rev-roots { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text2); margin-top: 10px; font-weight: 700; }
 
 .verdict { font-size: 17px; font-weight: 800; margin-bottom: 8px; }
+.verdict-row { display: flex; align-items: center; gap: 10px; }
 .verdict-correct { color: var(--green-text); }
 .verdict-typo { color: var(--amber-text); }
 .verdict-wrong { color: var(--red-text); }
@@ -626,6 +630,72 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 .cal-dot.done { background: var(--green); border-color: var(--green-sh); }
 .cal-dot.today { border-color: var(--orange); border-width: 3px; }
 .cal-dot.void { opacity: .35; border-style: dashed; }
+
+/* ── Огонёк-маскот ──────────────────────────────────────────────── */
+.buddy { transform-origin: 50% 92%; }
+.buddy.buddy-idle { animation: buddy-sway 3.2s ease-in-out infinite alternate; }
+@keyframes buddy-sway {
+  0% { transform: rotate(-1.6deg) scale(1); }
+  60% { transform: rotate(0.8deg) scale(1.015); }
+  100% { transform: rotate(1.8deg) scale(1); }
+}
+.buddy.buddy-happy { animation: buddy-hop .55s cubic-bezier(.34, 1.56, .64, 1); }
+@keyframes buddy-hop {
+  0% { transform: translateY(0) scale(1); }
+  35% { transform: translateY(-9px) scale(1.06, .96); }
+  70% { transform: translateY(0) scale(.97, 1.04); }
+  100% { transform: none; }
+}
+.buddy.buddy-sad { animation: buddy-droop .5s ease-out forwards; }
+@keyframes buddy-droop {
+  0% { transform: none; }
+  100% { transform: rotate(-3deg) scale(1, .96); }
+}
+.buddy.buddy-party { animation: buddy-dance 1s ease-in-out infinite; }
+@keyframes buddy-dance {
+  0%, 100% { transform: rotate(-3deg) translateY(0); }
+  25% { transform: rotate(0deg) translateY(-7px); }
+  50% { transform: rotate(3deg) translateY(0); }
+  75% { transform: rotate(0deg) translateY(-7px); }
+}
+.buddy-eyes { animation: buddy-blink 4.2s infinite; transform-origin: 60px 86px; }
+@keyframes buddy-blink {
+  0%, 93%, 100% { transform: scaleY(1); }
+  95.5% { transform: scaleY(.08); }
+}
+
+/* комбо верных ответов в сессии */
+.combo {
+  position: absolute; top: 44px; right: 0; z-index: 5;
+  font-size: 13px; font-weight: 800; color: var(--streak-ink);
+  background: var(--yellow-soft); border: 2px solid var(--yellow-line);
+  border-radius: 99px; padding: 3px 11px;
+  animation: pop .35s ease-out;
+}
+
+/* верхняя цветная заливка экрана урока — по разделу */
+.rev-wash::before {
+  content: ''; position: absolute; z-index: -1;
+  left: 50%; translate: -50% 0; top: -40px; width: 100vw; height: 220px;
+  border-radius: 0 0 40% 40% / 0 0 32px 32px;
+  opacity: .5; pointer-events: none;
+}
+.rev-wash.wash-rw::before { background: linear-gradient(180deg, var(--blue-soft), transparent); }
+.rev-wash.wash-math::before { background: linear-gradient(180deg, var(--purple-soft), transparent); }
+
+/* глиф-вотермарка в углу секционной карточки */
+.section-card { position: relative; overflow: hidden; }
+.sec-glyph {
+  position: absolute; right: -8px; bottom: -26px; z-index: 0;
+  font-size: 110px; font-weight: 800; line-height: 1;
+  color: var(--text2); opacity: .07; pointer-events: none;
+}
+.section-card > *:not(.sec-glyph) { position: relative; z-index: 1; }
+
+/* градиентные CTA — живее плоской заливки */
+.btn-green { background: linear-gradient(180deg, #63da10, #4fc102); }
+.btn-blue { background: linear-gradient(180deg, #35bcf8, #12a3ea); }
+.card.hero-slim { background: linear-gradient(125deg, var(--surface) 55%, var(--blue-soft) 130%); }
 
 /* ── Доступность ────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {

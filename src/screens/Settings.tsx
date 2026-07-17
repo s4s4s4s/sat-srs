@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useApp, saveSettings, setScreen, startSync } from '../lib/store'
 import { GitHubClient } from '../lib/github'
 import { DEFAULT_SETTINGS } from '../lib/types'
-import { ChevronLeft, Flame } from '../components/Icon'
+import { ChevronLeft } from '../components/Icon'
+import FlameBuddy from '../components/FlameBuddy'
 
 const isIosBrowserTab = /iP(hone|ad|od)/.test(navigator.userAgent) && !window.matchMedia('(display-mode: standalone)').matches
 
@@ -80,7 +81,7 @@ export default function SettingsScreen() {
     <div className="screen">
       {firstRun ? (
         <div className="welcome">
-          <Flame size={64} />
+          <FlameBuddy size={86} mood="happy" />
           <span className="brand">SAT SRS</span>
           <p>Интервальные повторения для 1550+.<br />Карточки живут в вашем Obsidian-vault.</p>
         </div>

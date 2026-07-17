@@ -1,6 +1,7 @@
 import { useApp, setScreen } from '../lib/store'
 import { streak } from '../lib/journal'
-import { Flame, Timer, Check, Bolt } from '../components/Icon'
+import { Timer, Check, Bolt } from '../components/Icon'
+import FlameBuddy from '../components/FlameBuddy'
 
 export default function Summary() {
   const app = useApp()
@@ -18,7 +19,7 @@ export default function Summary() {
   return (
     <div className="screen">
       <div className="sum-wrap">
-        <div className="sum-art"><Flame size={88} off={st.days === 0} /></div>
+        <div className="sum-art"><FlameBuddy size={104} mood="party" /></div>
         <div>
           <h2 className="sum-title">{r.queueEmpty ? 'Очередь пуста!' : 'Сессия завершена'}</h2>
           <div className="sum-sub">

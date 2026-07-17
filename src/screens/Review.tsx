@@ -11,6 +11,7 @@ import { newIntroducedOn, minutesToday, MIN_MINUTES, cardTimeCap } from '../lib/
 import { dayKey } from '../lib/daytime'
 import type { Format, SessionResult, StudyItem } from '../lib/types'
 import { Close, Sprout, Timer, Speaker, Flame } from '../components/Icon'
+import FlameBuddy from '../components/FlameBuddy'
 import { speak, canSpeak } from '../lib/speech'
 
 const GRADE_CLASS: Record<number, string> = {
@@ -126,6 +127,7 @@ export default function Review() {
   const [verdict, setVerdict] = useState<'correct' | 'typo' | 'wrong' | null>(null)
   const [done, setDone] = useState(0)
   const [activeSec, setActiveSec] = useState(0)
+  const [combo, setCombo] = useState(0)
   const [causeFor, setCauseFor] = useState<string | null>(null)
   const [needConfirm, setNeedConfirm] = useState<Grade | null>(null)
   const pendingAdvance = useRef<{ next: StudyItem; atFront: boolean } | null>(null)
@@ -247,6 +249,10 @@ export default function Review() {
 
       creditedSec.current += Math.min(elapsed, cardTimeCap(task.item.view.kind)) / 1000
 
+      // комбо верных подряд — чистый session-делайт, на FSRS не влияет
+      const passed = verdict !== null ? verdict !== 'wrong' : g > Rating.Again
+      setCombo(c => (passed ? c + 1 : 0))
+
       const r = res.current
       r.reviews++
       if (prevState === State.New) r.newSeen++
@@ -340,11 +346,12 @@ export default function Review() {
   const ss = String(minLeft % 60).padStart(2, '0')
 
   return (
-    <div className="screen">
-      <div className="rev-top">
+    <div className={`screen rev-wash wash-${section}`}>
+      <div className="rev-top" style={{ position: 'relative' }}>
         <button className="rev-close" onClick={() => { if (!busy.current) void finish(false) }} aria-label="Завершить"><Close /></button>
         <div className="progress"><div style={{ width: `${total ? (done / total) * 100 : 0}%` }} /></div>
         <div className={`rev-timer${minLeft === 0 ? ' done' : ''}`}><Timer size={15} />{minLeft === 0 ? '✓' : `${mm}:${ss}`}</div>
+        {combo >= 3 && <div className="combo" key={combo}>🔥 ×{combo}</div>}
       </div>
 
       <div className="rev-body" key={done}>
@@ -381,13 +388,16 @@ export default function Review() {
         {!isIntro && revealed && (
           <div className="rev-answer">
             {verdict && (
-              <div className={`verdict verdict-${verdict}`}>
-                {verdict === 'correct' ? 'Верно!'
-                  : verdict === 'typo' ? `Почти — опечатка: вы ввели «${typed.trim()}»`
-                  : isPrep ? `Правильно: ${card.word} ${card.prep}`
-                  : isNumeric ? <>Мимо — ответ: <Tex text={task.answer} /></>
-                  : task.format === 'type' ? <>Мимо — вы ввели «{typed.trim()}»</>
-                  : 'Мимо'}
+              <div className={`verdict verdict-${verdict} verdict-row`}>
+                <FlameBuddy size={34} mood={verdict === 'correct' ? 'happy' : verdict === 'typo' ? 'idle' : 'sad'} />
+                <span>
+                  {verdict === 'correct' ? (combo >= 3 ? `Верно! Серия ×${combo + 1}` : 'Верно!')
+                    : verdict === 'typo' ? `Почти — опечатка: вы ввели «${typed.trim()}»`
+                    : isPrep ? `Правильно: ${card.word} ${card.prep}`
+                    : isNumeric ? <>Мимо — ответ: <Tex text={task.answer} /></>
+                    : task.format === 'type' ? <>Мимо — вы ввели «{typed.trim()}»</>
+                    : 'Мимо'}
+                </span>
               </div>
             )}
             {card.kind === 'vocab' && canSpeak() ? (
