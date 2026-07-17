@@ -62,18 +62,48 @@ export function isDayDone(day: string, minutes: Map<string, number>, empty: Set<
   return (minutes.get(day) ?? 0) >= MIN_MINUTES || empty.has(day)
 }
 
-/** Серия: подряд закрытые дни, заканчивая сегодня (или вчера, если сегодня ещё не закрыт — серия не потеряна, но и не увеличена). */
-export function streak(lines: JournalLine[], today: string = dayKey()): { days: number; todayDone: boolean } {
+export interface StreakInfo {
+  days: number
+  todayDone: boolean
+  freezes: number // банк заморозок: 1 за каждые 7 закрытых дней подряд, максимум 2
+}
+
+/**
+ * Серия с заморозками (проход вперёд от первого дня журнала):
+ * закрытый день продолжает серию, каждые 7 подряд дают заморозку (банк ≤ 2),
+ * пропущенный день сжигает заморозку вместо серии; сегодня не судим до конца дня.
+ */
+export function streak(lines: JournalLine[], today: string = dayKey()): StreakInfo {
   const minutes = minutesByDay(lines)
   const empty = emptyDays(lines)
-  const todayDone = isDayDone(today, minutes, empty)
-  let d = todayDone ? today : addDaysKey(today, -1)
-  let n = 0
-  while (isDayDone(d, minutes, empty)) {
-    n++
-    d = addDaysKey(d, -1)
+  const done = (d: string) => isDayDone(d, minutes, empty)
+  const activeDays = [...new Set(lines.map(l => l.day))].filter(Boolean).sort()
+  if (!activeDays.length) return { days: 0, todayDone: false, freezes: 0 }
+
+  let run = 0
+  let bank = 0
+  let sinceEarn = 0
+  let d = activeDays[0]
+  while (d < today) {
+    if (done(d)) {
+      run++
+      sinceEarn++
+      if (sinceEarn >= 7) { bank = Math.min(2, bank + 1); sinceEarn = 0 }
+    } else if (bank > 0) {
+      bank-- // заморозка сгорает вместо серии
+    } else {
+      run = 0
+      sinceEarn = 0
+    }
+    d = addDaysKey(d, 1)
   }
-  return { days: n, todayDone }
+  const todayDone = done(today)
+  if (todayDone) {
+    run++
+    sinceEarn++
+    if (sinceEarn >= 7) { bank = Math.min(2, bank + 1); sinceEarn = 0 }
+  }
+  return { days: run, todayDone, freezes: bank }
 }
 
 /** True retention за 30 дней: доля rating>1 среди оценок карточек в состоянии Review */

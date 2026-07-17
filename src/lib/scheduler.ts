@@ -6,6 +6,16 @@ export function makeScheduler(requestRetention: number): FSRS {
   return fsrs(generatorParameters({ request_retention: requestRetention }))
 }
 
+/** Экзамен и потолок интервалов: всё должно вернуться на повтор до SAT */
+export const EXAM_DATE = new Date(2026, 11, 5)   // 05.12.2026, локально
+export const DUE_CAP = new Date(2026, 10, 28)    // 28.11.2026
+
+/** Последние 2 недели перед экзаменом — retention поднимается до 0.95 */
+export function effectiveRetention(base: number, now: Date = new Date()): number {
+  const days = (EXAM_DATE.getTime() - now.getTime()) / 86400_000
+  return days >= 0 && days <= 14 ? Math.max(base, 0.95) : base
+}
+
 export const GRADES: { rating: Grade; key: string; label: string }[] = [
   { rating: Rating.Again, key: '1', label: 'Заново' },
   { rating: Rating.Hard, key: '2', label: 'Трудно' },
@@ -121,6 +131,8 @@ export function shouldRequeue(next: FsrsCard, now: Date): boolean {
  */
 export function pickFormat(item: StudyItem, deck: CardView[]): Format {
   if (item.skill === 'prep') return 'prep'
+  // авторские варианты (error/grammar-карточки) — всегда MC, включая первый показ
+  if (item.view.choices.length >= 2) return 'mc'
   if (item.fsrs.state === State.New) return 'intro'
   if (item.fsrs.state !== State.Review) return 'reveal'
   const wantMc = item.fsrs.reps % 2 === 0

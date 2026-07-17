@@ -30,6 +30,7 @@ export default function Home() {
         <span className={`chip chip-streak${st.days === 0 ? ' off' : ''}`}>
           <Flame size={26} off={st.days === 0} />
           {st.days}
+          {st.freezes > 0 && <span className="freeze">❄{st.freezes}</span>}
         </span>
         <button className="iconbtn" onClick={() => setScreen('stats')} aria-label="Статистика"><Chart /></button>
         <button className="iconbtn" onClick={() => setScreen('settings')} aria-label="Настройки"><Gear /></button>

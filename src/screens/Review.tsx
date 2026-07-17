@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Rating, State, type Grade } from 'ts-fsrs'
-import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal } from '../lib/store'
+import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause } from '../lib/store'
+import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
   pickFormat, mcDistractors, prepOptions, checkTyped, suggestedGrade
@@ -43,23 +44,43 @@ function Sentence({ context, word, revealed }: { context: string; word: string; 
   )
 }
 
-/** Задание текущего показа: формат и варианты фиксируются в момент показа карточки */
+/** Задание текущего показа: формат, варианты и контекст фиксируются в момент показа карточки */
 interface Task {
   item: StudyItem
   format: Format
   options: string[] // mc/prep
-  answer: string    // слово или предлог
+  answer: string    // слово, предлог или авторский вариант
+  ctx: string       // выбранный контекст (ротация)
+}
+
+const lastCtx = new Map<string, string>()
+
+/** Ротация контекстов: случайный, но не тот же, что в прошлый показ */
+function pickContext(view: CardView): string {
+  const pool = view.contexts.length ? view.contexts : [view.context]
+  let c = pool[Math.floor(Math.random() * pool.length)]
+  if (pool.length > 1 && c === lastCtx.get(view.path)) {
+    c = pool[(pool.indexOf(c) + 1) % pool.length]
+  }
+  lastCtx.set(view.path, c)
+  return c
 }
 
 function makeTask(item: StudyItem, deck: ReturnType<typeof views>): Task {
   const format = pickFormat(item, deck.map(r => r))
+  const ctx = format === 'prep' ? item.view.prepContext : pickContext(item.view)
   if (format === 'mc') {
-    return { item, format, options: shuffleOnce([item.view.word, ...mcDistractors(item.view, deck)]), answer: item.view.word }
+    // авторские варианты (error/grammar) приоритетнее дистракторов из колоды
+    if (item.view.choices.length >= 2) {
+      const answer = item.view.answerText || item.view.choices[0]
+      return { item, format, options: shuffleOnce(item.view.choices), answer, ctx }
+    }
+    return { item, format, options: shuffleOnce([item.view.word, ...mcDistractors(item.view, deck)]), answer: item.view.word, ctx }
   }
   if (format === 'prep') {
-    return { item, format, options: prepOptions(item.view.prep), answer: item.view.prep }
+    return { item, format, options: prepOptions(item.view.prep), answer: item.view.prep, ctx }
   }
-  return { item, format, options: [], answer: item.view.word }
+  return { item, format, options: [], answer: item.view.word, ctx }
 }
 
 const FORMAT_HINT: Record<Format, { text: string; cls: string }> = {
@@ -100,6 +121,8 @@ export default function Review() {
   const [verdict, setVerdict] = useState<'correct' | 'typo' | 'wrong' | null>(null)
   const [done, setDone] = useState(0)
   const [activeSec, setActiveSec] = useState(0)
+  const [causeFor, setCauseFor] = useState<string | null>(null)
+  const pendingAdvance = useRef<{ next: StudyItem; atFront: boolean } | null>(null)
   const res = useRef<SessionResult>({ day: dayKey(), reviews: 0, newSeen: 0, again: 0, passRev: 0, totalRev: 0, durMs: 0, queueEmpty: false })
   const shownAt = useRef(Date.now())
   const busy = useRef(false)
@@ -155,6 +178,14 @@ export default function Review() {
     }
   }
 
+  async function pickCauseAndGo(c: string | null) {
+    if (causeFor && c) await setCause(causeFor, c)
+    setCauseFor(null)
+    const p = pendingAdvance.current
+    pendingAdvance.current = null
+    if (p) advance(p.next, p.atFront)
+  }
+
   /** Ответ в объективных форматах: фиксируем результат и открываем ответ с предложенной оценкой */
   function submitObjective(value: string) {
     if (!task || revealed) return
@@ -172,9 +203,9 @@ export default function Review() {
     try {
       const elapsed = Date.now() - shownAt.current
       const prevState = task.item.fsrs.state
-      let next
+      let rated
       try {
-        next = await rateItem(task.item, g, elapsed, task.format, verdict === null ? undefined : verdict !== 'wrong')
+        rated = await rateItem(task.item, g, elapsed, task.format, verdict === null ? undefined : verdict !== 'wrong')
       } catch {
         // карточка исчезла (синк удалил/тьютор переименовал) — пропускаем, не блокируя сессию
         advance(null)
@@ -192,7 +223,14 @@ export default function Review() {
 
       // «Продолжить» на интро → немедленная отработка; «Уже знаю» (Easy) — слово уезжает по графику
       const drillNow = task.format === 'intro' && g !== Rating.Easy
-      advance({ ...task.item, fsrs: next }, drillNow)
+      const wrong = verdict === 'wrong' || (verdict === null && g === Rating.Again && task.format !== 'intro')
+      if (wrong) {
+        // один тап: почему ошибка? — уходит в журнал и Карту пробелов тьютора
+        pendingAdvance.current = { next: { ...task.item, fsrs: rated.card }, atFront: drillNow }
+        setCauseFor(rated.lineId)
+      } else {
+        advance({ ...task.item, fsrs: rated.card }, drillNow)
+      }
     } finally {
       busy.current = false
     }
@@ -249,8 +287,8 @@ export default function Review() {
   const card = task.item.view
   const isPrep = task.format === 'prep'
   const isIntro = task.format === 'intro'
-  const sentence = isPrep ? card.prepContext : card.context
-  const answerWord = isPrep ? card.prep : card.word
+  const sentence = task.ctx
+  const answerWord = isPrep ? card.prep : task.format === 'mc' && card.choices.length >= 2 ? task.answer : card.word
   const taskHint =
     task.format === 'mc' ? 'Какое слово подходит в пропуск?'
     : task.format === 'prep' ? 'Какой предлог здесь правильный?'
@@ -279,7 +317,7 @@ export default function Review() {
               {card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
               {card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
               <div className="intro-label">Пример использования</div>
-              <Sentence context={card.context} word={card.word} revealed />
+              <Sentence context={task.ctx} word={card.word} revealed />
             </div>
           </>
         ) : (
@@ -303,13 +341,24 @@ export default function Review() {
             <div className="rev-word">{isPrep ? `${card.word} ${card.prep}` : card.word}<span className="pos">{card.pos}</span></div>
             {!isPrep && card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
             {!isPrep && card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
+            {!isPrep && card.explain && <div className="rev-explain">{card.explain}</div>}
             {!isPrep && card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
           </div>
         )}
       </div>
 
       <div className={`rev-bottom${revealed && verdict ? (verdict === 'wrong' ? ' is-wrong' : ' is-right') : ''}`}>
-        {isIntro ? (
+        {causeFor ? (
+          <div className="cause-wrap">
+            <div className="cause-title">Почему ошибка?</div>
+            <div className="cause-grid">
+              {['правило', 'слово', 'misread', 'логика', 'тайминг'].map(c => (
+                <button key={c} className="btn btn-white cause-btn" onClick={() => void pickCauseAndGo(c)}>{c}</button>
+              ))}
+            </div>
+            <button className="intro-know" onClick={() => void pickCauseAndGo(null)}>Пропустить</button>
+          </div>
+        ) : isIntro ? (
           <>
             <button className="btn btn-green btn-lg" onClick={() => void grade(Rating.Good)}>Продолжить</button>
             <button className="intro-know" onClick={() => void grade(Rating.Easy)}>Уже знаю это слово</button>

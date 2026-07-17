@@ -17,10 +17,16 @@ export interface CardView {
   word: string
   pos: string
   context: string
+  contexts: string[]    // все контексты (ротация между показами); context = первый
   meaning_en: string
   meaning_ru: string
   roots: string
   source: string
+  kind: string          // vocab | error | grammar | …
+  domain: string        // домен College Board (II/CS/EOI/SEC/ALG/AM/PSDA/GEO)
+  choices: string[]     // авторские MC-варианты (error/grammar); пусто = дистракторы из колоды
+  answerText: string    // правильный вариант для авторских choices
+  explain: string       // объяснение после ответа
   suspended: boolean
   fsrs: FsrsCard
   /** Управление/предлог (опционально): prep — ответ, prepContext — предложение с пропуском предлога */
@@ -51,8 +57,11 @@ export interface JournalLine {
   // review:
   slug?: string
   skill?: string       // recall | prep (отсутствует в старых строках = recall)
-  format?: string      // reveal | mc | type | prep
+  format?: string      // intro | reveal | mc | type | prep
   correct?: boolean    // объективный результат (mc/type/prep); у reveal отсутствует
+  cause?: string       // самоотчёт после ошибки: правило | слово | misread | логика | тайминг
+  kind?: string        // тип карточки, если не vocab
+  domain?: string      // домен College Board, если задан
   rating?: number      // 1 Again · 2 Hard · 3 Good · 4 Easy
   prev_state?: number  // 0 New · 1 Learning · 2 Review · 3 Relearning
   new_state?: number

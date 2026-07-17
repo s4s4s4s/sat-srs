@@ -3,9 +3,9 @@ import { State, type Grade, type Card as FsrsCard } from 'ts-fsrs'
 import * as db from './db'
 import { sync, type SyncStatus } from './sync'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
-import { makeScheduler } from './scheduler'
+import { makeScheduler, effectiveRetention, homeCounts, DUE_CAP } from './scheduler'
 import { dayKey, isoLocal } from './daytime'
-import { newId } from './journal'
+import { newId, newIntroducedOn } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS } from './types'
 
@@ -86,6 +86,7 @@ export async function init() {
   state.ready = true
   if (!state.settings.pat) state.screen = 'settings'
   emit()
+  updateBadge()
   if (state.settings.pat) void startSync()
 
   window.addEventListener('online', () => {
@@ -111,6 +112,7 @@ export async function startSync(): Promise<void> {
   state.syncStatus = res.status
   state.syncError = res.error ?? (res.conflicts ? `Конфликт имён с тьютором: ваша карточка сохранена с суффиксом -2 (${res.conflicts})` : '')
   emit()
+  updateBadge()
 }
 
 export function views(): CardView[] {
@@ -123,14 +125,19 @@ export function currentJournal() {
 }
 
 /** Оценка учебной единицы (карточка × навык): FSRS → запись в свой fsrs-блок файла (dirty) → строка журнала. */
-export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, correct?: boolean): Promise<FsrsCard> {
+export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, correct?: boolean): Promise<{ card: FsrsCard; lineId: string }> {
   const rec = state.cards.find(c => c.path === item.view.path)
   if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${item.view.path}`)
   const fsrsKey = item.skill === 'prep' ? 'fsrs_prep' : 'fsrs'
-  const f = makeScheduler(state.settings.requestRetention)
+  const f = makeScheduler(effectiveRetention(state.settings.requestRetention))
   const now = new Date()
   const prev = fsrsFromKey(rec.fm, fsrsKey)
-  const { card: next } = f.next(prev, now, grade)
+  let { card: next } = f.next(prev, now, grade)
+  // потолок интервалов: всё возвращается на повтор до экзамена (джиттер против свалки в один день)
+  if (next.state === State.Review && now < DUE_CAP && next.due > DUE_CAP) {
+    const due = new Date(DUE_CAP.getTime() - Math.floor(Math.random() * 5) * 86400_000)
+    next = { ...next, due, scheduled_days: Math.max(1, Math.round((due.getTime() - now.getTime()) / 86400_000)) }
+  }
 
   // строка журнала строится ДО записи карточки: любой сбой здесь не рассинхронизирует БД и UI
   const line: JournalRec = {
@@ -142,6 +149,8 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     skill: item.skill,
     format,
     ...(correct === undefined ? {} : { correct }),
+    ...(item.view.kind !== 'vocab' ? { kind: item.view.kind } : {}),
+    ...(item.view.domain ? { domain: item.view.domain } : {}),
     rating: grade,
     prev_state: prev.state,
     new_state: next.state,
@@ -162,7 +171,29 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
   await db.putJournal([line])
   state.journal = [...state.journal, line]
   emit()
-  return next
+  updateBadge()
+  return { card: next, lineId: line.id }
+}
+
+/** Самоотчёт о причине ошибки — дописывается в уже созданную строку журнала */
+export async function setCause(lineId: string, cause: string): Promise<void> {
+  const line = state.journal.find(l => l.id === lineId)
+  if (!line) return
+  const updated: JournalRec = { ...line, cause, synced: 0 }
+  await db.putJournal([updated])
+  state.journal = state.journal.map(l => (l.id === lineId ? updated : l))
+  emit()
+}
+
+/** Бейдж на иконке: сколько сейчас к повторению (без новых) */
+function updateBadge() {
+  const nav = navigator as Navigator & { setAppBadge?: (n: number) => Promise<void> }
+  if (typeof nav.setAppBadge !== 'function') return
+  try {
+    const budget = Math.max(0, state.settings.newPerDay - newIntroducedOn(state.journal, dayKey()))
+    const c = homeCounts(state.cards.map(cardView), budget)
+    void nav.setAppBadge(c.learnDue + c.revDue).catch(() => {})
+  } catch { /* ignore */ }
 }
 
 export async function finishSession(r: SessionResult) {

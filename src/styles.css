@@ -314,6 +314,16 @@ body::before {
 .sync-wait { font-size: 16px; font-weight: 800; color: var(--text2); animation: waitpulse 1.2s ease-in-out infinite; }
 @keyframes waitpulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 
+.rev-explain { font-size: 15px; color: var(--text); margin-top: 8px; padding: 10px 12px; background: var(--surface2); border-radius: 12px; }
+
+/* экран причины ошибки */
+.cause-title { text-align: center; font-size: 16px; font-weight: 800; color: var(--text-strong); margin-bottom: 10px; }
+.cause-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cause-grid .cause-btn:last-child { grid-column: 1 / -1; }
+.cause-btn { padding: 11px 8px; font-size: 14px; text-transform: none; letter-spacing: .2px; }
+
+.chip-streak .freeze { font-size: 13px; font-weight: 800; color: var(--blue-text); margin-left: 3px; }
+
 /* ── Интро нового слова: каскадное появление ────────────────────── */
 .intro { display: flex; flex-direction: column; gap: 6px; }
 .intro-word {

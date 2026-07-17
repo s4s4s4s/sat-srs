@@ -85,16 +85,25 @@ export function slugFromPath(path: string): string {
 export function cardView(rec: CardRec): CardView {
   const fm = rec.fm
   const hasPrep = !!(fm.prep && fm.prep_context)
+  const contexts = Array.isArray(fm.contexts) && fm.contexts.length
+    ? fm.contexts.map(String)
+    : fm.context ? [String(fm.context)] : []
   return {
     path: rec.path,
     slug: slugFromPath(rec.path),
     word: String(fm.word ?? slugFromPath(rec.path)),
     pos: String(fm.pos ?? ''),
-    context: String(fm.context ?? ''),
+    context: contexts[0] ?? '',
+    contexts,
     meaning_en: String(fm.meaning_en ?? ''),
     meaning_ru: String(fm.meaning_ru ?? ''),
     roots: String(fm.roots ?? ''),
     source: String(fm.source ?? 'manual'),
+    kind: String(fm.kind ?? 'vocab'),
+    domain: String(fm.domain ?? ''),
+    choices: Array.isArray(fm.choices) ? fm.choices.map(String) : [],
+    answerText: String(fm.answer ?? ''),
+    explain: String(fm.explain ?? ''),
     suspended: fm.suspended === true || !!rec.broken,
     fsrs: fsrsFromFm(fm),
     prep: hasPrep ? String(fm.prep).trim().toLowerCase() : '',
