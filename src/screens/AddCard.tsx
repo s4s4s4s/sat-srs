@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { addCard, setScreen } from '../lib/store'
+import { ChevronLeft } from '../components/Icon'
 
 const EMPTY = { word: '', pos: '', context: '', meaning_ru: '', meaning_en: '', roots: '' }
 
@@ -46,9 +47,9 @@ export default function AddCard() {
 
   return (
     <div className="screen">
-      <div className="topbar">
-        <button className="iconbtn" onClick={() => setScreen('home')} aria-label="Назад">←</button>
-        <h2 className="sec" style={{ margin: 0 }}>Новая карточка</h2>
+      <div className="page-title">
+        <button className="iconbtn" onClick={() => setScreen('home')} aria-label="Назад"><ChevronLeft /></button>
+        <h2>Новое слово</h2>
       </div>
 
       <div className="field">

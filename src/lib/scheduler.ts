@@ -84,11 +84,15 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
     .sort((a, b) => (a.skill === b.skill ? a.view.slug.localeCompare(b.view.slug) : a.skill === 'recall' ? -1 : 1))
   const newItems = shuffle(fresh.slice(0, Math.max(0, newBudget)))
 
-  // interleaving: новые распределяем равномерно среди review, не пачкой в конце
+  // interleaving: новые распределяем равномерно среди review (не пачкой в конце),
+  // но позицию 0 не занимаем — сессия начинается с повтора, если он есть
   const mixed: StudyItem[] = [...review]
   if (newItems.length) {
     const step = (mixed.length + newItems.length) / newItems.length
-    newItems.forEach((it, i) => mixed.splice(Math.min(mixed.length, Math.round(i * step)), 0, it))
+    newItems.forEach((it, i) => {
+      const pos = review.length ? Math.max(1, Math.round((i + 0.7) * step)) : Math.round(i * step)
+      mixed.splice(Math.min(mixed.length, pos), 0, it)
+    })
   }
   return [...learning, ...mixed]
 }

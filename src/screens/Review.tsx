@@ -8,6 +8,7 @@ import {
 import { newIntroducedOn } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
 import type { Format, SessionResult, StudyItem } from '../lib/types'
+import { Close, Sprout, Timer } from '../components/Icon'
 
 const GRADE_CLASS: Record<number, string> = {
   [Rating.Again]: 'btn-red',
@@ -61,11 +62,11 @@ function makeTask(item: StudyItem, deck: ReturnType<typeof views>): Task {
   return { item, format, options: [], answer: item.view.word }
 }
 
-const FORMAT_HINT: Record<Format, string> = {
-  reveal: 'Вспомни слово',
-  mc: 'Выбери слово',
-  type: 'Впиши слово',
-  prep: 'Выбери предлог'
+const FORMAT_HINT: Record<Format, { text: string; cls: string }> = {
+  reveal: { text: 'Вспомни слово', cls: 'pill-blue' },
+  mc: { text: 'Выбери слово', cls: 'pill-blue' },
+  type: { text: 'Впиши слово', cls: 'pill-purple' },
+  prep: { text: 'Выбери предлог', cls: 'pill-yellow' }
 }
 
 export default function Review() {
@@ -221,16 +222,16 @@ export default function Review() {
   return (
     <div className="screen">
       <div className="rev-top">
-        <button className="rev-close" onClick={() => { if (!busy.current) void finish(false) }} aria-label="Завершить">✕</button>
+        <button className="rev-close" onClick={() => { if (!busy.current) void finish(false) }} aria-label="Завершить"><Close /></button>
         <div className="progress"><div style={{ width: `${total ? (done / total) * 100 : 0}%` }} /></div>
-        <div className={`rev-timer${minLeft === 0 ? ' done' : ''}`}>{minLeft === 0 ? '✓' : `${mm}:${ss}`}</div>
+        <div className={`rev-timer${minLeft === 0 ? ' done' : ''}`}><Timer size={15} />{minLeft === 0 ? '✓' : `${mm}:${ss}`}</div>
       </div>
 
       <div className="rev-body">
-        <div className="rev-source">
-          {task.item.fsrs.state === State.New ? 'Новое' : FORMAT_HINT[task.format]}
-          {isPrep && <> · <b>{card.word}</b></>} · {card.source}
-        </div>
+        <span className={`pill ${task.item.fsrs.state === State.New ? 'pill-green' : FORMAT_HINT[task.format].cls}`}>
+          {task.item.fsrs.state === State.New ? 'Новое слово' : FORMAT_HINT[task.format].text}
+          {isPrep && <> · {card.word}</>}
+        </span>
         <Sentence context={sentence} word={answerWord} revealed={revealed} />
 
         {revealed && (
@@ -243,12 +244,12 @@ export default function Review() {
             <div className="rev-word">{isPrep ? `${card.word} ${card.prep}` : card.word}<span className="pos">{card.pos}</span></div>
             {!isPrep && card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
             {!isPrep && card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
-            {!isPrep && card.roots && <div className="rev-roots">🌱 {card.roots}</div>}
+            {!isPrep && card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
           </div>
         )}
       </div>
 
-      <div className="rev-bottom">
+      <div className={`rev-bottom${revealed && verdict ? (verdict === 'wrong' ? ' is-wrong' : ' is-right') : ''}`}>
         {!revealed ? (
           task.format === 'reveal' ? (
             <>
@@ -273,25 +274,26 @@ export default function Review() {
               </button>
             </>
           ) : (
-            <div className="mc-grid">
+            <div className="mc-stack">
               {task.options.map(o => (
-                <button key={o} className="btn btn-white mc-option" onClick={() => submitObjective(o)}>{o}</button>
+                <button key={o} className="mc-option" onClick={() => submitObjective(o)}>{o}</button>
               ))}
             </div>
           )
         ) : (
           <>
             {(task.format === 'mc' || task.format === 'prep') && (
-              <div className="mc-grid answered">
-                {task.options.map(o => {
-                  const isAnswer = o.toLowerCase() === task.answer.toLowerCase()
-                  const isPicked = picked !== null && o === picked
-                  return (
-                    <button key={o} disabled className={`btn mc-option ${isAnswer ? 'mc-right' : isPicked ? 'mc-wrong' : 'btn-white'}`}>
-                      {o}
-                    </button>
-                  )
-                })}
+              <div className="mc-stack answered">
+                {task.options
+                  .filter(o => o.toLowerCase() === task.answer.toLowerCase() || o === picked)
+                  .map(o => {
+                    const isAnswer = o.toLowerCase() === task.answer.toLowerCase()
+                    return (
+                      <button key={o} disabled className={`mc-option ${isAnswer ? 'mc-right' : 'mc-wrong'}`}>
+                        {o}
+                      </button>
+                    )
+                  })}
               </div>
             )}
             <div className="grades">

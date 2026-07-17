@@ -16,7 +16,18 @@ registerSW({
   }
 })
 
-void init()
+void (async () => {
+  if (import.meta.env.DEV) {
+    const { maybeDemo, demoSession } = await import('./lib/demo')
+    const demo = await maybeDemo()
+    const { init: initStore, setScreen, finishSession } = await import('./lib/store')
+    await initStore()
+    if (demo?.screen === 'summary') await finishSession(demoSession())
+    else if (demo?.screen) setScreen(demo.screen as any)
+    return
+  }
+  await init()
+})()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

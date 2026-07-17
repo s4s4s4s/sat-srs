@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useApp, saveSettings, setScreen, startSync } from '../lib/store'
 import { GitHubClient } from '../lib/github'
 import { DEFAULT_SETTINGS } from '../lib/types'
+import { ChevronLeft, Flame } from '../components/Icon'
 
 const isIosBrowserTab = /iP(hone|ad|od)/.test(navigator.userAgent) && !window.matchMedia('(display-mode: standalone)').matches
 
@@ -70,21 +71,29 @@ export default function SettingsScreen() {
 
   return (
     <div className="screen">
-      <div className="topbar">
-        {!firstRun && <button className="iconbtn" onClick={() => setScreen('home')} aria-label="Назад">←</button>}
-        <h2 className="sec" style={{ margin: 0 }}>{firstRun ? 'Подключение' : 'Настройки'}</h2>
-      </div>
+      {firstRun ? (
+        <div className="welcome">
+          <Flame size={64} />
+          <span className="brand">SAT SRS</span>
+          <p>Интервальные повторения для 1550+.<br />Карточки живут в вашем Obsidian-vault.</p>
+        </div>
+      ) : (
+        <div className="page-title">
+          <button className="iconbtn" onClick={() => setScreen('home')} aria-label="Назад"><ChevronLeft /></button>
+          <h2>Настройки</h2>
+        </div>
+      )}
 
       {firstRun && isIosBrowserTab && (
-        <div className="panel settings-help" style={{ marginBottom: 14, borderColor: 'var(--yellow)' }}>
+        <div className="card settings-help help-warn" style={{ marginBottom: 14 }}>
           <b>Сначала установите приложение:</b> Поделиться → «На экран “Домой”» — и настраивайте уже из него.
           Вкладка Safari и установленное приложение на iPhone не делят хранилище: настройка здесь не перенесётся.
         </div>
       )}
 
       {firstRun && (
-        <div className="panel settings-help" style={{ marginBottom: 14 }}>
-          Карточки живут в вашем GitHub-репозитории (vault Obsidian). Нужен fine-grained токен:
+        <div className="card settings-help" style={{ marginBottom: 14 }}>
+          Нужен fine-grained токен GitHub:
           <ol>
             <li>github.com → Settings → Developer settings → <b>Fine-grained tokens</b> → Generate new token</li>
             <li>Repository access: <b>Only select repositories</b> → {s.repo}</li>
@@ -127,7 +136,7 @@ export default function SettingsScreen() {
       {err && <div className="form-error">{err}</div>}
       {msg && <div className="form-ok">{msg}</div>}
 
-      <button className="btn btn-green" onClick={() => void connect()} disabled={busy}>
+      <button className="btn btn-green btn-lg" onClick={() => void connect()} disabled={busy}>
         {busy ? 'Проверяю…' : firstRun ? 'Подключить' : 'Сохранить'}
       </button>
       <div className="syncline" style={{ marginTop: 12 }}>FSRS-6 · retention {app.settings.requestRetention} · SAT SRS v0.1</div>

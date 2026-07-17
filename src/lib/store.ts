@@ -69,6 +69,9 @@ export function setScreen(s: Screen) {
 }
 
 export async function init() {
+  // настройки перечитываются здесь, а не только при загрузке модуля:
+  // порядок инициализации не должен зависеть от порядка импортов
+  state.settings = loadSettings()
   // без persist iOS может выселить IndexedDB — вместе с несинхронизированными ревью
   if (navigator.storage?.persist) void navigator.storage.persist().catch(() => {})
   try {
