@@ -20,7 +20,7 @@ function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart }: {
   const due = c.learnDue + c.revDue + c.newAvail
   return (
     <div className="card section-card">
-      <span className="sec-glyph">{glyph}</span>
+      <span className="sec-glyph" style={{ ['--rune-shape' as string]: glyph } as React.CSSProperties} />
       <div className="hero-head">
         <span className="hero-title section-title">
           <span className={`sec-badge ${badge}`}>{icon}</span> {title}
@@ -97,7 +97,7 @@ export default function Home() {
           <div className="hero-main">
             <div className="hero-head" style={{ marginBottom: 8 }}>
               <span className="hero-title">Сегодня</span>
-              <span className="hero-sub">до SAT: {daysToExam} дн ᛫ завтра: {cAll.revTomorrow}</span>
+              <span className="hero-sub">до SAT: {daysToExam} дн <span className="rsep">·</span> завтра: {cAll.revTomorrow}</span>
             </div>
             <div className="minbar-row" style={{ marginTop: 0 }}>
               <div className="minbar"><div style={{ width: `${Math.min(100, (mins / MIN_MINUTES) * 100)}%` }} /></div>
@@ -111,8 +111,8 @@ export default function Home() {
         </div>
       </div>
 
-      <SectionBlock title="Слова и правила" icon={<Bolt size={18} />} badge="badge-blue" glyph="ᚨ" cards={rw} budget={budget} onStart={go('rw')} />
-      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="ᛞ" cards={math} budget={budget} onStart={go('math')} />
+      <SectionBlock title="Слова и правила" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budget} onStart={go('rw')} />
+      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budget} onStart={go('math')} />
 
       <div className="home-actions">
         <div className="row">

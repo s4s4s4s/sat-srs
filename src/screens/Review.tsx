@@ -306,7 +306,8 @@ export default function Review() {
   if (!queue || (head && !task)) {
     return (
       <div className="screen">
-        <div className="rev-body" style={{ textAlign: 'center', alignItems: 'center' }}>
+        <div className="rev-body" style={{ textAlign: 'center', alignItems: 'center', justifyContent: 'center' }}>
+          <FlameBuddy size={56} mood="idle" />
           <div className="sync-wait">Синхронизация…</div>
         </div>
       </div>
@@ -317,8 +318,8 @@ export default function Review() {
     return (
       <div className="screen">
         <div className="rev-body" style={{ textAlign: 'center', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="sum-art"><Flame size={64} /></div>
-          <h2 className="sum-title">Очередь пуста ✓</h2>
+          <div className="sum-art"><FlameBuddy size={88} mood="happy" /></div>
+          <h2 className="sum-title">Очередь пуста</h2>
           <div className="sum-sub">На сегодня всё повторено — карточки вернутся по графику</div>
           <button className="btn btn-green btn-lg" style={{ maxWidth: 320 }} onClick={() => setScreen('home')}>Домой</button>
         </div>
@@ -350,8 +351,8 @@ export default function Review() {
       <div className="rev-top" style={{ position: 'relative' }}>
         <button className="rev-close" onClick={() => { if (!busy.current) void finish(false) }} aria-label="Завершить"><Close /></button>
         <div className="progress"><div style={{ width: `${total ? (done / total) * 100 : 0}%` }} /></div>
+        <div className={`combo${combo >= 3 ? ' on' : ''}`}><Flame size={13} /> ×{combo}</div>
         <div className={`rev-timer${minLeft === 0 ? ' done' : ''}`}><Timer size={15} />{minLeft === 0 ? '✓' : `${mm}:${ss}`}</div>
-        {combo >= 3 && <div className="combo" key={combo}>🔥 ×{combo}</div>}
       </div>
 
       <div className="rev-body" key={done}>
@@ -420,6 +421,7 @@ export default function Review() {
       <div className={`rev-bottom${revealed && verdict ? (verdict === 'wrong' ? ' is-wrong' : verdict === 'typo' ? ' is-typo' : ' is-right') : ''}`}>
         {causeFor ? (
           <div className="cause-wrap">
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 4 }}><FlameBuddy size={50} mood="think" /></div>
             <div className="cause-title">Почему ошибка?</div>
             <div className="cause-grid">
               {['правило', 'слово', 'misread', 'логика', 'тайминг'].map(c => (
