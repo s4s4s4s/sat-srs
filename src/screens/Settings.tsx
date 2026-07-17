@@ -16,7 +16,7 @@ export default function SettingsScreen() {
   const [busy, setBusy] = useState(false)
   const firstRun = !app.settings.pat
 
-  const set = (k: 'pat' | 'owner' | 'repo' | 'branch' | 'basePath') => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const set = (k: 'pat' | 'owner' | 'repo' | 'branch' | 'basePath' | 'pauseFrom' | 'pauseTo') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setS({ ...s, [k]: e.target.value })
 
   async function connect() {
@@ -145,6 +145,17 @@ export default function SettingsScreen() {
           <input inputMode="numeric" value={newPerLessonStr} onChange={e => setNewPerLessonStr(e.target.value)} />
         </div>
       </div>
+      <div className="row">
+        <div className="field">
+          <label>Пауза с (YYYY-MM-DD)</label>
+          <input value={s.pauseFrom} onChange={set('pauseFrom')} placeholder="2026-07-29" autoCapitalize="none" />
+        </div>
+        <div className="field">
+          <label>Пауза по</label>
+          <input value={s.pauseTo} onChange={set('pauseTo')} placeholder="2026-08-02" autoCapitalize="none" />
+        </div>
+      </div>
+      <div className="field"><div className="note">Пауза (переезд): серия не рвётся и не растёт, заморозки не тратятся.</div></div>
 
       {err && <div className="form-error">{err}</div>}
       {msg && <div className="form-ok">{msg}</div>}

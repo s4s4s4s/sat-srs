@@ -2,7 +2,7 @@ import { State } from 'ts-fsrs'
 import type { CardRec, JournalRec, JournalLine } from './types'
 import { cardView } from './yamlfm'
 import { addDaysKey, dayKey, isoLocal } from './daytime'
-import { minutesByDay, streak, trueRetention30 } from './journal'
+import { minutesByDay, streak, trueRetention30, type PauseRange } from './journal'
 
 /**
  * Автогенерируемый отчёт для ИИ-тьютора: `_отчёт.md` рядом с карточками.
@@ -68,7 +68,7 @@ function planVsFact(lines: JournalLine[], today: string) {
   return perDay
 }
 
-export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date = new Date()): string {
+export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date = new Date(), pause?: PauseRange | null): string {
   const today = dayKey(now)
   const views = cards.filter(c => !c.broken).map(cardView)
   const active = views.filter(v => !v.suspended)
@@ -83,7 +83,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   }
   const prepCount = active.filter(v => v.prep).length
 
-  const st = streak(lines, today)
+  const st = streak(lines, today, pause)
   const minutes = minutesByDay(lines)
   const ret = trueRetention30(lines, today)
   const retF = retentionByFormat(lines, today)
@@ -156,9 +156,13 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
 
   out.push('## Проблемные слова', '')
   out.push(`- Пиявки (lapses ≥ 3): ${leeches.length ? leeches.map(v => `${v.word} (${v.fsrs.lapses}${v.fsrsPrep?.lapses ? '+' + v.fsrsPrep.lapses + 'prep' : ''})`).join(', ') : '—'}`)
+  out.push(`- Помечены leech-флагом (переформулировать карточку!): ${active.filter(v => v.leech).map(v => v.word).join(', ') || '—'}`)
   out.push(`- Ошибки написания (ввод, 14 дн): ${errList('type')}`)
   out.push(`- Ошибки предлогов (14 дн): ${errList('prep')}`)
   out.push(`- Ошибки выбора в контексте (MC, 14 дн): ${errList('mc')}`)
+  const fewCtx = active.filter(v => v.kind === 'vocab' && v.fsrs.state === State.Review && v.contexts.length < 2)
+  out.push(`- Нужны доп. контексты (review-слова с < 2 предложений — риск заучивания предложения): ${fewCtx.length ? fewCtx.map(v => v.word).join(', ') : '—'}`)
+  out.push(`- Нужны confusables (review-слова без авторских дистракторов): ${active.filter(v => v.kind === 'vocab' && v.fsrs.state === State.Review && !v.confusables.length).slice(0, 20).map(v => v.word).join(', ') || '—'}`)
   out.push('')
 
   out.push('## Слова', '')

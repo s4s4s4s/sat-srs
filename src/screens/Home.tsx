@@ -1,6 +1,7 @@
-import { useApp, views, setScreen, startSync, startLesson } from '../lib/store'
-import { homeCounts, sectionOf, type Section } from '../lib/scheduler'
-import { streak, newIntroducedOn, minutesToday, MIN_MINUTES } from '../lib/journal'
+import { useEffect } from 'react'
+import { useApp, views, setScreen, startSync, startLesson, creditEmptyDay } from '../lib/store'
+import { homeCounts, sectionOf, EXAM_DATE, type Section } from '../lib/scheduler'
+import { streak, newIntroducedOn, minutesToday, MIN_MINUTES, type PauseRange } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt } from '../components/Icon'
 import type { CardView } from '../lib/types'
@@ -28,6 +29,11 @@ function SectionBlock({ title, icon, badge, cards, budget, onStart }: {
         <div className={`stat stat-blue${c.revDue ? '' : ' is-zero'}`}><div className="n">{c.revDue}</div><div className="t">повторить</div></div>
         <div className={`stat stat-green${c.newAvail ? '' : ' is-zero'}`}><div className="n">{c.newAvail}</div><div className="t">новых</div></div>
       </div>
+      {c.total > 0 && (
+        <div className="mastery" title="доля слов в долгосрочной памяти">
+          <div style={{ width: `${Math.round((c.byState.review / c.total) * 100)}%` }} />
+        </div>
+      )}
       <button className="btn btn-green section-btn" onClick={onStart} disabled={due === 0}>
         {due === 0 ? <><Check size={18} /> Всё</> : 'Учить'}
       </button>
@@ -42,9 +48,22 @@ export default function Home() {
   const all = views()
   const rw = all.filter(v => sectionOf(v) === 'rw')
   const math = all.filter(v => sectionOf(v) === 'math')
-  const st = streak(app.journal)
+  const pause: PauseRange | null = app.settings.pauseFrom && app.settings.pauseTo
+    ? { from: app.settings.pauseFrom, to: app.settings.pauseTo } : null
+  const st = streak(app.journal, today, pause)
   const mins = minutesToday(app.journal)
   const minsDone = mins >= MIN_MINUTES || st.todayDone
+  const daysToExam = Math.max(0, Math.ceil((EXAM_DATE.getTime() - Date.now()) / 86400_000))
+
+  // идеальный день: всё повторено вовремя — зачитывается сам, серия не страдает
+  const cAll = homeCounts(all, budget)
+  const dueNow = cAll.learnDue + cAll.revDue + cAll.newAvail
+  useEffect(() => {
+    if (app.ready && app.settings.pat && cAll.total > 0 && dueNow === 0 && !st.todayDone && !st.pausedToday) {
+      void creditEmptyDay()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app.ready, dueNow, st.todayDone])
 
   const syncText =
     app.syncStatus === 'syncing' ? 'Синхронизация…'
@@ -73,14 +92,15 @@ export default function Home() {
       <div className="card hero hero-slim">
         <div className="hero-head" style={{ marginBottom: 8 }}>
           <span className="hero-title">Сегодня</span>
-          <span className="hero-sub">завтра: {homeCounts(all, budget).revTomorrow} к повторению</span>
+          <span className="hero-sub">до SAT: {daysToExam} дн · завтра: {cAll.revTomorrow}</span>
         </div>
         <div className="minbar-row" style={{ marginTop: 0 }}>
           <div className="minbar"><div style={{ width: `${Math.min(100, (mins / MIN_MINUTES) * 100)}%` }} /></div>
           <span className={`minbar-label${minsDone ? ' done' : ''}`}>
-            {st.todayDone ? 'день зачтён' : `${Math.floor(mins)}/${MIN_MINUTES} мин`}
+            {st.pausedToday ? `пауза до ${app.settings.pauseTo.slice(5).split('-').reverse().join('.')}` : st.todayDone ? 'день зачтён' : `${Math.floor(mins)}/${MIN_MINUTES} мин`}
           </span>
         </div>
+        {st.freezeSpentYesterday && <div className="freeze-note">❄ Заморозка спасла серию — осталось {st.freezes}</div>}
       </div>
 
       <SectionBlock title="Слова и правила" icon={<Bolt size={18} />} badge="badge-blue" cards={rw} budget={budget} onStart={go('rw')} />

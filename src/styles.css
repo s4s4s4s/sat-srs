@@ -356,6 +356,13 @@ body::before {
 .cause-btn { padding: 11px 8px; font-size: 14px; text-transform: none; letter-spacing: .2px; }
 
 .chip-streak .freeze { font-size: 13px; font-weight: 800; color: var(--blue-text); margin-left: 3px; }
+.freeze-note { font-size: 13px; font-weight: 800; color: var(--blue-text); margin-top: 8px; }
+.confirm-warn { color: var(--red-text); font-weight: 800; }
+.leech-note { font-size: 13px; font-weight: 800; color: var(--amber-text); margin-top: 8px; }
+
+/* тонкая полоса мастерства раздела: доля слов в долгосрочной памяти */
+.mastery { height: 6px; background: var(--surface2); border-radius: 99px; overflow: hidden; margin-top: 10px; }
+.mastery > div { height: 100%; background: var(--purple); border-radius: 99px; transition: width .3s; }
 
 /* ── Интро нового слова: каскадное появление ────────────────────── */
 .intro { display: flex; flex-direction: column; gap: 6px; }

@@ -5,7 +5,8 @@ import { Flame, Timer, Check, Bolt } from '../components/Icon'
 export default function Summary() {
   const app = useApp()
   const r = app.session
-  const st = streak(app.journal)
+  const pause = app.settings.pauseFrom && app.settings.pauseTo ? { from: app.settings.pauseFrom, to: app.settings.pauseTo } : null
+  const st = streak(app.journal, undefined, pause)
   if (!r) {
     setScreen('home')
     return null

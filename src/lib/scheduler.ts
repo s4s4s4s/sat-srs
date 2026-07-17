@@ -3,7 +3,8 @@ import type { CardView, Format, StudyItem } from './types'
 import { endOfStudyDay, dayKey, addDaysKey } from './daytime'
 
 export function makeScheduler(requestRetention: number): FSRS {
-  return fsrs(generatorParameters({ request_retention: requestRetention }))
+  // fuzz разводит одновременно выученные карточки по разным дням — меньше комков и MC-соседей
+  return fsrs(generatorParameters({ request_retention: requestRetention, enable_fuzz: true }))
 }
 
 /** Экзамен и потолок интервалов: всё должно вернуться на повтор до SAT */
@@ -96,10 +97,19 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
 
   const review = shuffle(items.filter(i => i.fsrs.state === State.Review && i.fsrs.due.getTime() < eod.getTime()))
 
-  // выбор новых детерминированный (FIFO: recall раньше prep, затем по slug), случайна только подача
+  // выбор новых: сначала error/grammar (закрывают доказанные пробелы), потом math, потом словарь;
+  // внутри типа — свежедобавленные первыми (короткий лаг «ошибка → первая отработка»)
+  const kindRank: Record<string, number> = { error: 0, grammar: 1, math: 2 }
   const fresh = items
     .filter(i => i.fsrs.state === State.New)
-    .sort((a, b) => (a.skill === b.skill ? a.view.slug.localeCompare(b.view.slug) : a.skill === 'recall' ? -1 : 1))
+    .sort((a, b) => {
+      const ka = kindRank[a.view.kind] ?? 3
+      const kb = kindRank[b.view.kind] ?? 3
+      if (ka !== kb) return ka - kb
+      const ad = b.view.added.localeCompare(a.view.added)
+      if (ad !== 0) return ad
+      return a.view.slug.localeCompare(b.view.slug)
+    })
   const newItems = shuffle(fresh.slice(0, Math.max(0, newBudget)))
 
   // interleaving: новые распределяем равномерно среди review (не пачкой в конце),
@@ -137,25 +147,34 @@ export function shouldRequeue(next: FsrsCard, now: Date): boolean {
  * - recall в Review → чередование по reps: MC (формат Words in Context цифрового SAT,
  *   дистракторы из колоды) и ввод с клавиатуры (production + написание).
  */
-export function pickFormat(item: StudyItem, deck: CardView[]): Format {
+export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<string>): Format {
   if (item.skill === 'prep') return 'prep'
   // авторские варианты (error/grammar/math) — всегда MC, включая первый показ
   if (item.view.choices.length >= 2) return 'mc'
   // числовой ответ (math) — всегда ввод, включая первый показ
   if (item.view.answerNum) return 'type'
-  if (item.fsrs.state === State.New) return 'intro'
-  if (item.fsrs.state !== State.Review) return 'reveal'
+  const typable = !item.view.word.includes(' ')
+  if (item.fsrs.state === State.New) {
+    // знакомство один раз за сессию; после него первая отработка — reveal (первый настоящий FSRS-рейтинг)
+    return introduced?.has(itemKey(item)) ? 'reveal' : 'intro'
+  }
+  if (item.fsrs.state !== State.Review) {
+    // выпускной шаг learning — объективный формат: самооценка склонна к «показалось знакомым»
+    return item.fsrs.reps >= 1 && typable ? 'type' : 'reveal'
+  }
   const wantMc = item.fsrs.reps % 2 === 0
   if (wantMc && mcDistractors(item.view, deck).length >= 3) return 'mc'
-  return 'type'
+  return typable ? 'type' : (mcDistractors(item.view, deck).length >= 3 ? 'mc' : 'reveal')
 }
 
-/** Дистракторы для MC: слова той же части речи (или любые, если своих мало) */
+/** Дистракторы для MC: авторские confusables тьютора приоритетнее случайной выборки той же части речи */
 export function mcDistractors(card: CardView, deck: CardView[], n = 3): string[] {
-  const pool = deck.filter(c => !c.suspended && c.word !== card.word)
+  const authored = card.confusables.filter(c => c && c.toLowerCase() !== card.word.toLowerCase())
+  if (authored.length >= n) return shuffle(authored).slice(0, n)
+  const pool = deck.filter(c => !c.suspended && c.word !== card.word && !authored.includes(c.word))
   const samePos = pool.filter(c => c.pos === card.pos)
-  const src = samePos.length >= n ? samePos : pool
-  return shuffle(src.map(c => c.word)).slice(0, n)
+  const src = samePos.length >= n - authored.length ? samePos : pool
+  return [...authored, ...shuffle(src.map(c => c.word)).slice(0, n - authored.length)]
 }
 
 const COMMON_PREPS = ['about', 'against', 'at', 'by', 'for', 'from', 'in', 'of', 'on', 'to', 'toward', 'with']
@@ -214,12 +233,17 @@ export function checkNumeric(typed: string, answer: string): TypeVerdict {
   return Math.abs(a - t) <= 1e-6 * Math.max(1, Math.abs(a)) ? 'correct' : 'wrong'
 }
 
-/** Предлагаемая оценка по объективному результату (пользователь может переопределить) */
-export function suggestedGrade(format: Format, correct: boolean, typo: boolean): Grade | null {
-  if (format === 'reveal') return null
-  if (correct) return Rating.Good
-  if (typo) return Rating.Hard
-  return Rating.Again
+/**
+ * Предлагаемая оценка по объективному результату (пользователь может переопределить).
+ * Латентность учитывается: SAT — тест на скорость, верный-но-медленный ответ = Hard.
+ * Опечатка предлагает Good: орфография на рецептивном экзамене не проверяется.
+ */
+export function suggestedGrade(format: Format, correct: boolean, typo: boolean, elapsedMs = 0, kind = 'vocab'): Grade | null {
+  if (format === 'reveal' || format === 'intro') return null
+  if (!correct && !typo) return Rating.Again
+  const slowMs = kind === 'math' ? 90_000 : 25_000
+  if (elapsedMs > slowMs) return Rating.Hard
+  return Rating.Good
 }
 
 /** Прогноз нагрузки: сколько учебных единиц придёт на повтор в ближайшие N дней (просрочка → сегодня) */

@@ -13,7 +13,8 @@ export default function Stats() {
   const budget = Math.max(0, app.settings.newPerDay - newIntroducedOn(app.journal, today))
   const all = views()
   const c = homeCounts(all, budget)
-  const st = streak(app.journal)
+  const pause = app.settings.pauseFrom && app.settings.pauseTo ? { from: app.settings.pauseFrom, to: app.settings.pauseTo } : null
+  const st = streak(app.journal, undefined, pause)
   const ret = trueRetention30(app.journal)
   const retF = retentionByFormat(app.journal)
   const mins = minutesToday(app.journal)

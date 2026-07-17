@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { State, type Grade, type Card as FsrsCard } from 'ts-fsrs'
+import { State, Rating, type Grade, type Card as FsrsCard } from 'ts-fsrs'
 import * as db from './db'
 import { sync, type SyncStatus } from './sync'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
@@ -103,6 +103,7 @@ export async function init() {
   })
   // каждый заход в приложение (foreground) — синк; в ревью нельзя (карточки под ногами)
   document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') updateBadge()
     if (document.visibilityState === 'visible' && state.settings.pat) {
       const stale = !state.lastSyncAt || Date.now() - state.lastSyncAt > 30_000
       if (stale && state.screen !== 'review') void startSync()
@@ -142,9 +143,11 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
   const now = new Date()
   const prev = fsrsFromKey(rec.fm, fsrsKey)
   let { card: next } = f.next(prev, now, grade)
-  // потолок интервалов: всё возвращается на повтор до экзамена (джиттер против свалки в один день)
+  // потолок интервалов: всё возвращается до экзамена; окно 5–14 дней, взвешено по стабильности —
+  // прочные карточки раньше (14–21.11), хрупкие ближе к 28.11; без свалки в одну неделю
   if (next.state === State.Review && now < DUE_CAP && next.due > DUE_CAP) {
-    const due = new Date(DUE_CAP.getTime() - Math.floor(Math.random() * 5) * 86400_000)
+    const span = Math.min(14, Math.max(5, Math.round(next.stability / 10)))
+    const due = new Date(DUE_CAP.getTime() - Math.floor(Math.random() * span) * 86400_000)
     next = { ...next, due, scheduled_days: Math.max(1, Math.round((due.getTime() - now.getTime()) / 86400_000)) }
   }
 
@@ -174,6 +177,10 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
   if (item.skill === 'recall' && prev.state === State.New && !rec.fm.first_seen) {
     fmPatch.first_seen = dayKey(now)
   }
+  // пиявка: 6+ провалов — повторение не лечит интерференцию, нужна переформулировка тьютором
+  if (grade === Rating.Again && next.lapses >= 6 && !rec.fm.leech) {
+    fmPatch.leech = dayKey(now)
+  }
   const updated: CardRec = { ...rec, fm: { ...rec.fm, ...fmPatch }, dirty: 1 }
   await db.putCard(updated)
   state.cards = state.cards.map(c => (c.path === rec.path ? updated : c))
@@ -182,6 +189,44 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
   emit()
   updateBadge()
   return { card: next, lineId: line.id }
+}
+
+/**
+ * Знакомство с новым словом БЕЗ оценки FSRS: «Продолжить» на интро — это показ, не вспоминание.
+ * Фиксирует first_seen и строку журнала format:intro; первый настоящий рейтинг даст отработка.
+ */
+export async function markIntroduced(item: StudyItem): Promise<void> {
+  const rec = state.cards.find(c => c.path === item.view.path)
+  if (!rec || rec.broken) return
+  const now = new Date()
+  if (!rec.fm.first_seen) {
+    const updated: CardRec = { ...rec, fm: { ...rec.fm, first_seen: dayKey(now) }, dirty: 1 }
+    await db.putCard(updated)
+    state.cards = state.cards.map(c => (c.path === rec.path ? updated : c))
+  }
+  const line: JournalRec = {
+    id: newId(), type: 'review', ts: isoLocal(now), day: dayKey(now),
+    slug: item.view.slug, skill: item.skill, format: 'intro', synced: 0
+  }
+  await db.putJournal([line])
+  state.journal = [...state.journal, line]
+  emit()
+}
+
+/** Идеальный день: всё повторено вовремя, очередь пуста — день зачитывается сам, без сессии */
+export async function creditEmptyDay(): Promise<void> {
+  const today = dayKey()
+  if (state.journal.some(l => l.day === today && l.type === 'session' && l.queue_empty)) return
+  const now = new Date()
+  const line: JournalRec = {
+    id: newId(), type: 'session', ts: isoLocal(now), day: today,
+    dur_ms: 0, reviews: 0, new_seen: 0, acc: null, queue_empty: true, synced: 0
+  }
+  await db.putJournal([line])
+  state.journal = [...state.journal, line]
+  emit()
+  updateBadge()
+  void startSync()
 }
 
 /** Самоотчёт о причине ошибки — дописывается в уже созданную строку журнала */
@@ -225,6 +270,7 @@ export async function finishSession(r: SessionResult) {
   state.session = r
   state.screen = 'summary'
   emit()
+  updateBadge()
   void startSync()
 }
 

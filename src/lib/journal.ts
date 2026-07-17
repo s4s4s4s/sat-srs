@@ -40,12 +40,17 @@ function stripSynced(l: JournalLine): JournalLine {
   return rest
 }
 
+/** Кап зачётного времени на карточку: math-задачи решаются дольше слов */
+export function cardTimeCap(kind?: string): number {
+  return kind === 'math' ? 180_000 : CARD_TIME_CAP_MS
+}
+
 /** Минуты ревью по дням (с капом на карточку) */
 export function minutesByDay(lines: JournalLine[]): Map<string, number> {
   const m = new Map<string, number>()
   for (const l of lines) {
     if (l.type !== 'review') continue
-    const ms = Math.min(l.elapsed_ms ?? 0, CARD_TIME_CAP_MS)
+    const ms = Math.min(l.elapsed_ms ?? 0, cardTimeCap(l.kind))
     m.set(l.day, (m.get(l.day) ?? 0) + ms / 60000)
   }
   return m
@@ -67,31 +72,43 @@ export interface StreakInfo {
   todayDone: boolean
   freezes: number // банк заморозок: 1 за каждые 7 закрытых дней подряд, максимум 2
   toFreeze: number // дней до следующей заморозки (0 = банк полон)
+  pausedToday: boolean // сегодня — плановая пауза (переезд)
+  freezeSpentYesterday: boolean // вчера заморозка спасла серию — сказать об этом
 }
+
+export interface PauseRange { from: string; to: string }
 
 /**
  * Серия с заморозками (проход вперёд от первого дня журнала):
  * закрытый день продолжает серию, каждые 7 подряд дают заморозку (банк ≤ 2),
  * пропущенный день сжигает заморозку вместо серии; сегодня не судим до конца дня.
+ * Дни плановой паузы прозрачны: серия не рвётся, не растёт, заморозки не тратятся.
  */
-export function streak(lines: JournalLine[], today: string = dayKey()): StreakInfo {
+export function streak(lines: JournalLine[], today: string = dayKey(), pause?: PauseRange | null): StreakInfo {
   const minutes = minutesByDay(lines)
   const empty = emptyDays(lines)
   const done = (d: string) => isDayDone(d, minutes, empty)
+  const inPause = (d: string) => !!(pause && pause.from && pause.to && d >= pause.from && d <= pause.to)
   const activeDays = [...new Set(lines.map(l => l.day))].filter(Boolean).sort()
-  if (!activeDays.length) return { days: 0, todayDone: false, freezes: 0, toFreeze: 7 }
+  if (!activeDays.length) return { days: 0, todayDone: false, freezes: 0, toFreeze: 7, pausedToday: inPause(today), freezeSpentYesterday: false }
 
+  const yesterday = addDaysKey(today, -1)
   let run = 0
   let bank = 0
   let sinceEarn = 0
+  let freezeSpentYesterday = false
   let d = activeDays[0]
   while (d < today) {
-    if (done(d)) {
+    if (inPause(d)) {
+      // пауза: день прозрачен (но занятия в паузе всё равно засчитываются в run)
+      if (done(d)) { run++ }
+    } else if (done(d)) {
       run++
       sinceEarn++
       if (sinceEarn >= 7) { bank = Math.min(2, bank + 1); sinceEarn = 0 }
     } else if (bank > 0) {
       bank-- // заморозка сгорает вместо серии
+      if (d === yesterday) freezeSpentYesterday = true
     } else {
       run = 0
       sinceEarn = 0
@@ -101,10 +118,12 @@ export function streak(lines: JournalLine[], today: string = dayKey()): StreakIn
   const todayDone = done(today)
   if (todayDone) {
     run++
-    sinceEarn++
-    if (sinceEarn >= 7) { bank = Math.min(2, bank + 1); sinceEarn = 0 }
+    if (!inPause(today)) {
+      sinceEarn++
+      if (sinceEarn >= 7) { bank = Math.min(2, bank + 1); sinceEarn = 0 }
+    }
   }
-  return { days: run, todayDone, freezes: bank, toFreeze: bank >= 2 ? 0 : 7 - sinceEarn }
+  return { days: run, todayDone, freezes: bank, toFreeze: bank >= 2 ? 0 : 7 - sinceEarn, pausedToday: inPause(today), freezeSpentYesterday }
 }
 
 /** Точность по форматам за 30 дней (review-показы): mc/type/prep — по correct, reveal — по rating>1 */

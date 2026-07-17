@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Rating, State, type Grade } from 'ts-fsrs'
-import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause } from '../lib/store'
+import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause, markIntroduced } from '../lib/store'
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf
+  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention
 } from '../lib/scheduler'
 import Tex from '../components/Tex'
-import { newIntroducedOn, minutesToday, MIN_MINUTES } from '../lib/journal'
+import { newIntroducedOn, minutesToday, MIN_MINUTES, cardTimeCap } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
 import type { Format, SessionResult, StudyItem } from '../lib/types'
 import { Close, Sprout, Timer, Speaker, Flame } from '../components/Icon'
@@ -56,21 +56,18 @@ interface Task {
   ctx: string       // выбранный контекст (ротация)
 }
 
-const lastCtx = new Map<string, string>()
+const lastCtxIdx = new Map<string, number>()
 
-/** Ротация контекстов: случайный, но не тот же, что в прошлый показ */
+/** Ротация контекстов round-robin: каждый показ — следующее предложение, полный цикл до повтора */
 function pickContext(view: CardView): string {
   const pool = view.contexts.length ? view.contexts : [view.context]
-  let c = pool[Math.floor(Math.random() * pool.length)]
-  if (pool.length > 1 && c === lastCtx.get(view.path)) {
-    c = pool[(pool.indexOf(c) + 1) % pool.length]
-  }
-  lastCtx.set(view.path, c)
-  return c
+  const idx = ((lastCtxIdx.get(view.path) ?? -1) + 1) % pool.length
+  lastCtxIdx.set(view.path, idx)
+  return pool[idx]
 }
 
-function makeTask(item: StudyItem, deck: ReturnType<typeof views>): Task {
-  const format = pickFormat(item, deck.map(r => r))
+function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: Set<string>): Task {
+  const format = pickFormat(item, deck.map(r => r), introduced)
   const ctx = format === 'prep' ? item.view.prepContext : pickContext(item.view)
   if (format === 'mc') {
     // авторские варианты (error/grammar) приоритетнее дистракторов из колоды
@@ -99,7 +96,8 @@ const FORMAT_HINT: Record<Format, { text: string; cls: string }> = {
 
 export default function Review() {
   const app = useApp()
-  const scheduler = useMemo(() => makeScheduler(app.settings.requestRetention), [app.settings.requestRetention])
+  // прогнозные интервалы на кнопках — тем же retention, что и реальная запись (включая предэкзаменационный рамп)
+  const scheduler = useMemo(() => makeScheduler(effectiveRetention(app.settings.requestRetention)), [app.settings.requestRetention])
   const section = app.sessionSection
   const deck = views().filter(v => sectionOf(v) === section)
 
@@ -129,7 +127,13 @@ export default function Review() {
   const [done, setDone] = useState(0)
   const [activeSec, setActiveSec] = useState(0)
   const [causeFor, setCauseFor] = useState<string | null>(null)
+  const [needConfirm, setNeedConfirm] = useState<Grade | null>(null)
   const pendingAdvance = useRef<{ next: StudyItem; atFront: boolean } | null>(null)
+  // слова, уже показанные интро в этой сессии: их New-показы дальше — отработка, не интро
+  const introduced = useRef(new Set<string>())
+  const answeredMs = useRef(0)
+  // зачётные секунды: тот же кап на карточку, что и в журнале — таймер согласован с минутами дня
+  const creditedSec = useRef(0)
   // минуты, уже сделанные сегодня ДО этой сессии — таймер минимума общедневной, не сессионный
   const baseSec = useMemo(() => Math.floor(minutesToday(currentJournal()) * 60), [])
   const res = useRef<SessionResult>({ day: dayKey(), reviews: 0, newSeen: 0, again: 0, passRev: 0, totalRev: 0, durMs: 0, queueEmpty: false })
@@ -142,11 +146,12 @@ export default function Review() {
   // задание пересобирается при смене головы очереди
   useEffect(() => {
     if (!head) { setTask(null); return }
-    setTask(makeTask(head, deck))
+    setTask(makeTask(head, deck, introduced.current))
     setRevealed(false)
     setPicked(null)
     setTyped('')
     setVerdict(null)
+    setNeedConfirm(null)
     shownAt.current = Date.now()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [head && `${head.view.path}#${head.skill}#${done}`])
@@ -160,7 +165,9 @@ export default function Review() {
     return () => clearInterval(t)
   }, [])
 
-  const suggested = task && verdict !== null ? suggestedGrade(task.format, verdict === 'correct', verdict === 'typo') : null
+  const suggested = task && verdict !== null
+    ? suggestedGrade(task.format, verdict === 'correct', verdict === 'typo', answeredMs.current, task.item.view.kind)
+    : null
 
   async function finish(queueEmpty: boolean) {
     if (finished.current) return // двойной тап ✕ / финиш после финиша не пишет дубль session-строки
@@ -170,9 +177,11 @@ export default function Review() {
     await finishSession(res.current)
   }
 
-  function advance(next: StudyItem | null, atFront = false) {
+  function advance(next: StudyItem | null, atFront = false, insertAt?: number) {
     const rest = (queue ?? []).slice(1)
-    if (next && atFront) {
+    if (next && insertAt !== undefined) {
+      rest.splice(Math.min(rest.length, insertAt), 0, next)
+    } else if (next && atFront) {
       // после знакомства слово отрабатывается СРАЗУ, следующим экраном
       rest.splice(0, 0, next)
     } else if (next && shouldRequeue(next.fsrs, new Date())) {
@@ -201,6 +210,7 @@ export default function Review() {
     const ok = task.format === 'type'
       ? (task.item.view.answerNum ? checkNumeric(value, task.answer) : checkTyped(value, task.answer))
       : value.trim().toLowerCase() === task.answer.toLowerCase() ? 'correct' : 'wrong'
+    answeredMs.current = Date.now() - shownAt.current
     setPicked(value)
     setVerdict(ok as 'correct' | 'typo' | 'wrong')
     setRevealed(true)
@@ -208,9 +218,23 @@ export default function Review() {
 
   async function grade(g: Grade) {
     if (!task || busy.current || finished.current) return
+    // мягкое подтверждение: Good/Easy поверх объективно неверного ответа — второй тап тем же
+    if (verdict === 'wrong' && g >= Rating.Good && needConfirm !== g) {
+      setNeedConfirm(g)
+      return
+    }
     busy.current = true
     try {
       const elapsed = Date.now() - shownAt.current
+
+      // интро — знакомство, не вспоминание: FSRS не трогаем; отработка через пару карточек
+      if (task.format === 'intro' && g !== Rating.Easy) {
+        introduced.current.add(itemKey(task.item))
+        await markIntroduced(task.item)
+        advance(task.item, false, 2)
+        return
+      }
+
       const prevState = task.item.fsrs.state
       let rated
       try {
@@ -221,6 +245,8 @@ export default function Review() {
         return
       }
 
+      creditedSec.current += Math.min(elapsed, cardTimeCap(task.item.view.kind)) / 1000
+
       const r = res.current
       r.reviews++
       if (prevState === State.New) r.newSeen++
@@ -230,15 +256,13 @@ export default function Review() {
         if (g > Rating.Again) r.passRev++
       }
 
-      // «Продолжить» на интро → немедленная отработка; «Уже знаю» (Easy) — слово уезжает по графику
-      const drillNow = task.format === 'intro' && g !== Rating.Easy
+      // причина ошибки — только для зрелых (Review) карточек: провал на learning = «ещё не выучил»
       const wrong = verdict === 'wrong' || (verdict === null && g === Rating.Again && task.format !== 'intro')
-      if (wrong) {
-        // один тап: почему ошибка? — уходит в журнал и Карту пробелов тьютора
-        pendingAdvance.current = { next: { ...task.item, fsrs: rated.card }, atFront: drillNow }
+      if (wrong && prevState === State.Review) {
+        pendingAdvance.current = { next: { ...task.item, fsrs: rated.card }, atFront: false }
         setCauseFor(rated.lineId)
       } else {
-        advance({ ...task.item, fsrs: rated.card }, drillNow)
+        advance({ ...task.item, fsrs: rated.card })
       }
     } finally {
       busy.current = false
@@ -309,7 +333,9 @@ export default function Review() {
     : task.format === 'type' ? (isNumeric ? 'Решите и введите ответ' : 'Впишите слово, подходящее в пропуск')
     : 'Вспомните слово — потом проверьте себя'
 
-  const minLeft = Math.max(0, MIN_MINUTES * 60 - baseSec - activeSec)
+  // зачётное время: база дня + закрытые карточки (с капом) + текущая карточка (с капом)
+  const currentCardSec = Math.min(Date.now() - shownAt.current, cardTimeCap(card.kind)) / 1000
+  const minLeft = Math.max(0, Math.round(MIN_MINUTES * 60 - baseSec - creditedSec.current - currentCardSec))
   const mm = String(Math.floor(minLeft / 60)).padStart(2, '0')
   const ss = String(minLeft % 60).padStart(2, '0')
 
@@ -375,6 +401,7 @@ export default function Review() {
             {!isPrep && card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
             {!isPrep && card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
             {!isPrep && card.explain && <div className="rev-explain"><Tex text={card.explain} /></div>}
+            {card.leech && <div className="leech-note">Пиявка — слово сопротивляется: тьютор переформулирует карточку</div>}
             {!isPrep && card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
           </div>
         )}
@@ -456,7 +483,9 @@ export default function Review() {
               ))}
             </div>
             <div className="hint-keys">
-              {suggested
+              {needConfirm
+                ? <span className="confirm-warn">Ответ был неверный — нажмите ещё раз для подтверждения</span>
+                : suggested
                 ? <span className="kb-only">Enter — подтвердить · 1–4 — своя оценка</span>
                 : <>Оценка решает, когда слово вернётся<span className="kb-only"> · клавиши 1–4</span></>}
             </div>

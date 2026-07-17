@@ -60,7 +60,8 @@ async function doSync(settings: Settings): Promise<SyncResult> {
       }
 
       // отчёт для тьютора — перегенерируется при каждом push-е
-      files.push({ path: `${settings.basePath}/_отчёт.md`, content: buildReport(cards, journal, new Date()) })
+      const pause = settings.pauseFrom && settings.pauseTo ? { from: settings.pauseFrom, to: settings.pauseTo } : null
+      files.push({ path: `${settings.basePath}/_отчёт.md`, content: buildReport(cards, journal, new Date(), pause) })
 
       const blobs: { path: string; sha: string }[] = []
       for (const f of files) blobs.push({ path: f.path, sha: await gh.createBlob(f.content) })

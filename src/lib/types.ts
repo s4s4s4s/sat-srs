@@ -22,8 +22,11 @@ export interface CardView {
   meaning_ru: string
   roots: string
   source: string
+  added: string         // дата добавления (для приоритета новых)
   kind: string          // vocab | error | grammar | …
   domain: string        // домен College Board (II/CS/EOI/SEC/ALG/AM/PSDA/GEO)
+  confusables: string[] // авторские «путаемые» дистракторы от тьютора — приоритетнее выборки из колоды
+  leech: string         // дата пометки пиявкой (lapses ≥ 6), пусто = не пиявка
   choices: string[]     // авторские MC-варианты (error/grammar/math); пусто = дистракторы из колоды
   answerText: string    // правильный вариант для авторских choices
   answerNum: string     // числовой ответ (math): "15", "0.8", "4/5" — ввод с клавиатуры
@@ -91,6 +94,8 @@ export interface Settings {
   newPerDay: number
   newPerLesson: number
   requestRetention: number
+  pauseFrom: string // плановая пауза (переезд): серия не рвётся и не растёт, YYYY-MM-DD
+  pauseTo: string
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -101,7 +106,9 @@ export const DEFAULT_SETTINGS: Settings = {
   basePath: 'Учёба/Карточки',
   newPerDay: 15,
   newPerLesson: 4,
-  requestRetention: 0.9
+  requestRetention: 0.9,
+  pauseFrom: '2026-07-29',
+  pauseTo: '2026-08-02'
 }
 
 export type Screen = 'home' | 'review' | 'summary' | 'add' | 'stats' | 'settings'
