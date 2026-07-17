@@ -96,7 +96,9 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-html, body { margin: 0; padding: 0; }
+/* app-shell: документ не скроллится вообще — скроллер внутри .screen,
+   iOS-бросок останавливается на границах контента, не утаскивая экран */
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 
 body {
   background: var(--bg);
@@ -118,7 +120,7 @@ body::before {
     radial-gradient(640px 480px at 110% 104%, var(--glow-b), transparent 70%);
 }
 
-#root { min-height: 100dvh; display: flex; flex-direction: column; }
+#root { height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
 
 .boot { display: grid; place-items: center; min-height: 100dvh; color: var(--text2); font-weight: 800; }
 
@@ -132,7 +134,11 @@ body::before {
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 100dvh;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* зелёная банд-шапка с волной и блёстками — Home и welcome */
@@ -141,14 +147,14 @@ body::before {
   content: '';
   position: absolute; z-index: -1;
   left: 50%; translate: -50% 0; width: 100vw;
-  top: -60px; height: calc(env(safe-area-inset-top) + 230px);
+  top: 0; height: calc(env(safe-area-inset-top) + 170px);
   background:
     var(--sparkle) repeat-x,
     linear-gradient(165deg, var(--band-a) 0%, var(--band-b) 100%);
   border-radius: 0 0 44% 44% / 0 0 40px 40px;
   box-shadow: 0 10px 30px var(--band-glow);
 }
-.screen:has(.welcome)::before { height: calc(env(safe-area-inset-top) + 290px); }
+.screen:has(.welcome)::before { height: calc(env(safe-area-inset-top) + 230px); }
 
 .appbar { display: flex; align-items: center; gap: 8px; padding: 2px 0 16px; }
 .brand { font-size: 24px; font-weight: 800; color: var(--green); letter-spacing: -0.3px; margin: 0; }
@@ -714,7 +720,7 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 /* верхняя цветная заливка экрана урока — по разделу; при вердикте уступает сцену */
 .rev-wash::before {
   content: ''; position: absolute; z-index: -1;
-  left: 50%; translate: -50% 0; top: -40px; width: 100vw; height: 220px;
+  left: 50%; translate: -50% 0; top: 0; width: 100vw; height: 180px;
   pointer-events: none; transition: opacity .3s;
 }
 .rev-wash.wash-rw::before { background: linear-gradient(180deg, color-mix(in srgb, var(--blue) 13%, transparent), transparent 85%); }
