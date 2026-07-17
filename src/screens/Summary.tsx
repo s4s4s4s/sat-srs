@@ -20,7 +20,7 @@ export default function Summary() {
         <h2 className="sum-title">{r.queueEmpty ? 'Очередь пуста!' : 'Сессия завершена'}</h2>
         <div className="sum-grid">
           <div className="due-chip chip-green"><div className="n">{r.newSeen}</div><div className="t">новых</div></div>
-          <div className="due-chip chip-blue"><div className="n">{r.reviews - r.newSeen}</div><div className="t">повторов</div></div>
+          <div className="due-chip chip-blue"><div className="n">{r.totalRev}</div><div className="t">повторов</div></div>
           {acc !== null && <div className="due-chip chip-yellow"><div className="n">{acc}%</div><div className="t">точность</div></div>}
           <div className="due-chip chip-red"><div className="n">{mm}:{String(ss).padStart(2, '0')}</div><div className="t">время</div></div>
         </div>
@@ -28,7 +28,7 @@ export default function Summary() {
           <div className="streak-flame">🔥</div>
           <div>
             <div className="streak-n">{st.days}</div>
-            <div className="streak-label">{st.todayDone ? 'день зачтён' : `ещё ${'нужно позаниматься'}`}</div>
+            <div className="streak-label">{st.todayDone ? 'день зачтён' : 'день ещё не зачтён'}</div>
           </div>
         </div>
         <button className="btn btn-green" onClick={() => setScreen('home')}>Домой</button>

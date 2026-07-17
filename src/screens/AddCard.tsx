@@ -20,8 +20,9 @@ export default function AddCard() {
     }
     let context = f.context.trim()
     if (!/_{3,}/.test(context)) {
-      // авто-пропуск: если слово есть в предложении — заменяем его
-      const re = new RegExp(f.word.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      // авто-пропуск: только целое слово (lookaround вместо \b — надёжнее для не-ASCII)
+      const esc = f.word.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const re = new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, 'iu')
       if (re.test(context)) {
         context = context.replace(re, '______')
       } else {
@@ -29,7 +30,12 @@ export default function AddCard() {
         return
       }
     }
-    await addCard({ ...f, context })
+    try {
+      await addCard({ ...f, context })
+    } catch (e: any) {
+      setErr(e?.message ?? String(e))
+      return
+    }
     if (stay) {
       setF(EMPTY)
       setOk(`«${f.word.trim()}» добавлено ✓`)

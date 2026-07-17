@@ -26,8 +26,8 @@ export default defineConfig({
         ]
       },
       workbox: {
-        // данные ходят только через api.github.com — их не кэшируем, офлайн-слой в IndexedDB
-        navigateFallbackDenylist: [/^\/api/],
+        // runtimeCaching не задаём: cross-origin fetch к api.github.com идёт мимо SW,
+        // офлайн-слой данных — IndexedDB; SW кэширует только статику приложения
         globPatterns: ['**/*.{js,css,html,png,woff2}']
       }
     })

@@ -4,18 +4,21 @@ import type { CardRec, CardView } from './types'
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
 
-/** Разбор md-файла: frontmatter (CORE_SCHEMA — даты остаются строками) + тело как есть. */
-export function parseMd(text: string): { fm: Record<string, any>; body: string } {
+/**
+ * Разбор md-файла: frontmatter (CORE_SCHEMA — даты остаются строками) + тело как есть.
+ * Битый yaml НЕ отбрасывается: body остаётся полным текстом файла и broken=1 —
+ * такую карточку нельзя оценивать/писать, иначе push уничтожит чужой frontmatter.
+ */
+export function parseMd(text: string): { fm: Record<string, any>; body: string; broken?: number } {
   const m = text.match(FM_RE)
   if (!m) return { fm: {}, body: text }
-  let fm: Record<string, any> = {}
   try {
     const parsed = yaml.load(m[1], { schema: yaml.CORE_SCHEMA })
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) fm = parsed as Record<string, any>
-  } catch {
-    // битый yaml — не падаем, файл считается карточкой без метаданных
-  }
-  return { fm, body: text.slice(m[0].length) }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return { fm: parsed as Record<string, any>, body: text.slice(m[0].length) }
+    }
+  } catch { /* fallthrough */ }
+  return { fm: {}, body: text, broken: 1 }
 }
 
 export function serializeMd(fm: Record<string, any>, body: string): string {
@@ -29,22 +32,29 @@ function toDate(v: any, fallback: Date): Date {
   return isNaN(d.getTime()) ? fallback : d
 }
 
-/** fm.fsrs (может отсутствовать/быть неполным) → полноценный ts-fsrs Card. */
+const STATE_NAMES: Record<string, number> = { new: 0, learning: 1, review: 2, relearning: 3 }
+
+/** fm.fsrs (может отсутствовать/быть неполным/битым после ручной правки) → полноценный ts-fsrs Card. */
 export function fsrsFromFm(fm: Record<string, any>): FsrsCard {
   const added = toDate(fm.added, new Date())
   const empty = createEmptyCard(added)
   const f = fm.fsrs
   if (!f || typeof f !== 'object') return empty
+  // невалидная пара stability/difficulty роняет ts-fsrs (d<1 || s<S_MIN) — обнуляем обе, FSRS переинициализирует
+  let stability = Number(f.stability)
+  let difficulty = Number(f.difficulty)
+  if (!(difficulty >= 1 && difficulty <= 10) || !(stability >= 0.001)) { stability = 0; difficulty = 0 }
+  const rawState = typeof f.state === 'string' ? (STATE_NAMES[f.state.toLowerCase()] ?? Number(f.state)) : Number(f.state)
   return {
     due: toDate(f.due, added),
-    stability: Number(f.stability) || 0,
-    difficulty: Number(f.difficulty) || 0,
+    stability,
+    difficulty,
     elapsed_days: Number(f.elapsed_days) || 0,
     scheduled_days: Number(f.scheduled_days) || 0,
     learning_steps: Number(f.learning_steps) || 0,
     reps: Number(f.reps) || 0,
     lapses: Number(f.lapses) || 0,
-    state: ([0, 1, 2, 3].includes(Number(f.state)) ? Number(f.state) : State.New) as State,
+    state: ([0, 1, 2, 3].includes(rawState) ? rawState : State.New) as State,
     last_review: f.last_review ? toDate(f.last_review, added) : undefined
   }
 }
@@ -84,7 +94,7 @@ export function cardView(rec: CardRec): CardView {
     meaning_ru: String(fm.meaning_ru ?? ''),
     roots: String(fm.roots ?? ''),
     source: String(fm.source ?? 'manual'),
-    suspended: fm.suspended === true,
+    suspended: fm.suspended === true || !!rec.broken,
     fsrs: fsrsFromFm(fm)
   }
 }

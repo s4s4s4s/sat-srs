@@ -43,9 +43,10 @@ export default function Review() {
   const [revealed, setRevealed] = useState(false)
   const [done, setDone] = useState(0)
   const [activeSec, setActiveSec] = useState(0)
-  const res = useRef<SessionResult>({ reviews: 0, newSeen: 0, again: 0, passRev: 0, totalRev: 0, durMs: 0, queueEmpty: false })
+  const res = useRef<SessionResult>({ day: dayKey(), reviews: 0, newSeen: 0, again: 0, passRev: 0, totalRev: 0, durMs: 0, queueEmpty: false })
   const shownAt = useRef(Date.now())
   const busy = useRef(false)
+  const finished = useRef(false)
 
   const card = queue[0] ?? null
   const total = done + queue.length
@@ -63,18 +64,42 @@ export default function Review() {
   }, [card?.path, done])
 
   async function finish(queueEmpty: boolean) {
+    if (finished.current) return // двойной тап ✕ / финиш после финиша не пишет дубль session-строки
+    finished.current = true
     res.current.durMs = activeSec * 1000
     res.current.queueEmpty = queueEmpty
     await finishSession(res.current)
   }
 
+  function advance(next: CardView | null) {
+    const rest = queue.slice(1)
+    if (next && shouldRequeue(next.fsrs, new Date())) {
+      rest.splice(requeuePosition(rest.length, next.fsrs, new Date()), 0, next)
+    }
+    setRevealed(false)
+    setDone(d => d + 1)
+    if (rest.length === 0) {
+      setQueue([])
+      void finish(true)
+    } else {
+      setQueue(rest)
+    }
+  }
+
   async function grade(g: Grade) {
-    if (!card || busy.current) return
+    if (!card || busy.current || finished.current) return
     busy.current = true
     try {
       const elapsed = Date.now() - shownAt.current
       const prevState = card.fsrs.state
-      const next = await rateCard(card, g, elapsed)
+      let next
+      try {
+        next = await rateCard(card, g, elapsed)
+      } catch {
+        // карточка исчезла (синк удалил/тьютор переименовал) — пропускаем, не блокируя сессию
+        advance(null)
+        return
+      }
 
       const r = res.current
       r.reviews++
@@ -85,18 +110,7 @@ export default function Review() {
         if (g > Rating.Again) r.passRev++
       }
 
-      const rest = queue.slice(1)
-      if (shouldRequeue(next, new Date())) {
-        rest.splice(requeuePosition(rest.length), 0, { ...card, fsrs: next })
-      }
-      setRevealed(false)
-      setDone(d => d + 1)
-      if (rest.length === 0) {
-        setQueue([])
-        await finish(true)
-      } else {
-        setQueue(rest)
-      }
+      advance({ ...card, fsrs: next })
     } finally {
       busy.current = false
     }
@@ -135,7 +149,7 @@ export default function Review() {
   return (
     <div className="screen">
       <div className="rev-top">
-        <button className="rev-close" onClick={() => void finish(false)} aria-label="Завершить">✕</button>
+        <button className="rev-close" onClick={() => { if (!busy.current) void finish(false) }} aria-label="Завершить">✕</button>
         <div className="progress"><div style={{ width: `${total ? (done / total) * 100 : 0}%` }} /></div>
         <div className={`rev-timer${minLeft === 0 ? ' done' : ''}`}>{minLeft === 0 ? '✓' : `${mm}:${ss}`}</div>
       </div>

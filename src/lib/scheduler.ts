@@ -30,6 +30,9 @@ export function intervalLabel(f: FSRS, card: FsrsCard, rating: Grade, now: Date)
 
 const isLearning = (s: State) => s === State.Learning || s === State.Relearning
 
+/** Learning-карточки показываем чуть раньше срока (Anki learn-ahead), чтобы шаг не терялся на конце сессии/дня */
+export const LEARN_AHEAD_MS = 30 * 60000
+
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
   for (let i = a.length - 1; i > 0; i--) {
@@ -48,15 +51,16 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
   const active = cards.filter(c => !c.suspended)
 
   const learning = active
-    .filter(c => isLearning(c.fsrs.state) && c.fsrs.due.getTime() <= now.getTime())
+    .filter(c => isLearning(c.fsrs.state) && c.fsrs.due.getTime() <= now.getTime() + LEARN_AHEAD_MS)
     .sort((a, b) => a.fsrs.due.getTime() - b.fsrs.due.getTime())
 
   const review = shuffle(active.filter(c => c.fsrs.state === State.Review && c.fsrs.due.getTime() < eod.getTime()))
 
+  // выбор новых детерминированный (FIFO по slug), случайна только подача
   const fresh = active
     .filter(c => c.fsrs.state === State.New)
     .sort((a, b) => a.slug.localeCompare(b.slug))
-  const newCards = shuffle(fresh).slice(0, Math.max(0, newBudget))
+  const newCards = shuffle(fresh.slice(0, Math.max(0, newBudget)))
 
   // interleaving: новые распределяем равномерно среди review, не пачкой в конце
   const mixed: CardView[] = [...review]
@@ -68,11 +72,13 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
 }
 
 /**
- * Возврат карточки в очередь после оценки: если следующий показ скоро (learning-шаг),
- * вставляем через несколько карточек, чтобы она вернулась в этой же сессии.
+ * Возврат карточки в очередь после оценки: позиция пропорциональна времени до due
+ * (~20 c на карточку), иначе 10-минутный learning-шаг схлопнулся бы в ~30 секунд
+ * и слово «выучивалось» бы из рабочей памяти, минуя запланированный интервал.
  */
-export function requeuePosition(queueLen: number): number {
-  return Math.min(queueLen, 3)
+export function requeuePosition(queueLen: number, next: FsrsCard, now: Date): number {
+  const waitMs = next.due.getTime() - now.getTime()
+  return Math.min(queueLen, Math.max(3, Math.ceil(waitMs / 20000)))
 }
 
 export function shouldRequeue(next: FsrsCard, now: Date): boolean {
@@ -83,13 +89,13 @@ export function shouldRequeue(next: FsrsCard, now: Date): boolean {
 export function homeCounts(cards: CardView[], newBudget: number, now: Date = new Date()) {
   const eod = endOfStudyDay(now)
   const active = cards.filter(c => !c.suspended)
-  const learnDue = active.filter(c => isLearning(c.fsrs.state) && c.fsrs.due.getTime() <= now.getTime()).length
+  const learnDue = active.filter(c => isLearning(c.fsrs.state) && c.fsrs.due.getTime() <= now.getTime() + LEARN_AHEAD_MS).length
   const revDue = active.filter(c => c.fsrs.state === State.Review && c.fsrs.due.getTime() < eod.getTime()).length
   const newAvail = Math.min(active.filter(c => c.fsrs.state === State.New).length, Math.max(0, newBudget))
   const revTomorrow = active.filter(c => {
     const t = c.fsrs.due.getTime()
     return c.fsrs.state === State.Review && t >= eod.getTime() && t < eod.getTime() + 86400_000
-  }).length + active.filter(c => isLearning(c.fsrs.state) && c.fsrs.due.getTime() > now.getTime() && c.fsrs.due.getTime() < eod.getTime() + 86400_000).length
+  }).length + active.filter(c => isLearning(c.fsrs.state) && c.fsrs.due.getTime() > now.getTime() + LEARN_AHEAD_MS && c.fsrs.due.getTime() < eod.getTime() + 86400_000).length
   const byState = {
     new: active.filter(c => c.fsrs.state === State.New).length,
     learning: active.filter(c => isLearning(c.fsrs.state)).length,

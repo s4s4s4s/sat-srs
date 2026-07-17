@@ -46,6 +46,8 @@ body {
   font-size: 17px;
   line-height: 1.45;
   overscroll-behavior: none;
+  /* глушим double-tap-zoom на всей странице (iOS игнорирует maximum-scale), pinch-zoom остаётся */
+  touch-action: manipulation;
   -webkit-font-smoothing: antialiased;
 }
 

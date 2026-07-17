@@ -1,31 +1,63 @@
 import { useState } from 'react'
 import { useApp, saveSettings, setScreen, startSync } from '../lib/store'
 import { GitHubClient } from '../lib/github'
+import { DEFAULT_SETTINGS } from '../lib/types'
+
+const isIosBrowserTab = /iP(hone|ad|od)/.test(navigator.userAgent) && !window.matchMedia('(display-mode: standalone)').matches
 
 export default function SettingsScreen() {
   const app = useApp()
   const [s, setS] = useState({ ...app.settings })
+  const [newPerDayStr, setNewPerDayStr] = useState(String(app.settings.newPerDay))
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const firstRun = !app.settings.pat
 
-  const set = (k: keyof typeof s) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setS({ ...s, [k]: k === 'newPerDay' ? Number(e.target.value) : e.target.value })
+  const set = (k: 'pat' | 'owner' | 'repo' | 'branch' | 'basePath') => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setS({ ...s, [k]: e.target.value })
 
   async function connect() {
     setErr('')
     setMsg('')
-    if (!s.pat.trim()) {
+    const basePath = s.basePath.trim().replace(/\/+$/, '')
+    if (!basePath) {
+      setErr('Укажите папку карточек.')
+      return
+    }
+    const n = Number(newPerDayStr.trim())
+    if (!newPerDayStr.trim() || !Number.isFinite(n) || n < 0) {
+      setErr('«Новых в день» — число от 0 до 100.')
+      return
+    }
+    const next = {
+      ...s,
+      pat: s.pat.trim(),
+      owner: s.owner.trim(),
+      repo: s.repo.trim(),
+      branch: s.branch.trim(),
+      basePath,
+      newPerDay: Math.min(100, Math.round(n)),
+      requestRetention: s.requestRetention || DEFAULT_SETTINGS.requestRetention
+    }
+    if (!next.pat) {
       setErr('Вставьте токен.')
+      return
+    }
+    const a = app.settings
+    const connChanged = next.pat !== a.pat || next.owner !== a.owner || next.repo !== a.repo || next.branch !== a.branch
+    if (!connChanged) {
+      // локальные настройки сохраняются без сети — приложение офлайн-первое
+      saveSettings(next)
+      setScreen('home')
       return
     }
     setBusy(true)
     try {
-      const gh = new GitHubClient(s.pat.trim(), s.owner.trim(), s.repo.trim())
+      const gh = new GitHubClient(next.pat, next.owner, next.repo)
       await gh.checkRepo()
-      await gh.getHead(s.branch.trim())
-      saveSettings({ ...s, pat: s.pat.trim(), owner: s.owner.trim(), repo: s.repo.trim(), branch: s.branch.trim() })
+      await gh.getHead(next.branch)
+      saveSettings(next)
       setMsg('Подключено ✓ Загружаю карточки…')
       await startSync()
       setScreen('home')
@@ -42,6 +74,13 @@ export default function SettingsScreen() {
         {!firstRun && <button className="iconbtn" onClick={() => setScreen('home')} aria-label="Назад">←</button>}
         <h2 className="sec" style={{ margin: 0 }}>{firstRun ? 'Подключение' : 'Настройки'}</h2>
       </div>
+
+      {firstRun && isIosBrowserTab && (
+        <div className="panel settings-help" style={{ marginBottom: 14, borderColor: 'var(--yellow)' }}>
+          <b>Сначала установите приложение:</b> Поделиться → «На экран “Домой”» — и настраивайте уже из него.
+          Вкладка Safari и установленное приложение на iPhone не делят хранилище: настройка здесь не перенесётся.
+        </div>
+      )}
 
       {firstRun && (
         <div className="panel settings-help" style={{ marginBottom: 14 }}>
@@ -77,7 +116,7 @@ export default function SettingsScreen() {
         </div>
         <div className="field">
           <label>Новых в день</label>
-          <input type="number" min={0} max={100} value={s.newPerDay} onChange={set('newPerDay')} />
+          <input inputMode="numeric" value={newPerDayStr} onChange={e => setNewPerDayStr(e.target.value)} />
         </div>
       </div>
       <div className="field">

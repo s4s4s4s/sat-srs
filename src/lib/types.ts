@@ -7,6 +7,7 @@ export interface CardRec {
   fm: Record<string, any>
   body: string          // тело файла после frontmatter — не трогаем
   dirty: number         // 1 = есть несинхронизированные изменения
+  broken?: number       // 1 = frontmatter не разобрался; карточку не трогаем и не пишем
 }
 
 /** Типизированное представление карточки для UI/планировщика. */
@@ -73,6 +74,7 @@ export const DEFAULT_SETTINGS: Settings = {
 export type Screen = 'home' | 'review' | 'summary' | 'add' | 'stats' | 'settings'
 
 export interface SessionResult {
+  day: string       // учебный день, зафиксированный на старте сессии (не в момент финиша)
   reviews: number
   newSeen: number
   again: number

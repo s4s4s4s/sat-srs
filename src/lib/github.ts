@@ -10,16 +10,22 @@ export class GitHubClient {
   constructor(private token: string, private owner: string, private repo: string) {}
 
   private async req(method: string, path: string, body?: unknown): Promise<any> {
-    const res = await fetch(`https://api.github.com/repos/${this.owner}/${this.repo}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        ...(body ? { 'Content-Type': 'application/json' } : {})
-      },
-      body: body ? JSON.stringify(body) : undefined
-    })
+    let res: Response
+    try {
+      res = await fetch(`https://api.github.com/repos/${this.owner}/${this.repo}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          ...(body ? { 'Content-Type': 'application/json' } : {})
+        },
+        body: body ? JSON.stringify(body) : undefined
+      })
+    } catch (e: any) {
+      // status 0 = сетевой отказ самого fetch; только он трактуется как «офлайн»
+      throw new GhError(0, `сеть: ${e?.message ?? e}`)
+    }
     if (!res.ok) {
       let msg = res.statusText
       try { msg = (await res.json()).message ?? msg } catch { /* ignore */ }

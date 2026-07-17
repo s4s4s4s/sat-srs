@@ -2,7 +2,7 @@ import { GitHubClient, GhError, type TreeEntry } from './github'
 import { parseMd, serializeMd, mergeCard } from './yamlfm'
 import { parseNdjson, toNdjson } from './journal'
 import * as db from './db'
-import type { CardRec, JournalRec, Settings } from './types'
+import type { JournalRec, Settings } from './types'
 import { monthOfDay } from './daytime'
 
 export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'error' | 'ok'
@@ -12,6 +12,7 @@ export interface SyncResult {
   error?: string
   pulledCards?: number
   pushedFiles?: number
+  conflicts?: number // create/create-коллизии: локальная карточка сохранена под -N именем
 }
 
 const JOURNAL_DIR = '_журнал'
@@ -34,15 +35,15 @@ export function sync(settings: Settings): Promise<SyncResult> {
 async function doSync(settings: Settings): Promise<SyncResult> {
   const gh = new GitHubClient(settings.pat, settings.owner, settings.repo)
   try {
-    let { headSha, treeSha, pulled } = await pull(gh, settings)
+    let { headSha, treeSha, pulled, conflicts } = await pull(gh, settings)
 
     for (let attempt = 0; attempt < 3; attempt++) {
       const cards = await db.getAllCards()
       const journal = await db.getAllJournal()
-      const dirtyCards = cards.filter(c => c.dirty)
+      const dirtyCards = cards.filter(c => c.dirty && !c.broken)
       const unsynced = journal.filter(j => !j.synced)
       if (!dirtyCards.length && !unsynced.length) {
-        return { status: 'ok', pulledCards: pulled, pushedFiles: 0 }
+        return { status: 'ok', pulledCards: pulled, pushedFiles: 0, conflicts }
       }
 
       const files: { path: string; content: string }[] = dirtyCards.map(c => ({
@@ -73,36 +74,47 @@ async function doSync(settings: Settings): Promise<SyncResult> {
           const again = await pull(gh, settings)
           headSha = again.headSha
           treeSha = again.treeSha
+          conflicts += again.conflicts
           continue
         }
         throw e
       }
 
-      // успех: фиксируем чистое состояние
+      // успех: dirty снимается только с неизменившихся записей (оценка во время push-а не теряется)
       const shaByPath = new Map(blobs.map(b => [b.path, b.sha]))
-      await db.putCards(dirtyCards.map(c => ({ ...c, dirty: 0, sha: shaByPath.get(c.path) ?? c.sha })))
+      const contentByPath = new Map(files.map(f => [f.path, f.content]))
+      await db.confirmPushed(
+        dirtyCards.map(c => ({ path: c.path, sha: shaByPath.get(c.path)!, content: contentByPath.get(c.path)! })),
+        rec => serializeMd(rec.fm, rec.body)
+      )
       await db.putJournal(unsynced.map(j => ({ ...j, synced: 1 })))
+      // shas только что записанных журнальных файлов — чтобы следующий pull их не перекачивал
+      const jShas = (await db.kvGet<Record<string, string>>('journalShas')) ?? {}
+      for (const f of files) {
+        if (isJournalPath(f.path, settings.basePath)) jShas[f.path] = shaByPath.get(f.path)!
+      }
+      await db.kvSet('journalShas', jShas)
       await db.kvSet('lastRemoteCommit', commitSha)
       await db.kvSet('lastSyncAt', Date.now())
-      return { status: 'ok', pulledCards: pulled, pushedFiles: files.length }
+      return { status: 'ok', pulledCards: pulled, pushedFiles: files.length, conflicts }
     }
     return { status: 'error', error: 'Не удалось записать: ветка убегает (3 попытки). Попробуйте ещё раз.' }
   } catch (e: any) {
-    if (e instanceof TypeError) {
+    if (e instanceof GhError && e.status === 0) {
       return { status: 'offline', error: 'Нет сети — изменения сохранены локально и уедут при следующей синхронизации.' }
     }
     return { status: 'error', error: e?.message ?? String(e) }
   }
 }
 
-async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: string; treeSha: string; pulled: number }> {
+async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: string; treeSha: string; pulled: number; conflicts: number }> {
   const headSha = await gh.getHead(settings.branch)
   const { treeSha } = await gh.getCommit(headSha)
   const { entries, truncated } = await gh.getTreeRecursive(treeSha)
   if (truncated) throw new Error('Дерево репозитория обрезано GitHub API — слишком большой repo')
 
   const local = await db.getAllCards()
-  const byPath = new Map(local.map(c => [c.path, c]))
+  const shaByPath = new Map(local.map(c => [c.path, c.sha]))
   const remoteCards = new Map<string, TreeEntry>()
   const remoteJournals: TreeEntry[] = []
   for (const e of entries) {
@@ -111,28 +123,15 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
     else if (isJournalPath(e.path, settings.basePath)) remoteJournals.push(e)
   }
 
-  let pulled = 0
-  const toPut: CardRec[] = []
+  // сетевые запросы — ДО транзакции; снапшот используется только для sha-skip
+  const fetched: db.FetchedCard[] = []
   for (const [path, entry] of remoteCards) {
-    const loc = byPath.get(path)
-    if (loc && loc.sha === entry.sha) continue
+    if (shaByPath.get(path) === entry.sha) continue
     const text = await gh.getBlobText(entry.sha)
     const remote = parseMd(text)
-    if (loc?.dirty) {
-      // конфликт: база — удалённый файл, наш вклад — fsrs/my_sentence; остаётся dirty и уедет в push
-      const merged = mergeCard(remote, loc)
-      toPut.push({ path, sha: entry.sha, fm: merged.fm, body: merged.body, dirty: 1 })
-    } else {
-      toPut.push({ path, sha: entry.sha, fm: remote.fm, body: remote.body, dirty: 0 })
-    }
-    pulled++
+    fetched.push({ path, sha: entry.sha, fm: remote.fm, body: remote.body, broken: remote.broken })
   }
-  await db.putCards(toPut)
-
-  // удалённые в repo карточки убираем локально (кроме несинхронизированных новых)
-  for (const [path, loc] of byPath) {
-    if (!remoteCards.has(path) && !loc.dirty) await db.deleteCard(path)
-  }
+  const conflicts = await db.applyPull(fetched, new Set(remoteCards.keys()), mergeCard)
 
   // журнал: объединение по id
   const knownJournal = await db.getAllJournal()
@@ -149,5 +148,5 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
   await db.kvSet('journalShas', newShas)
   await db.kvSet('lastRemoteCommit', headSha)
   await db.kvSet('lastSyncAt', Date.now())
-  return { headSha, treeSha, pulled }
+  return { headSha, treeSha, pulled: fetched.length, conflicts }
 }

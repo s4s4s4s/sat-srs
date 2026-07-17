@@ -69,15 +69,25 @@ export function setScreen(s: Screen) {
 }
 
 export async function init() {
-  state.cards = await db.getAllCards()
-  state.journal = await db.getAllJournal()
-  state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? null
+  // без persist iOS может выселить IndexedDB — вместе с несинхронизированными ревью
+  if (navigator.storage?.persist) void navigator.storage.persist().catch(() => {})
+  try {
+    state.cards = await db.getAllCards()
+    state.journal = await db.getAllJournal()
+    state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? null
+  } catch (e: any) {
+    // локальная база не открылась (бывает на холодном старте WebKit) — не виснем на «Загрузка…»
+    state.syncStatus = 'error'
+    state.syncError = `Локальная база недоступна: ${e?.message ?? e}`
+  }
   state.ready = true
   if (!state.settings.pat) state.screen = 'settings'
   emit()
   if (state.settings.pat) void startSync()
 
-  window.addEventListener('online', () => void startSync())
+  window.addEventListener('online', () => {
+    if (state.settings.pat && state.screen !== 'review') void startSync()
+  })
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && state.settings.pat) {
       const stale = !state.lastSyncAt || Date.now() - state.lastSyncAt > 5 * 60000
@@ -95,7 +105,7 @@ export async function startSync(): Promise<void> {
   state.journal = await db.getAllJournal()
   state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? state.lastSyncAt
   state.syncStatus = res.status
-  state.syncError = res.error ?? ''
+  state.syncError = res.error ?? (res.conflicts ? `Конфликт имён с тьютором: ваша карточка сохранена с суффиксом -2 (${res.conflicts})` : '')
   emit()
 }
 
@@ -106,16 +116,13 @@ export function views(): CardView[] {
 /** Оценка карточки: FSRS → запись в файл (dirty) → строка журнала. Возвращает новое fsrs-состояние. */
 export async function rateCard(view: CardView, grade: Grade, elapsedMs: number): Promise<FsrsCard> {
   const rec = state.cards.find(c => c.path === view.path)
-  if (!rec) throw new Error(`Карточка не найдена: ${view.path}`)
+  if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${view.path}`)
   const f = makeScheduler(state.settings.requestRetention)
   const now = new Date()
   const prev = fsrsFromFm(rec.fm)
   const { card: next } = f.next(prev, now, grade)
 
-  const updated: CardRec = { ...rec, fm: { ...rec.fm, fsrs: fsrsToFm(next) }, dirty: 1 }
-  await db.putCard(updated)
-  state.cards = state.cards.map(c => (c.path === rec.path ? updated : c))
-
+  // строка журнала строится ДО записи карточки: любой сбой здесь не рассинхронизирует БД и UI
   const line: JournalRec = {
     id: newId(),
     type: 'review',
@@ -130,6 +137,10 @@ export async function rateCard(view: CardView, grade: Grade, elapsedMs: number):
     elapsed_ms: elapsedMs,
     synced: 0
   }
+
+  const updated: CardRec = { ...rec, fm: { ...rec.fm, fsrs: fsrsToFm(next) }, dirty: 1 }
+  await db.putCard(updated)
+  state.cards = state.cards.map(c => (c.path === rec.path ? updated : c))
   await db.putJournal([line])
   state.journal = [...state.journal, line]
   emit()
@@ -142,7 +153,8 @@ export async function finishSession(r: SessionResult) {
     id: newId(),
     type: 'session',
     ts: isoLocal(now),
-    day: dayKey(now),
+    // день из старта сессии: финиш в 04:10 не должен уносить queue_empty на следующий учебный день
+    day: r.day || dayKey(now),
     dur_ms: r.durMs,
     reviews: r.reviews,
     new_seen: r.newSeen,
@@ -164,6 +176,9 @@ function slugify(word: string): string {
 
 export async function addCard(fields: { word: string; pos: string; context: string; meaning_ru: string; meaning_en: string; roots: string }): Promise<string> {
   const now = new Date()
+  const wordNorm = fields.word.trim().toLowerCase()
+  const dup = state.cards.find(c => !c.broken && String(c.fm.word ?? '').trim().toLowerCase() === wordNorm)
+  if (dup) throw new Error(`«${fields.word.trim()}» уже есть в колоде (${dup.path.split('/').pop()})`)
   let slug = slugify(fields.word)
   const taken = new Set(state.cards.map(c => c.path))
   let path = `${state.settings.basePath}/${slug}.md`

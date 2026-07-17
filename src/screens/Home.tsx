@@ -16,6 +16,7 @@ export default function Home() {
     app.syncStatus === 'syncing' ? 'Синхронизация…'
     : app.syncStatus === 'offline' ? 'Офлайн — изменения сохранены локально'
     : app.syncStatus === 'error' ? `Ошибка синхронизации: ${app.syncError}`
+    : app.syncError ? app.syncError
     : app.lastSyncAt ? `Синхронизировано ${new Date(app.lastSyncAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}`
     : ''
 
