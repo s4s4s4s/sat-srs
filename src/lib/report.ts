@@ -165,6 +165,20 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   out.push(`- Нужны confusables (review-слова без авторских дистракторов): ${active.filter(v => v.kind === 'vocab' && v.fsrs.state === State.Review && !v.confusables.length).slice(0, 20).map(v => v.word).join(', ') || '—'}`)
   out.push('')
 
+  // линтер карточек: битые файлы ПОИМЁННО + структурные дефекты, которые делают карточку мёртвой или нечестной
+  const brokenPaths = cards.filter(c => c.broken).map(c => c.path.split('/').pop())
+  const badAnswer = active.filter(v => v.choices.length >= 2 && (!v.answerText || !v.choices.some(ch => ch.trim().toLowerCase() === v.answerText.trim().toLowerCase())))
+  const noBlank = active.filter(v => v.kind === 'vocab' && v.context && !/_{3,}/.test(v.context))
+  const noPrepBlank = active.filter(v => v.prep && v.prepContext && !/_{3,}/.test(v.prepContext))
+  if (brokenPaths.length || badAnswer.length || noBlank.length || noPrepBlank.length) {
+    out.push('## ⚠️ Дефекты карточек — исправить тьютору', '')
+    if (brokenPaths.length) out.push(`- **Битый YAML (карточка исключена из обучения!):** ${brokenPaths.join(', ')}`)
+    if (badAnswer.length) out.push(`- **answer отсутствует или не совпадает ни с одним choices (карточка невыигрываема):** ${badAnswer.map(v => v.slug).join(', ')}`)
+    if (noBlank.length) out.push(`- Нет пропуска ______ в context: ${noBlank.map(v => v.slug).join(', ')}`)
+    if (noPrepBlank.length) out.push(`- Нет пропуска ______ в prep_context: ${noPrepBlank.map(v => v.slug).join(', ')}`)
+    out.push('')
+  }
+
   out.push('## Слова', '')
   out.push('| слово | добавлено | первый показ | сост. | стаб., дн | след. повтор | lapses | reps | prep |')
   out.push('|---|---|---|---|---|---|---|---|---|')
