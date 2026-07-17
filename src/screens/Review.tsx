@@ -63,6 +63,7 @@ function makeTask(item: StudyItem, deck: ReturnType<typeof views>): Task {
 }
 
 const FORMAT_HINT: Record<Format, { text: string; cls: string }> = {
+  intro: { text: 'Новое слово', cls: 'pill-green' },
   reveal: { text: 'Вспомни слово', cls: 'pill-blue' },
   mc: { text: 'Выбери слово', cls: 'pill-blue' },
   type: { text: 'Впиши слово', cls: 'pill-purple' },
@@ -183,6 +184,13 @@ export default function Review() {
     function onKey(e: KeyboardEvent) {
       if (!task) return
       const typing = document.activeElement === inputRef.current
+      if (task.format === 'intro') {
+        if ((e.code === 'Space' || e.code === 'Enter') && !typing) {
+          e.preventDefault()
+          void grade(Rating.Good)
+        }
+        return
+      }
       if (e.code === 'Enter' && typing && !revealed) {
         e.preventDefault()
         submitObjective(typed)
@@ -212,14 +220,13 @@ export default function Review() {
 
   const card = task.item.view
   const isPrep = task.format === 'prep'
-  const isNew = task.item.fsrs.state === State.New
+  const isIntro = task.format === 'intro'
   const sentence = isPrep ? card.prepContext : card.context
   const answerWord = isPrep ? card.prep : card.word
   const taskHint =
     task.format === 'mc' ? 'Какое слово подходит в пропуск?'
     : task.format === 'prep' ? 'Какой предлог здесь правильный?'
     : task.format === 'type' ? 'Впишите слово, подходящее в пропуск'
-    : isNew ? 'Попробуйте угадать по контексту — потом откройте слово'
     : 'Вспомните слово — потом проверьте себя'
 
   const minLeft = Math.max(0, 15 * 60 - activeSec)
@@ -235,14 +242,30 @@ export default function Review() {
       </div>
 
       <div className="rev-body">
-        <span className={`pill ${task.item.fsrs.state === State.New ? 'pill-green' : FORMAT_HINT[task.format].cls}`}>
-          {task.item.fsrs.state === State.New ? 'Новое слово' : FORMAT_HINT[task.format].text}
+        {isIntro ? (
+          <>
+            <span className="pill pill-green">Новое слово</span>
+            <div className="intro">
+              <div className="intro-word">{card.word}<span className="pos">{card.pos}</span></div>
+              {card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
+              {card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
+              {card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
+              <div className="intro-label">Пример использования</div>
+              <Sentence context={card.context} word={card.word} revealed />
+            </div>
+          </>
+        ) : (
+          <>
+        <span className={`pill ${FORMAT_HINT[task.format].cls}`}>
+          {FORMAT_HINT[task.format].text}
           {isPrep && <> · {card.word}</>}
         </span>
         <Sentence context={sentence} word={answerWord} revealed={revealed} />
         {!revealed && <div className="rev-task">{taskHint}</div>}
+          </>
+        )}
 
-        {revealed && (
+        {!isIntro && revealed && (
           <div className="rev-answer">
             {verdict && (
               <div className={`verdict verdict-${verdict}`}>
@@ -258,10 +281,15 @@ export default function Review() {
       </div>
 
       <div className={`rev-bottom${revealed && verdict ? (verdict === 'wrong' ? ' is-wrong' : ' is-right') : ''}`}>
-        {!revealed ? (
+        {isIntro ? (
+          <>
+            <button className="btn btn-green btn-lg" onClick={() => void grade(Rating.Good)}>Продолжить</button>
+            <button className="intro-know" onClick={() => void grade(Rating.Easy)}>Уже знаю это слово</button>
+          </>
+        ) : !revealed ? (
           task.format === 'reveal' ? (
             <>
-              <button className="btn btn-green" onClick={() => setRevealed(true)}>{isNew ? 'Показать слово' : 'Показать ответ'}</button>
+              <button className="btn btn-green" onClick={() => setRevealed(true)}>Показать ответ</button>
               <div className="hint-keys">Space — показать</div>
             </>
           ) : task.format === 'type' ? (

@@ -32,8 +32,8 @@ export interface CardView {
 /** Навык — отдельное знание со своим FSRS-графиком */
 export type Skill = 'recall' | 'prep'
 
-/** Формат упражнения (как именно спрашиваем) */
-export type Format = 'reveal' | 'mc' | 'type' | 'prep'
+/** Формат упражнения: intro — знакомство с новым словом (показ без викторины) */
+export type Format = 'intro' | 'reveal' | 'mc' | 'type' | 'prep'
 
 /** Единица очереди: (карточка × навык) */
 export interface StudyItem {

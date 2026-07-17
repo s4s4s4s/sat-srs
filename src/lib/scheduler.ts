@@ -114,12 +114,14 @@ export function shouldRequeue(next: FsrsCard, now: Date): boolean {
 /**
  * Формат упражнения:
  * - prep-навык → всегда prep (выбор предлога);
- * - recall в New/Learning/Relearning → reveal (слово сначала выучивается с показом);
+ * - recall в New → intro (знакомство: слово+значения+пример, без викторины);
+ * - recall в Learning/Relearning → reveal (retrieval уже возможен — слово показывали);
  * - recall в Review → чередование по reps: MC (формат Words in Context цифрового SAT,
  *   дистракторы из колоды) и ввод с клавиатуры (production + написание).
  */
 export function pickFormat(item: StudyItem, deck: CardView[]): Format {
   if (item.skill === 'prep') return 'prep'
+  if (item.fsrs.state === State.New) return 'intro'
   if (item.fsrs.state !== State.Review) return 'reveal'
   const wantMc = item.fsrs.reps % 2 === 0
   if (wantMc && mcDistractors(item.view, deck).length >= 3) return 'mc'

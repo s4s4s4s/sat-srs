@@ -311,6 +311,31 @@ body::before {
 
 .rev-task { font-size: 14px; font-weight: 700; color: var(--text2); padding-left: 4px; }
 
+/* ── Интро нового слова: каскадное появление ────────────────────── */
+.intro { display: flex; flex-direction: column; gap: 6px; }
+.intro-word {
+  font-size: 40px; font-weight: 800; color: var(--text-strong); line-height: 1.15;
+  animation: word-in .5s cubic-bezier(.34, 1.56, .64, 1) backwards;
+}
+.intro-word .pos { font-size: 16px; font-weight: 700; color: var(--text2); margin-left: 10px; }
+@keyframes word-in { from { opacity: 0; transform: translateY(14px) scale(.92); } }
+.intro .rev-meaning-en { font-size: 18px; margin-top: 2px; animation: fadein .4s ease-out .12s backwards; }
+.intro .rev-meaning-ru { font-size: 19px; margin-top: 2px; animation: fadein .4s ease-out .18s backwards; }
+.intro .rev-roots { animation: fadein .4s ease-out .24s backwards; }
+.intro-label {
+  margin-top: 16px; font-size: 12px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .8px; color: var(--text2);
+  animation: fadein .4s ease-out .3s backwards;
+}
+.intro .rev-sentence { animation: fadein .45s ease-out .38s backwards; margin-top: 2px; }
+.intro-know {
+  width: 100%; background: none; border: none; cursor: pointer;
+  font-family: var(--font); font-size: 14px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .8px; color: var(--blue-text);
+  padding: 12px; margin-top: 6px; border-radius: 12px;
+}
+.intro-know:active { background: var(--surface2); }
+
 .rev-answer { animation: fadein .18s ease-out; }
 @keyframes fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
