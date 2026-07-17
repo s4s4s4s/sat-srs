@@ -85,7 +85,9 @@ export default function Review() {
         await Promise.race([startSync(), new Promise(r => setTimeout(r, 3500))])
       }
       if (!alive) return
-      const budget = Math.max(0, app.settings.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
+      // новых за урок — не больше newPerLesson (и не больше остатка дневного лимита)
+      const dayLeft = Math.max(0, app.settings.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
+      const budget = Math.min(dayLeft, app.settings.newPerLesson || 4)
       setQueue(buildQueue(views(), budget))
     })()
     return () => { alive = false }
@@ -136,9 +138,12 @@ export default function Review() {
     await finishSession(res.current)
   }
 
-  function advance(next: StudyItem | null) {
+  function advance(next: StudyItem | null, atFront = false) {
     const rest = (queue ?? []).slice(1)
-    if (next && shouldRequeue(next.fsrs, new Date())) {
+    if (next && atFront) {
+      // после знакомства слово отрабатывается СРАЗУ, следующим экраном
+      rest.splice(0, 0, next)
+    } else if (next && shouldRequeue(next.fsrs, new Date())) {
       rest.splice(requeuePosition(rest.length, next.fsrs, new Date()), 0, next)
     }
     setDone(d => d + 1)
@@ -185,7 +190,9 @@ export default function Review() {
         if (g > Rating.Again) r.passRev++
       }
 
-      advance({ ...task.item, fsrs: next })
+      // «Продолжить» на интро → немедленная отработка; «Уже знаю» (Easy) — слово уезжает по графику
+      const drillNow = task.format === 'intro' && g !== Rating.Easy
+      advance({ ...task.item, fsrs: next }, drillNow)
     } finally {
       busy.current = false
     }

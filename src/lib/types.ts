@@ -78,6 +78,7 @@ export interface Settings {
   branch: string
   basePath: string
   newPerDay: number
+  newPerLesson: number
   requestRetention: number
 }
 
@@ -88,6 +89,7 @@ export const DEFAULT_SETTINGS: Settings = {
   branch: 'master',
   basePath: 'Учёба/Карточки',
   newPerDay: 15,
+  newPerLesson: 4,
   requestRetention: 0.9
 }
 

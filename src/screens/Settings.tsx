@@ -10,6 +10,7 @@ export default function SettingsScreen() {
   const app = useApp()
   const [s, setS] = useState({ ...app.settings })
   const [newPerDayStr, setNewPerDayStr] = useState(String(app.settings.newPerDay))
+  const [newPerLessonStr, setNewPerLessonStr] = useState(String(app.settings.newPerLesson || 4))
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -31,6 +32,11 @@ export default function SettingsScreen() {
       setErr('«Новых в день» — число от 0 до 100.')
       return
     }
+    const nl = Number(newPerLessonStr.trim())
+    if (!newPerLessonStr.trim() || !Number.isFinite(nl) || nl < 1) {
+      setErr('«Новых за урок» — число от 1 до 10.')
+      return
+    }
     const next = {
       ...s,
       pat: s.pat.trim(),
@@ -39,6 +45,7 @@ export default function SettingsScreen() {
       branch: s.branch.trim(),
       basePath,
       newPerDay: Math.min(100, Math.round(n)),
+      newPerLesson: Math.min(10, Math.round(nl)),
       requestRetention: s.requestRetention || DEFAULT_SETTINGS.requestRetention
     }
     if (!next.pat) {
@@ -124,13 +131,19 @@ export default function SettingsScreen() {
           <input value={s.branch} onChange={set('branch')} autoCapitalize="none" />
         </div>
         <div className="field">
+          <label>Папка карточек</label>
+          <input value={s.basePath} onChange={set('basePath')} />
+        </div>
+      </div>
+      <div className="row">
+        <div className="field">
           <label>Новых в день</label>
           <input inputMode="numeric" value={newPerDayStr} onChange={e => setNewPerDayStr(e.target.value)} />
         </div>
-      </div>
-      <div className="field">
-        <label>Папка карточек</label>
-        <input value={s.basePath} onChange={set('basePath')} />
+        <div className="field">
+          <label>Новых за урок</label>
+          <input inputMode="numeric" value={newPerLessonStr} onChange={e => setNewPerLessonStr(e.target.value)} />
+        </div>
       </div>
 
       {err && <div className="form-error">{err}</div>}
