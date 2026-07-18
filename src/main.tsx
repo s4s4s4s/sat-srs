@@ -10,7 +10,10 @@ import { init } from './lib/store'
 const vv = window.visualViewport
 if (vv) {
   const setKb = () => {
-    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+    // innerHeight на iOS не меняется при открытии клавиатуры, vv.height — уменьшается:
+    // разница = вся занятая область (клавиатура + панель-тулбар). +8px зазор.
+    const occ = window.innerHeight - vv.height
+    const kb = occ > 60 ? occ + 8 : 0
     document.documentElement.style.setProperty('--kb', `${kb}px`)
   }
   vv.addEventListener('resize', setKb)
