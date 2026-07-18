@@ -1,124 +1,138 @@
+import { useId } from 'react'
 import type { ReactElement } from 'react'
 
 /**
- * Огонёк-викинг — маскот приложения. Чистый SVG+CSS.
- * mood: idle | happy | sad | party | think
- * На размерах < 56px включается mini-вариант: без микродеталей (заклёпки, руна,
- * тень), толще штрихи — силуэт и лицо читаются даже в 34px.
+ * Огонёк-викинг v3 — маскот. Чистый SVG+CSS, viewBox 0 0 120 150.
+ * Три слоя огня (боковые языки + внутреннее пламя + горячее ядро), кованый шлем,
+ * тело «дышит», глаза с двойным бликом. 5 настроений: idle/happy/sad/party/think.
+ * mini (<56px): без микродеталей — читается в 34px.
  */
 
 export type BuddyMood = 'idle' | 'happy' | 'sad' | 'party' | 'think'
 
-function mouth(mood: BuddyMood, mini: boolean): ReactElement {
-  const w = mini ? 5 : 3.5
+function mouth(mood: BuddyMood): ReactElement {
   switch (mood) {
     case 'happy':
-      return <path d="M50 104 Q60 114 70 104" stroke="#7a3d00" strokeWidth={mini ? 5.5 : 4} strokeLinecap="round" fill="none" />
+      return <path d="M49 103 Q60 115 71 103" stroke="#4a2400" strokeWidth="4" strokeLinecap="round" fill="none" />
     case 'sad':
-      return <path d="M51 110 Q60 102 69 110" stroke="#7a3d00" strokeWidth={w} strokeLinecap="round" fill="none" />
+      return <path d="M51 111 Q60 104 69 111" stroke="#4a2400" strokeWidth="3.5" strokeLinecap="round" fill="none" />
     case 'party':
-      return <ellipse cx="60" cy="107" rx={mini ? 9 : 8} ry={mini ? 10 : 9} fill="#7a3d00" />
+      return <ellipse cx="60" cy="108" rx="8" ry="9" fill="#4a2400" />
     case 'think':
-      return <path d="M53 107 H67" stroke="#7a3d00" strokeWidth={w} strokeLinecap="round" fill="none" />
+      return <path d="M53 108 H67" stroke="#4a2400" strokeWidth="3.5" strokeLinecap="round" fill="none" />
     default:
-      return <path d="M52 106 Q60 111 68 106" stroke="#7a3d00" strokeWidth={w} strokeLinecap="round" fill="none" />
+      return <path d="M52 106 Q60 112 68 106" stroke="#4a2400" strokeWidth="3.5" strokeLinecap="round" fill="none" />
   }
 }
 
 export default function FlameBuddy({ size = 96, mood = 'idle' }: { size?: number; mood?: BuddyMood }) {
   const mini = size < 56
-  const eyeW = mini ? 8.5 : 7
+  const uid = useId().replace(/:/g, '')
+  const id = (n: string) => `${n}-${uid}`
+  const eyeY = mood === 'think' ? 77 : mood === 'sad' ? 85 : 80
+  const eyeH = mood === 'sad' ? 9 : 14
+  const eyeDx = mood === 'think' ? 2 : 0
+
   return (
-    <svg
-      width={size}
-      height={size * (140 / 120)}
-      viewBox="0 0 120 140"
-      className={`buddy buddy-${mood}`}
-      aria-hidden
-    >
+    <svg width={size} height={size * (150 / 120)} viewBox="0 0 120 150" className={`buddy buddy-${mood}`} aria-hidden>
       <defs>
-        <linearGradient id="bd-outer" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#ffb020" />
-          <stop offset="1" stopColor="#f07300" />
+        <linearGradient id={id('outer')} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#ffc14d" /><stop offset="1" stopColor="#ee7207" />
         </linearGradient>
-        <linearGradient id="bd-inner" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#ffe066" />
-          <stop offset="1" stopColor="#ffc800" />
+        <linearGradient id={id('inner')} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#ffe9a3" /><stop offset="1" stopColor="#ffc23d" />
         </linearGradient>
-        <linearGradient id="bd-helm" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#9aa8b6" />
-          <stop offset="1" stopColor="#5c6b78" />
+        <linearGradient id={id('core')} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#fff8dc" /><stop offset="1" stopColor="#ffd76b" />
         </linearGradient>
-        <linearGradient id="bd-horn" x1="0" y1="1" x2="0" y2="0">
-          <stop offset="0" stopColor="#cbbc9d" />
-          <stop offset="1" stopColor="#f4edda" />
+        <linearGradient id={id('helm')} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#b6c4d2" /><stop offset="1" stopColor="#4e5f70" />
+        </linearGradient>
+        <linearGradient id={id('horn')} x1="0" y1="1" x2="0" y2="0">
+          <stop offset="0" stopColor="#d8ccb0" /><stop offset="1" stopColor="#f2ead6" />
         </linearGradient>
       </defs>
-      {/* тень-подложка (только в крупном) */}
-      {!mini && <ellipse cx="60" cy="132" rx="30" ry="6" fill="currentColor" opacity=".12" />}
-      {/* тело-пламя */}
-      <path
-        d="M60 6C60 6 22 47 22 84C22 111 39 130 60 130C81 130 98 111 98 84C98 47 60 6 60 6Z"
-        fill="url(#bd-outer)"
-      />
-      {/* внутреннее пламя-лицо (живёт своей жизнью — лижет воздух) */}
-      <path
-        className="bd-inner-flame"
-        d="M60 52C60 52 38 74 38 95C38 111 48 122 60 122C72 122 82 111 82 95C82 74 60 52 60 52Z"
-        fill="url(#bd-inner)"
-      />
-      {/* викингский шлем */}
-      <g className="buddy-helm">
-        <path d="M34 66 C24 62 18 52 20 42 C28 46 34 54 36 62 Z" fill="url(#bd-horn)" stroke="#a3936f" strokeWidth={mini ? 2.5 : 2} />
-        <path d="M86 66 C96 62 102 52 100 42 C92 46 86 54 84 62 Z" fill="url(#bd-horn)" stroke="#a3936f" strokeWidth={mini ? 2.5 : 2} />
-        <path d="M36 72 C36 56 46 46 60 46 C74 46 84 56 84 72 Z" fill="url(#bd-helm)" />
-        <rect x="33" y={mini ? 66 : 69} width="54" height={mini ? 6 : 8} rx="3.5" fill="#4a5763" />
-        {!mini && (
+
+      {!mini && <ellipse cx="60" cy="140" rx="30" ry="6" fill="#000" opacity=".14" />}
+
+      <g className="bd-body">
+        {/* боковые языки пламени */}
+        {!mini && mood !== 'sad' && (
           <>
-            <circle cx="42" cy="73" r="1.6" fill="#9aa8b6" />
-            <circle cx="60" cy="73" r="1.6" fill="#9aa8b6" />
-            <circle cx="78" cy="73" r="1.6" fill="#9aa8b6" />
-            <path d="M60 52 V66 M60 55 L66 59 M60 61 L66 65" stroke="#d9dfe6" strokeWidth="2.2" strokeLinecap="round" fill="none" opacity=".85" />
+            <path className="bd-tongueL" d="M31 50 C24 58 19 69 22 80 C26 71 32 62 36 55 Z" fill={`url(#${id('outer')})`} />
+            <path className="bd-tongueR" d="M89 46 C96 54 101 66 98 77 C94 68 88 59 84 52 Z" fill={`url(#${id('outer')})`} />
           </>
         )}
+        {/* тело */}
+        <path
+          d="M60 8 C49 25 28 46 27 80 C26 108 42 130 60 130 C78 130 94 108 93 80 C92 55 76 42 71 26 C69 36 63 40 62 31 C61 22 60.5 14 60 8 Z"
+          fill={`url(#${id('outer')})`}
+        />
+        {/* внутреннее пламя */}
+        <path
+          className="bd-inner-flame"
+          d="M60 56 C50 68 41 81 41 97 C41 112 50 123 60 123 C70 123 79 112 79 97 C79 85 69 73 66 62 C65 68 61 70 60 64 Z"
+          fill={`url(#${id('inner')})`}
+        />
+        {/* горячее ядро */}
+        {!mini && mood !== 'sad' && (
+          <path
+            className="bd-core"
+            d="M60 88 C54 95 50 101 50 108 C50 116 54 121 60 121 C66 121 70 116 70 108 C70 101 66 95 60 88 Z"
+            fill={`url(#${id('core')})`}
+          />
+        )}
       </g>
+
+      {/* шлем */}
+      <g className="buddy-helm">
+        <path d="M35 60 C24 57 16 46 18 33 C27 38 33 48 36 56 Z" fill={`url(#${id('horn')})`} stroke="#8d7f5c" strokeWidth="1.4" />
+        <path d="M85 60 C96 57 104 46 102 33 C93 38 87 48 84 56 Z" fill={`url(#${id('horn')})`} stroke="#8d7f5c" strokeWidth="1.4" />
+        {!mini && <><circle cx="19" cy="35" r="2.4" fill="#e6c268" /><circle cx="101" cy="35" r="2.4" fill="#e6c268" /></>}
+        <path d="M34 71 C34 53 45 43 60 43 C75 43 86 53 86 71 Z" fill={`url(#${id('helm')})`} />
+        {!mini && <path d="M41 55 C47 47 53 44 60 44" stroke="rgba(255,255,255,.4)" strokeWidth="2" strokeLinecap="round" fill="none" />}
+        {!mini && <path d="M60 49 V62 M60 49 L54.5 55.5 M60 49 L65.5 55.5" stroke="#e6c268" strokeWidth="2" strokeLinecap="round" fill="none" />}
+        <rect x="33" y="67" width="54" height="7" rx="3.5" fill="#3c4a56" />
+        {!mini && <><circle cx="42" cy="70.5" r="1.4" fill="#9fb0bf" /><circle cx="60" cy="70.5" r="1.4" fill="#9fb0bf" /><circle cx="78" cy="70.5" r="1.4" fill="#9fb0bf" /></>}
+        <rect x="57.5" y="69" width="5" height="12" rx="2.5" fill="#465563" />
+      </g>
+
       {/* щёчки */}
       {(mood === 'happy' || mood === 'party') && (
         <>
-          <circle cx="44" cy="99" r="4.5" fill="#ff8a65" opacity=".55" />
-          <circle cx="76" cy="99" r="4.5" fill="#ff8a65" opacity=".55" />
+          <circle cx="42" cy="100" r="5" fill="#ff8a5c" opacity=".45" />
+          <circle cx="78" cy="100" r="5" fill="#ff8a5c" opacity=".45" />
         </>
       )}
+
+      {/* брови для sad/think */}
+      {mood === 'sad' && <path d="M44 78 L55 81 M76 78 L65 81" stroke="#4a2400" strokeWidth="3" strokeLinecap="round" fill="none" />}
+      {mood === 'think' && !mini && <path d="M63 73 Q70 70 77 73" stroke="#4a2400" strokeWidth="3" strokeLinecap="round" fill="none" />}
+
       {/* глаза */}
       <g className="buddy-eyes">
-        {mood === 'sad' ? (
-          <>
-            {/* полуприкрытые веки + брови «домиком» — честная грусть, не «зажмурился от счастья» */}
-            <rect x={60 - 13 - eyeW / 2} y="84" width={eyeW} height="8" rx="3.5" fill="#7a3d00" />
-            <rect x={60 + 13 - eyeW / 2} y="84" width={eyeW} height="8" rx="3.5" fill="#7a3d00" />
-            {!mini && <path d="M45 78 L56 81 M75 78 L64 81" stroke="#7a3d00" strokeWidth="3" strokeLinecap="round" fill="none" />}
-          </>
-        ) : mood === 'think' ? (
-          <>
-            <rect x={60 - 13 - eyeW / 2} y="79" width={eyeW} height="12" rx="3.5" fill="#7a3d00" />
-            <rect x={60 + 13 - eyeW / 2} y="79" width={eyeW} height="12" rx="3.5" fill="#7a3d00" />
-            {!mini && <path d="M63 74 Q69 71 75 74" stroke="#7a3d00" strokeWidth="3" strokeLinecap="round" fill="none" />}
-          </>
-        ) : (
-          <>
-            <rect x={60 - 13 - eyeW / 2} y="80" width={eyeW} height="13" rx="3.5" fill="#7a3d00" />
-            <rect x={60 + 13 - eyeW / 2} y="80" width={eyeW} height="13" rx="3.5" fill="#7a3d00" />
-          </>
-        )}
-        {/* блики — контакт взгляда */}
+        <rect x={42 + eyeDx} y={eyeY} width="8" height={eyeH} rx="4" fill="#4a2400" />
+        <rect x={70 + eyeDx} y={eyeY} width="8" height={eyeH} rx="4" fill="#4a2400" />
         {mood !== 'sad' && (
           <>
-            <circle cx="49" cy="83.5" r={mini ? 2.2 : 1.7} fill="#ffe9c9" opacity=".9" />
-            <circle cx="68" cy="83.5" r={mini ? 2.2 : 1.7} fill="#ffe9c9" opacity=".9" />
+            <circle cx={48.2 + eyeDx} cy={eyeY + 4} r="2" fill="#fff1d6" />
+            <circle cx={76.2 + eyeDx} cy={eyeY + 4} r="2" fill="#fff1d6" />
+            {!mini && <><circle cx={45.5 + eyeDx} cy={eyeY + 9} r="1" fill="#ffe0a8" opacity=".8" /><circle cx={73.5 + eyeDx} cy={eyeY + 9} r="1" fill="#ffe0a8" opacity=".8" /></>}
           </>
         )}
       </g>
-      {mouth(mood, mini)}
+
+      {mouth(mood)}
+
+      {/* золотые искры вокруг на party */}
+      {mood === 'party' && (
+        <g fill="#e6c268">
+          <rect x="14" y="40" width="6" height="6" transform="rotate(45 17 43)" opacity=".9" />
+          <rect x="98" y="52" width="5" height="5" transform="rotate(45 100 54)" opacity=".7" />
+          <rect x="24" y="96" width="5" height="5" transform="rotate(45 26 98)" opacity=".8" />
+          <rect x="94" y="100" width="6" height="6" transform="rotate(45 97 103)" opacity=".6" />
+        </g>
+      )}
     </svg>
   )
 }

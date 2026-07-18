@@ -57,50 +57,90 @@
   --fjordline: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 900 90' preserveAspectRatio='none'%3E%3Cpath d='M0 90 L0 55 L90 28 L180 60 L260 35 L340 62 L430 30 L520 58 L620 26 L720 55 L810 38 L900 60 L900 90 Z' fill='%23ffffff' fill-opacity='.06'/%3E%3Cpath d='M0 90 L0 70 L120 45 L230 72 L330 50 L450 75 L560 48 L680 74 L780 55 L900 72 L900 90 Z' fill='%23000000' fill-opacity='.20'/%3E%3Cg fill='%23000000' fill-opacity='.30'%3E%3Cpath d='M600 76 Q640 90 682 76 L674 83 Q640 92 608 83 Z'/%3E%3Crect x='639' y='50' width='2.5' height='27'/%3E%3Cpath d='M643 52 L668 66 L643 66 Z'/%3E%3Ccircle cx='614' cy='77' r='2.6'/%3E%3Ccircle cx='626' cy='79' r='2.6'/%3E%3Ccircle cx='652' cy='80' r='2.6'/%3E%3Ccircle cx='664' cy='78' r='2.6'/%3E%3C/g%3E%3C/svg%3E");
 
   --r: 12px; --r-lg: 14px; --r-xl: 18px;
+  --r-card: 18px; --r-btn: 13px; --r-pill: 99px;
   /* системный шрифт: SF Pro на iOS — взрослый, нативный, бесплатный */
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', system-ui, sans-serif;
   --shadow-card: 0 1px 2px rgba(10, 20, 30, .10), 0 10px 28px rgba(10, 20, 30, .08);
   --shadow-btn: 0 1px 2px rgba(10, 20, 30, .22), inset 0 1px 0 rgba(255, 255, 255, .16);
+
+  /* ── Семантические токены (светлые значения; тёмные — в @media dark) ── */
+  --glass: rgba(255, 255, 255, .82); --option: #ffffff;
+  --text-hi: var(--text-strong); --text-dim: var(--text2); --text-faint: #93a4ad;
+  --gold: #b8892f; --gold-hi: #d3a949; --gold-deep: #8a6420;
+  --cta-text: #fff; --cta-ghost-bg: rgba(236, 117, 8, .1); --cta-ghost-border: rgba(236, 117, 8, .4);
+  --learn: var(--orange); --due: var(--blue); --new: var(--green);
+  --again: var(--red); --again-fill-a: var(--red); --again-fill-b: var(--red-sh);
+  --hard: var(--yellow); --good: var(--green); --good-fill-a: var(--green); --good-fill-b: var(--green-sh); --easy: var(--blue);
+  --sheet-ok-a: var(--green-soft); --sheet-ok-b: var(--green-soft); --sheet-ok-border: var(--green-line);
+  --sheet-fail-a: var(--red-soft); --sheet-fail-b: var(--red-soft); --sheet-fail-border: var(--red-line);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #131f24;
-    --surface: #202f36;
-    --surface2: #18262d;
-    --line: #37464f;
-    --line-strong: #42545f;
-    --shadow: #0d1519;
+    /* поверхности — глубокий уголь */
+    --bg: #0d1418;
+    --surface: #121c22;
+    --surface2: #0f1a20;
+    --glass: rgba(17, 27, 35, .88);
+    --option: #131f27;
+    --line: rgba(255, 255, 255, .07);
+    --line-strong: rgba(255, 255, 255, .13);
+    --shadow: #060b0e;
 
+    /* текст */
+    --text-hi: #f2f6f8;
     --text: #dce6ec;
-    --text-strong: #f1f7fb;
-    --text2: #8fa6b2;
+    --text-strong: #f2f6f8;
+    --text2: #77909d;
+    --text-dim: #77909d;
+    --text-faint: #5d7280;
 
-    --green: #46a65f;  --green-sh: #3a8a4f;  --green-soft: #1c3324;  --green-line: #2d5238;  --green-text: #7fc795;
-    --blue: #4a94d6;   --blue-sh: #3c7ab3;   --blue-soft: #16293b;   --blue-line: #24486a;   --blue-text: #7ab5e8;
-    --red: #d95757;    --red-sh: #b74444;    --red-soft: #3a2020;    --red-line: #5c2f2f;    --red-text: #e88585;
-    --yellow: #cfa040; --yellow-sh: #ad8430; --yellow-soft: #33290f; --yellow-line: #55431c; --amber-text: #d9b569;
-    --orange: #f28a1c; --streak-ink: #ffb054;
-    --purple: #9d7fd4; --purple-sh: #8266b3; --purple-soft: #292038; --purple-line: #443463; --purple-text: #b9a3e3;
-    --cta-a: #ffa02b; --cta-b: #ec7508; --cta-sh: #a04e04;
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, .35), 0 12px 32px rgba(0, 0, 0, .30);
-    --shadow-btn: 0 1px 2px rgba(0, 0, 0, .40), inset 0 1px 0 rgba(255, 255, 255, .10);
+    /* рунное золото — декор / прогресс / серия */
+    --gold: #e6c268; --gold-hi: #f2d68f; --gold-deep: #b8892f;
+    --rune-gold: #e6c268;
+    --gold-soft: rgba(230, 194, 104, .12); --gold-line: rgba(230, 194, 104, .4); --gold-text: #e6c268;
 
-    --band-a: #274b60; /* фьорд: стальная синева в глубину */
-    --band-b: #132b3a;
-    --rune-gold: #e0b055;
-    --gold-soft: #3a2f14; --gold-line: #6e5527; --gold-text: #e0b055;
-    --band-glow: rgba(19, 43, 58, .55);
-    --ember-glow: rgba(255, 176, 32, .40);
+    /* пламя — ТОЛЬКО действие (CTA, активная серия) */
+    --cta-a: #ff9d2e; --cta-b: #e8690a; --cta-sh: #b8500a; --cta-text: #fff;
+    --cta-ghost-bg: rgba(255, 157, 46, .12); --cta-ghost-border: rgba(242, 169, 59, .4);
+
+    /* статусы очереди */
+    --learn: #f2a04c; --due: #7ab5d8; --new: #86c79b;
+
+    /* оценки */
+    --again: #e2988a; --again-fill-a: #c96a57; --again-fill-b: #ad5041;
+    --hard: #d9b569;
+    --good: #86c79b; --good-fill-a: #57a873; --good-fill-b: #3f8a5b;
+    --easy: #7ab5d8;
+
+    /* вердикт-sheet */
+    --sheet-ok-a: rgba(64, 150, 96, .13); --sheet-ok-b: rgba(64, 150, 96, .07); --sheet-ok-border: rgba(134, 199, 155, .3);
+    --sheet-fail-a: rgba(217, 122, 106, .14); --sheet-fail-b: rgba(217, 122, 106, .07); --sheet-fail-border: rgba(217, 122, 106, .35);
+
+    /* семейства (совместимость со старыми консюмерами), приглушённые */
+    --green: #57a873;  --green-sh: #3f8a5b;  --green-soft: rgba(87, 168, 115, .14);  --green-line: rgba(134, 199, 155, .3);  --green-text: #86c79b;
+    --blue: #5a97c4;   --blue-sh: #457ba6;   --blue-soft: rgba(122, 181, 216, .13);  --blue-line: rgba(122, 181, 216, .3);   --blue-text: #9bc9e6;
+    --red: #cf6a5a;    --red-sh: #ad5041;    --red-soft: rgba(217, 122, 106, .14);   --red-line: rgba(217, 122, 106, .35);   --red-text: #e2988a;
+    --yellow: #cfa040; --yellow-sh: #ad8430; --yellow-soft: rgba(230, 194, 104, .12); --yellow-line: rgba(230, 194, 104, .3); --amber-text: #d9b569;
+    --orange: #f2a04c; --streak-ink: #f2a04c;
+    --purple: #9d7fd4; --purple-sh: #8266b3; --purple-soft: rgba(157, 127, 212, .14); --purple-line: rgba(157, 127, 212, .32); --purple-text: #bda6e6;
+
+    /* фьорд-шапка */
+    --band-a: #16374a; --band-b: #0c2030;
+    --band-ink: #ffffff;
+    --band-glow: rgba(9, 20, 28, .55);
+    --ember-glow: rgba(255, 160, 40, .40);
     --band-chip: rgba(0, 0, 0, .32);
     --band-btn: rgba(255, 255, 255, .10);
 
-    --glow-a: rgba(39, 75, 96, .35);
+    --glow-a: rgba(38, 90, 120, .30);
     --glow-b: rgba(242, 138, 28, .07);
-    --ring: rgba(122, 181, 232, .35);
-    --card-float: 0 14px 30px rgba(0, 0, 0, .45);
-    --flame-off-a: #42545f;
-    --flame-off-b: #33434d;
+    --ring: rgba(122, 181, 216, .40);
+    --card-float: 0 20px 44px rgba(0, 0, 0, .5);
+    --flame-off-a: #42545f; --flame-off-b: #33434d;
+
+    --shadow-card: 0 1px 1px rgba(0, 0, 0, .40), 0 14px 34px rgba(0, 0, 0, .36);
+    --shadow-btn: 0 6px 18px rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255, 255, 255, .14);
   }
 }
 
@@ -153,13 +193,12 @@ body::before {
   -webkit-overflow-scrolling: touch;
 }
 
-/* зелёная банд-шапка с волной и блёстками — Home и welcome */
-.screen:has(> .card.hero)::before,
+/* фьорд-шапка онбординга (Home/Summary используют компонент FjordScene) */
 .screen:has(.welcome)::before {
   content: '';
   position: absolute; z-index: -1;
   left: 50%; translate: -50% 0; width: 100vw;
-  top: 0; height: calc(env(safe-area-inset-top) + 170px);
+  top: 0; height: calc(env(safe-area-inset-top) + 230px);
   background:
     var(--sparkle) repeat-x,
     var(--fjordline) bottom center / 100% 88px no-repeat,
@@ -167,15 +206,57 @@ body::before {
   border-radius: 0 0 44% 44% / 0 0 40px 40px;
   box-shadow: 0 10px 30px var(--band-glow);
 }
-.screen:has(.welcome)::before { height: calc(env(safe-area-inset-top) + 230px); }
+
+/* ── Пейзаж фьорда (компонент FjordScene) ───────────────────────── */
+.fjord {
+  position: absolute; z-index: -1; top: 0; left: 50%; transform: translateX(-50%);
+  width: 100vw; height: 300px; overflow: hidden; pointer-events: none;
+  -webkit-mask: linear-gradient(#000 82%, transparent);
+  mask: linear-gradient(#000 82%, transparent);
+}
+.fjord-tall { height: 340px; -webkit-mask: linear-gradient(#000 60%, transparent); mask: linear-gradient(#000 60%, transparent); }
+/* Home: баннер-сцена раскрывается над карточкой дня; огонёк стоит на горизонте */
+.fjord-gap { height: 130px; flex-shrink: 0; position: relative; }
+.home-buddy {
+  position: absolute; left: 50%; bottom: -6px; transform: translateX(-50%);
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, .45));
+}
+.fjord-svg { width: 100%; height: 100%; display: block; }
+.aurora {
+  position: absolute; top: 24px; left: -10%; width: 120%; height: 130px;
+  background: radial-gradient(60% 80% at 50% 50%, rgba(122, 181, 216, .30), rgba(120, 199, 150, .12) 55%, transparent 75%);
+  filter: blur(20px); opacity: .8; animation: auroraDrift 9s ease-in-out infinite alternate;
+}
+.fj-fireglow { animation: fireflick 1.9s ease-in-out infinite alternate; transform-origin: 70px 250px; }
+@keyframes fireflick { 0% { opacity: .8; } 100% { opacity: 1; transform: scale(1.08); } }
+.ember {
+  position: absolute; bottom: 96px; left: 68px; width: 3px; height: 3px; border-radius: 50%;
+  background: #ffbe57; box-shadow: 0 0 5px 1px rgba(255, 150, 40, .7); opacity: 0;
+}
+.ember.e1 { animation: ember 3.2s ease-in 0s infinite; }
+.ember.e2 { animation: ember 3.8s ease-in .9s infinite; left: 74px; }
+.ember.e3 { animation: ember 3.4s ease-in 1.8s infinite; left: 63px; }
+@keyframes ember {
+  0% { transform: translateY(0) scale(1); opacity: 0; }
+  14% { opacity: .85; }
+  100% { transform: translateY(-70px) scale(.5); opacity: 0; }
+}
+@keyframes auroraDrift {
+  0% { transform: translateX(-8px); opacity: .7; }
+  100% { transform: translateX(10px); opacity: 1; }
+}
+@media (prefers-color-scheme: light) { .fjord { display: none; } }
 
 .appbar { display: flex; align-items: center; gap: 8px; padding: 2px 0 16px; }
 .brand { font-size: 24px; font-weight: 800; color: var(--green); letter-spacing: -0.3px; margin: 0; }
 .appbar .spacer { flex: 1; }
 
-/* appbar на банде */
-.screen:has(> .card.hero) .brand { color: var(--band-ink); text-shadow: 0 1px 0 rgba(0, 0, 0, .15); }
-.screen:has(> .card.hero) .iconbtn { background: var(--band-btn); color: #fff; }
+/* appbar на банде — только в тёмной теме, где за ним стоит сцена фьорда */
+@media (prefers-color-scheme: dark) {
+  .screen:has(> .card.hero) .brand { color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
+  .screen:has(> .card.hero) .iconbtn { background: rgba(255, 255, 255, .1); color: #fff; }
+  .screen:has(> .card.hero) .chip-streak { background: rgba(0, 0, 0, .3); }
+}
 
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
@@ -184,9 +265,7 @@ body::before {
   color: var(--text2);
 }
 .chip-streak { color: var(--streak-ink); }
-.screen:has(> .card.hero) .chip-streak {
-  background: var(--band-chip); padding: 6px 12px 6px 8px;
-}
+.screen:has(> .card.hero) .chip-streak { padding: 6px 12px 6px 8px; }
 .chip-streak.off { color: var(--text2); }
 
 .iconbtn {
@@ -237,6 +316,7 @@ body::before {
   border: 1px solid var(--line);
   border-radius: var(--r-xl);
   padding: 18px;
+  flex-shrink: 0;
   box-shadow: var(--shadow-card);
   animation: settle .35s cubic-bezier(.2, .9, .3, 1.15) backwards;
 }
@@ -266,16 +346,19 @@ body::before {
 .stat { flex: 1; background: var(--surface2); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 6px 8px; text-align: center; }
 .stat .n { font-size: 23px; font-weight: 700; line-height: 1.15; color: var(--text-strong); }
 .stat .t { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--text2); }
+.stat-learn .n  { color: var(--learn); }
+.stat-due .n    { color: var(--due); }
+.stat-new .n    { color: var(--new); }
 .stat-red .n    { color: var(--red-text); }
 .stat-blue .n   { color: var(--blue-text); }
 .stat-green .n  { color: var(--green-text); }
 .stat-yellow .n { color: var(--amber-text); }
 .stat-purple .n { color: var(--purple-text); }
 /* нулевые чипы молчат — цвет остаётся сигналом */
-.stat.is-zero .n { color: var(--text2); }
+.stat.is-zero .n { color: var(--text-faint); }
 
 .minbar-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
-.minbar { flex: 1; height: 16px; background: var(--surface2); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; }
+.minbar { flex: 1; height: 12px; background: rgba(255, 255, 255, .07); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; }
 .minbar > div { height: 100%; background: var(--orange); border-radius: 99px; transition: width .3s; position: relative; overflow: hidden; }
 .minbar-label { font-size: 13px; font-weight: 800; color: var(--text2); white-space: nowrap; }
 .minbar-label.done { color: var(--green-text); }
@@ -399,8 +482,8 @@ body::before {
 .leech-note { font-size: 13px; font-weight: 800; color: var(--amber-text); margin-top: 8px; }
 
 /* тонкая полоса мастерства раздела: доля слов в долгосрочной памяти */
-.mastery { height: 6px; background: var(--surface2); border-radius: 99px; overflow: hidden; margin-top: 10px; }
-.mastery > div { height: 100%; background: var(--purple); border-radius: 99px; transition: width .3s; }
+.mastery { height: 5px; background: var(--surface2); border-radius: 99px; overflow: hidden; margin-top: 12px; }
+.mastery > div { height: 100%; background: linear-gradient(90deg, var(--gold-deep), var(--gold)); border-radius: 99px; transition: width .3s; }
 
 /* ── Интро нового слова: каскадное появление ────────────────────── */
 .intro { display: flex; flex-direction: column; gap: 6px; }
@@ -452,9 +535,9 @@ body::before {
   display: flex; flex-direction: column; justify-content: flex-end;
   min-height: 150px; /* оценки не гуляют по вертикали между состояниями */
 }
-.rev-bottom.is-right { background: var(--green-soft); border-top-color: var(--green-line); }
-.rev-bottom.is-wrong { background: var(--red-soft); border-top-color: var(--red-line); }
-.rev-bottom.is-typo { background: var(--yellow-soft); border-top-color: var(--yellow-line); }
+.rev-bottom.is-right { background: linear-gradient(180deg, var(--sheet-ok-a), var(--sheet-ok-b)); border-top-color: var(--sheet-ok-border); }
+.rev-bottom.is-wrong { background: linear-gradient(180deg, var(--sheet-fail-a), var(--sheet-fail-b)); border-top-color: var(--sheet-fail-border); }
+.rev-bottom.is-typo { background: linear-gradient(180deg, rgba(230, 194, 104, .13), rgba(230, 194, 104, .06)); border-top-color: rgba(230, 194, 104, .35); }
 .rev-bottom.is-right, .rev-bottom.is-wrong, .rev-bottom.is-typo { animation: sheet-in .3s cubic-bezier(.2, .9, .3, 1.15); }
 @keyframes sheet-in { from { transform: translateY(14px); opacity: .5; } }
 
@@ -504,11 +587,16 @@ body::before {
 .type-input:focus { border-color: var(--blue); background: var(--surface); box-shadow: 0 0 0 3px var(--ring); }
 
 .grades { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.grade-btn { padding: 10px 4px 8px; font-size: 14px; text-transform: none; letter-spacing: .2px; flex-direction: column; gap: 1px; }
-.grade-btn .iv { display: block; font-size: 11px; font-weight: 700; text-transform: none; letter-spacing: 0; opacity: .85; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.grade-btn.suggested { outline: 3px solid var(--ring); outline-offset: 2px; animation: pop .35s ease-out; }
-/* при подсказанной оценке остальные кнопки приглушаются — глазу есть куда падать */
-.grades:has(.suggested) .grade-btn:not(.suggested) { opacity: .7; }
+.grade-btn { padding: 11px 4px 9px; font-size: 14px; letter-spacing: .1px; flex-direction: column; gap: 2px; box-shadow: none; }
+.grade-btn .iv { display: block; font-size: 11px; font-weight: 500; letter-spacing: 0; opacity: .8; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* оценки — собственная палитра, НЕ пламя-CTA: again/good — плотные, hard/easy — призрачные */
+.grade-again { background: linear-gradient(180deg, var(--again-fill-a), var(--again-fill-b)); color: #fff; }
+.grade-good  { background: linear-gradient(180deg, var(--good-fill-a), var(--good-fill-b)); color: #fff; }
+.grade-hard  { background: rgba(230, 194, 104, .13); color: var(--hard); border: 1px solid rgba(230, 194, 104, .38); }
+.grade-easy  { background: rgba(122, 181, 216, .13); color: var(--easy); border: 1px solid rgba(122, 181, 216, .38); }
+/* suggested — золотой контур */
+.grade-btn.suggested { outline: 2px solid var(--gold); outline-offset: 2px; box-shadow: 0 0 14px rgba(230, 194, 104, .3); }
+.grades:has(.suggested) .grade-btn:not(.suggested) { opacity: .6; }
 .grades:has(.suggested) .grade-btn:not(.suggested):active { opacity: 1; }
 
 /* ── Итог сессии — праздник ─────────────────────────────────────── */
@@ -538,16 +626,7 @@ body::before {
   animation: halo 2.6s ease-in-out 3 both;
 }
 @keyframes halo { 0%, 100% { scale: 1; opacity: .95; } 50% { scale: 1.14; opacity: .6; } }
-/* пламя-свеча: лёгкое живое мерцание */
-.sum-art svg, .welcome > svg {
-  transform-origin: 50% 88%;
-  animation: flicker 2.2s ease-in-out infinite alternate;
-}
-@keyframes flicker {
-  0% { scale: 1; rotate: -0.6deg; }
-  55% { scale: 1.04; rotate: 0.4deg; }
-  100% { scale: 1.01; rotate: 0.9deg; }
-}
+/* (маскот анимируется сам — whole-svg flicker убран) */
 
 .sum-title { font-size: 28px; font-weight: 800; color: var(--text-strong); margin: 0; }
 .sum-title::after {
@@ -569,15 +648,17 @@ body::before {
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.9); } }
 .tile-head { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .8px; color: #fff; padding: 4px 4px 3px; }
 .tile-body { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 12px 6px; font-size: 21px; font-weight: 800; }
-.tile-green { border-color: var(--green); } .tile-green .tile-head { background: var(--green); } .tile-green .tile-body { color: var(--green-text); }
-.tile-blue { border-color: var(--blue); } .tile-blue .tile-head { background: var(--blue); } .tile-blue .tile-body { color: var(--blue-text); }
-.tile-yellow { border-color: var(--yellow); } .tile-yellow .tile-head { background: var(--yellow); color: #6b4d00; } .tile-yellow .tile-body { color: var(--amber-text); }
+.tile { background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.tile-head { font-weight: 600; }
+.tile-body { font-weight: 700; }
+.tile-new { border-color: rgba(134, 199, 155, .4); } .tile-new .tile-head { background: var(--new); color: #0d1418; } .tile-new .tile-body { color: var(--new); }
+.tile-due { border-color: rgba(122, 181, 216, .4); } .tile-due .tile-head { background: var(--due); color: #0d1418; } .tile-due .tile-body { color: var(--due); }
+.tile-time { border-color: var(--line-strong); } .tile-time .tile-head { background: var(--surface2); color: var(--text2); } .tile-time .tile-body { color: var(--text); }
 /* золото = заслуженное: точность как награда */
 .tile-gold { border-color: var(--gold-line); }
-.tile-gold .tile-head { background: linear-gradient(180deg, #e2bd76, #c99a3a); color: #5b3f10; }
-.tile-gold .tile-body { color: var(--gold-text); }
-.rsep { color: var(--rune-gold); font-weight: 800; padding: 0 2px; }
-.tile-red { border-color: var(--red); } .tile-red .tile-head { background: var(--red); } .tile-red .tile-body { color: var(--red-text); }
+.tile-gold .tile-head { background: linear-gradient(180deg, var(--gold-hi), var(--gold-deep)); color: #2b1e05; }
+.tile-gold .tile-body { color: var(--gold); }
+.rsep { color: var(--rune-gold); font-weight: 700; padding: 0 3px; }
 
 /* «Дальше» на итоге — оживает, когда танец стих */
 .sum-wrap .btn-lg { animation: cta-nudge 4s ease-in-out 2.6s infinite; }
@@ -654,8 +735,8 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 .fc-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .fc-n { font-size: 11px; font-weight: 800; color: var(--text2); min-height: 14px; }
 .fc-bar-track { flex: 1; width: 100%; display: flex; align-items: flex-end; }
-.fc-bar { width: 100%; background: var(--blue-soft); border: 1px solid var(--blue-line); border-radius: 8px 8px 4px 4px; }
-.fc-bar.today { background: var(--blue); border-color: var(--blue-sh); }
+.fc-bar { width: 100%; background: rgba(122, 181, 216, .13); border: 1px solid rgba(122, 181, 216, .3); border-radius: 8px 8px 4px 4px; }
+.fc-bar.today { background: linear-gradient(180deg, var(--gold), var(--gold-deep)); border-color: var(--gold-line); }
 .fc-day { font-size: 11px; font-weight: 800; color: var(--text2); text-transform: uppercase; }
 
 /* точность по форматам */
@@ -678,61 +759,51 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 .cal-dot.today { border-color: var(--orange); border-width: 3px; }
 .cal-dot.void { opacity: .35; border-style: dashed; }
 
-/* ── Огонёк-маскот ──────────────────────────────────────────────── */
-.buddy { transform-origin: 50% 92%; }
-.buddy.buddy-idle { animation: buddy-sway 3s ease-in-out infinite alternate; }
-@keyframes buddy-sway {
-  0% { transform: rotate(-2.6deg) translateY(0) scale(1); }
-  55% { transform: rotate(0.6deg) translateY(-2.5px) scale(1.02, .995); }
-  100% { transform: rotate(2.6deg) translateY(-.5px) scale(1); }
+/* ── Огонёк-маскот (FlameBuddy v3) ──────────────────────────────── */
+.buddy { transform-origin: 60px 128px; }
+.buddy.buddy-idle { animation: fb-sway 3.2s ease-in-out infinite alternate; }
+.buddy.buddy-think { animation: fb-sway 4.2s ease-in-out infinite alternate; }
+@keyframes fb-sway {
+  0% { transform: rotate(-2.2deg); }
+  55% { transform: rotate(.5deg) translateY(-2px); }
+  100% { transform: rotate(2.2deg); }
 }
-.buddy.buddy-happy { animation: buddy-hop .55s cubic-bezier(.34, 1.56, .64, 1), buddy-sway 3.2s ease-in-out .55s infinite alternate; }
-@keyframes buddy-hop {
-  0% { transform: translateY(0) scale(1); }
-  35% { transform: translateY(-9px) scale(1.06, .96); }
-  70% { transform: translateY(0) scale(.97, 1.04); }
-  100% { transform: none; }
-}
-/* грусть: пламя гаснет и подрагивает */
-.buddy.buddy-sad {
-  animation: buddy-droop .5s ease-out forwards, buddy-gutter 2.6s ease-in-out .6s infinite;
-  filter: saturate(.85) brightness(.96);
-}
-@keyframes buddy-droop {
-  0% { transform: none; }
-  100% { transform: rotate(-3deg) scale(1, .96); }
-}
-@keyframes buddy-gutter {
-  0%, 100% { scale: 1 .96; }
-  50% { scale: .985 .94; }
-}
-/* праздник: три такта танца со squash/stretch → живой idle; шлем чуть отстаёт */
-.buddy.buddy-party { animation: buddy-dance .8s cubic-bezier(.5, 0, .4, 1) 3, buddy-sway 3.2s ease-in-out 2.5s infinite alternate; }
-@keyframes buddy-dance {
-  0%, 100% { transform: rotate(-4deg) translateY(0) scale(1.03, .96); }
-  30% { transform: rotate(0deg) translateY(-8px) scale(.97, 1.05); }
-  50% { transform: rotate(4deg) translateY(0) scale(1.03, .96); }
-  80% { transform: rotate(0deg) translateY(-8px) scale(.97, 1.05); }
-}
-.buddy-party .buddy-helm { animation: helm-lag .8s ease-in-out 3; transform-origin: 60px 60px; }
-@keyframes helm-lag {
-  0%, 50%, 100% { transform: translateY(0); }
-  22%, 72% { transform: translateY(2px); }
-  36%, 86% { transform: translateY(-1.5px); }
-}
-/* моргание: одиночное + изредка двойное — живее метронома */
-/* внутреннее пламя лижет воздух независимо от тела */
-.bd-inner-flame { transform-origin: 60px 120px; animation: inner-lick 2.1s ease-in-out infinite alternate; }
-@keyframes inner-lick {
+/* тело дышит */
+.bd-body { transform-origin: 60px 128px; animation: fb-breathe 3.4s ease-in-out infinite alternate; }
+@keyframes fb-breathe {
   0% { transform: scale(1, 1); }
-  55% { transform: scale(1.035, .985) translateY(.5px); }
-  100% { transform: scale(.985, 1.02); }
+  55% { transform: scale(1.02, .985); }
+  100% { transform: scale(.99, 1.015); }
 }
+/* три слоя огня фликерят с разными периодами */
+.bd-inner-flame { transform-origin: 60px 122px; animation: fb-lick 2.3s ease-in-out infinite alternate; }
+@keyframes fb-lick { 0% { transform: scale(1, 1); } 55% { transform: scale(1.045, .98) translateY(.5px); } 100% { transform: scale(.98, 1.02); } }
+.bd-tongueL { transform-origin: 29px 68px; animation: fb-flickA 1.7s ease-in-out infinite; }
+.bd-tongueR { transform-origin: 91px 64px; animation: fb-flickB 2.3s ease-in-out infinite; }
+.bd-core { transform-origin: 60px 118px; animation: fb-core 1.7s ease-in-out infinite; }
+@keyframes fb-flickA { 0%, 100% { transform: scale(1) rotate(0); opacity: .9; } 50% { transform: scale(1.15, 1.28) rotate(-4deg); opacity: .6; } }
+@keyframes fb-flickB { 0%, 100% { transform: scale(1.1, 1.2) rotate(3deg); opacity: .55; } 50% { transform: scale(1) rotate(0); opacity: .9; } }
+@keyframes fb-core   { 0%, 100% { transform: scale(1, 1); opacity: .95; } 45% { transform: scale(1.12, .92); opacity: .75; } 70% { transform: scale(.94, 1.1); opacity: 1; } }
 
-.buddy-eyes { animation: buddy-blink 7.6s infinite; transform-origin: 60px 86px; }
-@keyframes buddy-blink {
-  0%, 42%, 46%, 90%, 94%, 96.5%, 100% { transform: scaleY(1); }
-  44%, 92%, 95.5% { transform: scaleY(.08); }
+.buddy-eyes { transform-origin: 60px 87px; animation: fb-blink 7.6s infinite; }
+@keyframes fb-blink { 0%, 41%, 45%, 90%, 94%, 100% { transform: scaleY(1); } 43%, 92% { transform: scaleY(.08); } }
+
+.buddy.buddy-happy { animation: fb-hop .55s cubic-bezier(.34, 1.56, .64, 1), fb-sway 3.2s ease-in-out .55s infinite alternate; }
+@keyframes fb-hop { 0% { transform: translateY(0) scale(1); } 35% { transform: translateY(-9px) scale(1.05, .96); } 70% { transform: translateY(0) scale(.97, 1.04); } 100% { transform: none; } }
+
+/* грусть: пламя присмирело, наклон вниз */
+.buddy.buddy-sad { filter: saturate(.82) brightness(.95); transform: rotate(-3deg); }
+.buddy.buddy-sad .bd-tongueL, .buddy.buddy-sad .bd-tongueR, .buddy.buddy-sad .bd-core { display: none; }
+.buddy.buddy-sad .bd-inner-flame { animation: fb-gutter 2.6s ease-in-out infinite; }
+@keyframes fb-gutter { 0%, 100% { transform: scale(1, .96); } 50% { transform: scale(.985, .92); } }
+
+/* праздник: короткий всплеск танца → покой */
+.buddy.buddy-party { animation: fb-dance 1.1s cubic-bezier(.5, 0, .4, 1) 3, fb-sway 3.2s ease-in-out 3.3s infinite alternate; }
+@keyframes fb-dance {
+  0%, 100% { transform: rotate(-4deg) translateY(0) scale(1.03, .96); }
+  30% { transform: rotate(0) translateY(-7px) scale(.97, 1.05); }
+  50% { transform: rotate(4deg) translateY(0) scale(1.03, .96); }
+  80% { transform: rotate(0) translateY(-7px) scale(.97, 1.05); }
 }
 
 /* комбо верных ответов: молчаливый золотой счётчик в потоке шапки —
@@ -769,9 +840,12 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 }
 .section-card > *:not(.sec-glyph) { position: relative; z-index: 1; }
 
-/* градиентные CTA — живее плоской заливки */
-/* (переопределения CTA удалены — цвет пламени задан в основном блоке кнопок) */
-.card.hero-slim { background: linear-gradient(125deg, var(--surface) 55%, var(--blue-soft) 130%); }
+/* карты, стоящие на сцене фьорда — стекло с блюром */
+.card.hero-slim, .section-card {
+  background: var(--glass);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-color: var(--line-strong);
+}
 
 /* ── Доступность ────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {

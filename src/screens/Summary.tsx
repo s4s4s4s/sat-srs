@@ -2,6 +2,7 @@ import { useApp, setScreen } from '../lib/store'
 import { streak } from '../lib/journal'
 import { Timer, Check, Bolt } from '../components/Icon'
 import FlameBuddy from '../components/FlameBuddy'
+import FjordScene from '../components/FjordScene'
 
 export default function Summary() {
   const app = useApp()
@@ -18,6 +19,7 @@ export default function Summary() {
 
   return (
     <div className="screen">
+      <FjordScene tall />
       <div className="sum-wrap">
         <div className="sum-art"><FlameBuddy size={104} mood="party" /></div>
         <div>
@@ -28,21 +30,21 @@ export default function Summary() {
           </div>
         </div>
         <div className="tiles">
-          <div className="tile tile-green">
+          <div className="tile tile-new">
             <div className="tile-head">Новых</div>
             <div className="tile-body"><Bolt size={17} />{r.newSeen}</div>
           </div>
-          <div className="tile tile-blue">
+          <div className="tile tile-due">
             <div className="tile-head">Повторов</div>
             <div className="tile-body"><Check size={17} />{r.totalRev}</div>
           </div>
           {acc !== null && (
-            <div className="tile tile-yellow">
+            <div className="tile tile-gold">
               <div className="tile-head">Точность</div>
               <div className="tile-body">{acc}%</div>
             </div>
           )}
-          <div className="tile tile-red">
+          <div className="tile tile-time">
             <div className="tile-head">Время</div>
             <div className="tile-body"><Timer size={16} />{mm}:{String(ss).padStart(2, '0')}</div>
           </div>

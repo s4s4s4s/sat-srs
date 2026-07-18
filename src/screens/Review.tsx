@@ -15,10 +15,10 @@ import FlameBuddy from '../components/FlameBuddy'
 import { speak, canSpeak } from '../lib/speech'
 
 const GRADE_CLASS: Record<number, string> = {
-  [Rating.Again]: 'btn-red',
-  [Rating.Hard]: 'btn-yellow',
-  [Rating.Good]: 'btn-green',
-  [Rating.Easy]: 'btn-blue'
+  [Rating.Again]: 'grade-again',
+  [Rating.Hard]: 'grade-hard',
+  [Rating.Good]: 'grade-good',
+  [Rating.Easy]: 'grade-easy'
 }
 
 function shuffleOnce<T>(arr: T[]): T[] {
