@@ -294,7 +294,8 @@ export default function Review() {
         e.preventDefault()
         if (!revealed && task.format === 'reveal') setRevealed(true)
         else if (revealed && suggested) void grade(suggested)
-      } else if (revealed && !typing && ['1', '2', '3', '4'].includes(e.key)) {
+      } else if (revealed && !suggested && !typing && ['1', '2', '3', '4'].includes(e.key)) {
+        // ручная оценка 1–4 только у «показа»; в объективных форматах оценка авто
         e.preventDefault()
         void grade(GRADES[Number(e.key) - 1].rating)
       }
@@ -485,25 +486,30 @@ export default function Review() {
                   })}
               </div>
             )}
-            <div className="grades">
-              {GRADES.map(g => (
-                <button
-                  key={g.key}
-                  className={`btn grade-btn ${GRADE_CLASS[g.rating]}${suggested === g.rating ? ' suggested' : ''}`}
-                  onClick={() => void grade(g.rating)}
-                >
-                  {g.label}
-                  <span className="iv">{intervalLabel(scheduler, task.item.fsrs, g.rating, new Date())}</span>
-                </button>
-              ))}
-            </div>
-            <div className="hint-keys">
-              {needConfirm
-                ? <span className="confirm-warn">Ответ был неверный — нажмите ещё раз для подтверждения</span>
-                : suggested
-                ? <span className="kb-only">Enter — подтвердить · 1–4 — своя оценка</span>
-                : <>Оценка решает, когда слово вернётся<span className="kb-only"> · клавиши 1–4</span></>}
-            </div>
+            {suggested ? (
+              /* объективный результат — оценка определена автоматически, выбор не нужен */
+              <>
+                <button className="btn btn-green btn-lg" onClick={() => void grade(suggested)}>Дальше</button>
+                <div className="hint-keys kb-only">Enter — дальше</div>
+              </>
+            ) : (
+              /* показ (learning-шаг) — объективного сигнала нет, оценивает пользователь */
+              <>
+                <div className="grades">
+                  {GRADES.map(g => (
+                    <button
+                      key={g.key}
+                      className={`btn grade-btn ${GRADE_CLASS[g.rating]}`}
+                      onClick={() => void grade(g.rating)}
+                    >
+                      {g.label}
+                      <span className="iv">{intervalLabel(scheduler, task.item.fsrs, g.rating, new Date())}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="hint-keys">Оценка решает, когда слово вернётся<span className="kb-only"> · клавиши 1–4</span></div>
+              </>
+            )}
           </>
         )}
       </div>
