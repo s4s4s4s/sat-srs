@@ -386,25 +386,21 @@ export default function Review() {
         <Sentence context={sentence} word={answerWord} revealed={revealed} />
         {!revealed && <div className="rev-task">{taskHint}</div>}
         {!revealed && task.format === 'type' && (
-          // ввод и кнопка ПОД предложением: держатся над клавиатурой iOS, не в нижнем листе
-          <>
-            <input
-              ref={inputRef}
-              className="type-input"
-              value={typed}
-              onChange={e => setTyped(e.target.value)}
-              onFocus={e => e.currentTarget.scrollIntoView({ block: 'nearest' })}
-              placeholder={isNumeric ? 'Ваш ответ…' : 'Введите слово…'}
-              inputMode={isNumeric ? 'decimal' : 'text'}
-              autoFocus
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-            />
-            <button className="btn btn-green" onClick={() => submitObjective(typed)} disabled={!typed.trim()}>
-              Проверить
-            </button>
-          </>
+          // поле ПОД предложением: всегда видно; кнопка «Проверить» — в нижнем листе,
+          // который сам поднимается над клавиатурой (см. --kb)
+          <input
+            ref={inputRef}
+            className="type-input"
+            value={typed}
+            onChange={e => setTyped(e.target.value)}
+            onFocus={e => e.currentTarget.scrollIntoView({ block: 'nearest' })}
+            placeholder={isNumeric ? 'Ваш ответ…' : 'Введите слово…'}
+            inputMode={isNumeric ? 'decimal' : 'text'}
+            autoFocus
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+          />
         )}
           </>
         )}
@@ -464,7 +460,11 @@ export default function Review() {
               <button className="btn btn-green" onClick={() => setRevealed(true)}>Показать ответ</button>
               <div className="hint-keys kb-only">Space — показать</div>
             </>
-          ) : task.format === 'type' ? null : (
+          ) : task.format === 'type' ? (
+            <button className="btn btn-green" onClick={() => submitObjective(typed)} disabled={!typed.trim()}>
+              Проверить
+            </button>
+          ) : (
             <div className="mc-stack">
               {task.options.map(o => (
                 <button key={o} className="mc-option" onClick={() => submitObjective(o)}><Tex text={o} /></button>

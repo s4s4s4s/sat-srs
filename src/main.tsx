@@ -5,6 +5,19 @@ import './styles.css'
 import App from './App'
 import { init } from './lib/store'
 
+// высота экранной клавиатуры в --kb: нижние кнопки поднимаются над ней, а при
+// закрытой клавиатуре остаются внизу (VisualViewport надёжнее dvh на iOS Safari)
+const vv = window.visualViewport
+if (vv) {
+  const setKb = () => {
+    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+    document.documentElement.style.setProperty('--kb', `${kb}px`)
+  }
+  vv.addEventListener('resize', setKb)
+  vv.addEventListener('scroll', setKb)
+  setKb()
+}
+
 // workbox-window перезагрузит страницу, когда новый SW заберёт контроль — деплой виден с первого запуска
 registerSW({
   immediate: true,

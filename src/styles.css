@@ -531,7 +531,9 @@ body::before {
   padding: 16px 18px calc(env(safe-area-inset-bottom) + 18px);
   border-radius: var(--r-xl) var(--r-xl) 0 0;
   border-top: 2px solid transparent;
-  transition: background .2s, border-color .2s;
+  /* при открытой клавиатуре лист (с «Проверить») поднимается над ней; закрыта → внизу */
+  transform: translateY(calc(-1 * var(--kb, 0px)));
+  transition: background .2s, border-color .2s, transform .18s ease-out;
   display: flex; flex-direction: column; justify-content: flex-end;
   min-height: 150px; /* оценки не гуляют по вертикали между состояниями */
 }
@@ -540,10 +542,6 @@ body::before {
 .rev-bottom.is-typo { background: linear-gradient(180deg, rgba(230, 194, 104, .13), rgba(230, 194, 104, .06)); border-top-color: rgba(230, 194, 104, .35); }
 .rev-bottom.is-right, .rev-bottom.is-wrong, .rev-bottom.is-typo { animation: sheet-in .3s cubic-bezier(.2, .9, .3, 1.15); }
 @keyframes sheet-in { from { transform: translateY(14px); opacity: .5; } }
-/* пустой лист (ввод: кнопка перенесена под поле) не занимает место */
-.rev-bottom:empty { min-height: 0; padding: 0; border-top: 0; margin: 0; }
-/* «Проверить» под полем ввода */
-.type-input + .btn { margin-top: 12px; }
 
 .hint-keys { text-align: center; font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 10px; }
 /* клавиатурные подсказки не показываем на тач-устройствах */
