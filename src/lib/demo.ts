@@ -25,7 +25,7 @@ function card(word: string, ru: string, en: string, ctx: string, st: number, rep
   }
 }
 
-export async function maybeDemo(): Promise<{ screen: string | null } | null> {
+export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw' | 'grammar' | 'math' } | null> {
   if (!import.meta.env.DEV) return null
   const p = new URLSearchParams(location.search)
   if (!p.has('demo')) return null
@@ -41,11 +41,23 @@ export async function maybeDemo(): Promise<{ screen: string | null } | null> {
       domain: 'ALG', desmos: false, source: 'seed-math', added: '2026-07-18', suspended: false,
       fsrs: { state: 2, due: day(dueOff).toISOString(), stability: 5, difficulty: 5, elapsed_days: 0, scheduled_days: 1, learning_steps: 0, reps: 1, lapses: 0, last_review: day(-2).toISOString() } }
   })
+  const gramCard = (dueOff: number): CardRec => ({
+    path: 'Учёба/Карточки/gram-colon.md', sha: 'demo-gram', dirty: 0, body: '', fm: {
+      type: 'card', kind: 'grammar', word: 'двоеточие вводит пояснение',
+      context: 'The evidence pointed to one conclusion ______ the bridge had been failing for years.',
+      choices: [':', ';', '—', ','], answer: ':',
+      explain: 'Двоеточие ставится ПОСЛЕ законченного предложения и вводит пояснение или список.',
+      domain: 'SEC', source: 'seed-grammar', added: '2026-07-18', suspended: false,
+      fsrs: { state: 2, due: day(dueOff).toISOString(), stability: 5, difficulty: 5, elapsed_days: 0, scheduled_days: 1, learning_steps: 0, reps: 1, lapses: 0, last_review: day(-2).toISOString() } }
+  })
   const cards: CardRec[] =
     v === 'mix' ? [
       card('ephemeral', 'недолговечный', 'lasting a very short time', 'The fame of trends is ______, fading fast.', 2, 2, -1),
       card('tenuous', 'шаткий', 'very weak', 'The link remains ______ at best.', 0, 0, 0),
+      gramCard(-1),
       mathCard('math-sys', -1)
+    ] : v === 'grammar' ? [
+      gramCard(-1)
     ] : v === 'math' ? [
       mathCard('math-sys', -1)
     ] : v === 'new' ? [
@@ -77,7 +89,8 @@ export async function maybeDemo(): Promise<{ screen: string | null } | null> {
   }
   await db.putCards(cards)
   await db.putJournal(journal)
-  return { screen: p.get('screen') }
+  const section = v === 'grammar' ? 'grammar' : v === 'math' ? 'math' : 'rw'
+  return { screen: p.get('screen'), section }
 }
 
 export function demoSession() {

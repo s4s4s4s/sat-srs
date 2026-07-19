@@ -100,7 +100,7 @@ export default function Stats() {
           <div className="stat stat-blue"><div className="n">{c.byState.review}</div><div className="t">на повторе</div></div>
         </div>
         <div className="syncline" style={{ marginTop: 10 }}>
-          слова/RW: {all.filter(v => sectionOf(v) === 'rw').length} · математика: {all.filter(v => sectionOf(v) === 'math').length}
+          слова: {all.filter(v => sectionOf(v) === 'rw').length} · грамматика: {all.filter(v => sectionOf(v) === 'grammar').length} · математика: {all.filter(v => sectionOf(v) === 'math').length}
         </div>
       </div>
     </div>

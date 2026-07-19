@@ -43,10 +43,13 @@ const isLearning = (s: State) => s === State.Learning || s === State.Relearning
 
 /** Раздел: слова/RW отдельно от математики — межпредметного перемешивания нет,
     interleaving работает внутри раздела (домены математики перемешаны между собой) */
-export type Section = 'rw' | 'math'
+export type Section = 'rw' | 'grammar' | 'math'
 const MATH_DOMAINS = new Set(['ALG', 'AM', 'PSDA', 'GEO'])
 export function sectionOf(v: CardView): Section {
-  return v.kind === 'math' || MATH_DOMAINS.has(v.domain) ? 'math' : 'rw'
+  if (v.kind === 'math' || MATH_DOMAINS.has(v.domain)) return 'math'
+  // грамматика: пунктуация/правила SEC + связки/логика EOI — отдельно от словаря
+  if (v.kind === 'grammar' || v.domain === 'SEC' || v.domain === 'EOI' || v.pos === 'transition') return 'grammar'
+  return 'rw'
 }
 
 /** Learning-карточки показываем чуть раньше срока (Anki learn-ahead), чтобы шаг не терялся на конце сессии/дня */

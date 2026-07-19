@@ -38,9 +38,10 @@ void (async () => {
   if (import.meta.env.DEV) {
     const { maybeDemo, demoSession } = await import('./lib/demo')
     const demo = await maybeDemo()
-    const { init: initStore, setScreen, finishSession } = await import('./lib/store')
+    const { init: initStore, setScreen, finishSession, startLesson } = await import('./lib/store')
     await initStore()
     if (demo?.screen === 'summary') await finishSession(demoSession())
+    else if (demo?.screen === 'review') startLesson(demo.section)
     else if (demo?.screen) setScreen(demo.screen as any)
     return
   }

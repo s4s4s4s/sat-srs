@@ -56,6 +56,7 @@ export default function Home() {
   const budget = Math.max(0, app.settings.newPerDay - newIntroducedOn(app.journal, today))
   const all = views()
   const rw = all.filter(v => sectionOf(v) === 'rw')
+  const grammar = all.filter(v => sectionOf(v) === 'grammar')
   const math = all.filter(v => sectionOf(v) === 'math')
   const pause: PauseRange | null = app.settings.pauseFrom && app.settings.pauseTo
     ? { from: app.settings.pauseFrom, to: app.settings.pauseTo } : null
@@ -117,7 +118,8 @@ export default function Home() {
         {st.freezeSpentYesterday && <div className="freeze-note">❄ Заморозка спасла серию — осталось {st.freezes}</div>}
       </div>
 
-      <SectionBlock title="Слова и правила" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budget} onStart={go('rw')} onReview={go('rw', true)} />
+      <SectionBlock title="Слова" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budget} onStart={go('rw')} onReview={go('rw', true)} />
+      <SectionBlock title="Грамматика" icon={<span className="sec-x">¶</span>} badge="badge-green" glyph="var(--rune-ansuz)" cards={grammar} budget={budget} onStart={go('grammar')} onReview={go('grammar', true)} />
       <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budget} onStart={go('math')} onReview={go('math', true)} />
 
       <div className="home-actions">
