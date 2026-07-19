@@ -112,9 +112,10 @@ export default function Review() {
         await Promise.race([startSync(), new Promise(r => setTimeout(r, 3500))])
       }
       if (!alive) return
-      // новых за урок — не больше newPerLesson (и не больше остатка дневного лимита)
+      // новых за урок — не больше newPerLesson (и не больше остатка дневного лимита);
+      // режим «только повторение» — ноль новых
       const dayLeft = Math.max(0, app.settings.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
-      const budget = Math.min(dayLeft, app.settings.newPerLesson || 4)
+      const budget = app.sessionReviewOnly ? 0 : Math.min(dayLeft, app.settings.newPerLesson || 4)
       setQueue(buildQueue(views().filter(v => sectionOf(v) === section), budget))
     })()
     return () => { alive = false }

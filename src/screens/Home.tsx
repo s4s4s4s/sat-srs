@@ -8,7 +8,7 @@ import FlameBuddy from '../components/FlameBuddy'
 import FjordScene from '../components/FjordScene'
 import type { CardView } from '../lib/types'
 
-function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart }: {
+function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart, onReview }: {
   title: string
   icon: React.ReactNode
   badge: string
@@ -16,9 +16,11 @@ function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart }: {
   cards: CardView[]
   budget: number
   onStart: () => void
+  onReview: () => void
 }) {
   const c = homeCounts(cards, budget)
-  const due = c.learnDue + c.revDue + c.newAvail
+  const reviewDue = c.learnDue + c.revDue
+  const due = reviewDue + c.newAvail
   return (
     <div className="card section-card">
       <span className="sec-glyph" style={{ ['--rune-shape' as string]: glyph } as React.CSSProperties} />
@@ -41,6 +43,9 @@ function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart }: {
       <button className="btn btn-green section-btn" onClick={onStart} disabled={due === 0}>
         {due === 0 ? <><Check size={18} /> Всё повторено</> : `Учить · ${due}`}
       </button>
+      {c.newAvail > 0 && reviewDue > 0 && (
+        <button className="section-review" onClick={onReview}>Только повторить · {reviewDue}</button>
+      )}
     </div>
   )
 }
@@ -77,7 +82,7 @@ export default function Home() {
     : app.lastSyncAt ? `Синхронизировано ${new Date(app.lastSyncAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}`
     : ''
 
-  const go = (s: Section) => () => startLesson(s)
+  const go = (s: Section, reviewOnly = false) => () => startLesson(s, reviewOnly)
 
   return (
     <div className="screen">
@@ -112,8 +117,8 @@ export default function Home() {
         {st.freezeSpentYesterday && <div className="freeze-note">❄ Заморозка спасла серию — осталось {st.freezes}</div>}
       </div>
 
-      <SectionBlock title="Слова и правила" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budget} onStart={go('rw')} />
-      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budget} onStart={go('math')} />
+      <SectionBlock title="Слова и правила" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budget} onStart={go('rw')} onReview={go('rw', true)} />
+      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budget} onStart={go('math')} onReview={go('math', true)} />
 
       <div className="home-actions">
         <div className="row">

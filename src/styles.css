@@ -372,6 +372,13 @@ body::before {
 .section-title svg, .sec-x { color: var(--blue); }
 .sec-x { font-size: 19px; font-weight: 800; line-height: 1; }
 .section-btn { margin-top: 12px; }
+.section-review {
+  width: 100%; background: none; border: none; cursor: pointer;
+  font-family: var(--font); font-size: 13px; font-weight: 600; color: var(--text2);
+  padding: 9px; margin-top: 4px; border-radius: var(--r-btn);
+}
+.section-review:active { background: var(--surface2); color: var(--text); }
+@media (hover: hover) { .section-review:hover { color: var(--text); } }
 .card.hero-slim { padding: 14px 16px; margin-bottom: 14px; }
 .card.hero-slim::after { content: none; }
 /* огонёк СТОИТ на нижней кромке карточки, а не левитирует */

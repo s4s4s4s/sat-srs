@@ -16,6 +16,7 @@ interface AppState {
   ready: boolean
   screen: Screen
   sessionSection: Section
+  sessionReviewOnly: boolean
   settings: Settings
   cards: CardRec[]
   journal: JournalRec[]
@@ -30,6 +31,7 @@ let state: AppState = {
   ready: false,
   screen: 'home',
   sessionSection: 'rw',
+  sessionReviewOnly: false,
   settings: loadSettings(),
   cards: [],
   journal: [],
@@ -74,9 +76,10 @@ export function setScreen(s: Screen) {
   emit()
 }
 
-/** Старт урока в конкретном разделе (слова/математика) */
-export function startLesson(section: Section) {
+/** Старт урока в разделе; reviewOnly = только повторения, без ввода новых слов */
+export function startLesson(section: Section, reviewOnly = false) {
   state.sessionSection = section
+  state.sessionReviewOnly = reviewOnly
   state.screen = 'review'
   emit()
 }
