@@ -462,6 +462,20 @@ body::before {
 
 .rev-task { font-size: 14px; font-weight: 700; color: var(--text2); padding-left: 4px; }
 
+/* цель-значение: спрашиваем слово по смыслу, когда единственный пример уже показан */
+.rev-cue {
+  position: relative;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 18px;
+  padding: 20px 18px; box-shadow: var(--shadow-card); text-align: center;
+}
+.rev-cue::after {
+  content: ''; position: absolute; left: 26px; bottom: -9px; width: 16px; height: 16px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-top: 0; border-left: 0; border-radius: 0 0 4px 0; transform: rotate(45deg);
+}
+.rev-cue-ru { font-size: 24px; font-weight: 800; color: var(--text-strong); line-height: 1.35; }
+.rev-cue-en { font-size: 15px; color: var(--text2); margin-top: 8px; font-style: italic; }
+
 .sync-wait { font-size: 16px; font-weight: 800; color: var(--text2); animation: waitpulse 1.2s ease-in-out infinite; }
 @keyframes waitpulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 

@@ -107,7 +107,7 @@ export const DEFAULT_SETTINGS: Settings = {
   branch: 'master',
   basePath: 'Учёба/Карточки',
   newPerDay: 15,
-  newPerLesson: 4,
+  newPerLesson: 3,
   requestRetention: 0.9,
   pauseFrom: '2026-07-29',
   pauseTo: '2026-08-02',

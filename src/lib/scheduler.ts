@@ -55,6 +55,13 @@ export function sectionOf(v: CardView): Section {
 /** Learning-карточки показываем чуть раньше срока (Anki learn-ahead), чтобы шаг не терялся на конце сессии/дня */
 export const LEARN_AHEAD_MS = 30 * 60000
 
+/**
+ * Минимум отработок между знакомствами с новыми словами.
+ * Новые подряд грузят рабочую память и мешают друг другу (interference):
+ * слово должно быть хотя бы раз извлечено, прежде чем в голову зайдёт следующее.
+ */
+export const NEW_GAP = 2
+
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
   for (let i = a.length - 1; i > 0; i--) {
@@ -115,14 +122,16 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
     })
   const newItems = shuffle(fresh.slice(0, Math.max(0, newBudget)))
 
-  // interleaving: новые распределяем равномерно среди review (не пачкой в конце),
-  // но позицию 0 не занимаем — сессия начинается с повтора, если он есть
+  // interleaving с разрядкой: новые распределяем среди review, но не ближе чем через
+  // NEW_GAP других карточек; позицию 0 не занимаем — сессия начинается с повтора, если он есть.
+  // Если повторов мало и слова всё равно встают рядом, очередь дополнительно разряжается
+  // на лету (отработка только что введённого слова служит разделителем).
   const mixed: StudyItem[] = [...review]
   if (newItems.length) {
-    const step = (mixed.length + newItems.length) / newItems.length
+    const stride = Math.max(NEW_GAP + 1, Math.round((review.length + newItems.length) / newItems.length))
     newItems.forEach((it, i) => {
-      const pos = review.length ? Math.max(1, Math.round((i + 0.7) * step)) : Math.round(i * step)
-      mixed.splice(Math.min(mixed.length, pos), 0, it)
+      const pos = Math.min(mixed.length, (review.length ? 1 : 0) + i * stride)
+      mixed.splice(pos, 0, it)
     })
   }
   return [...learning, ...mixed]

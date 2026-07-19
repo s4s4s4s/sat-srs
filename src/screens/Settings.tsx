@@ -11,7 +11,7 @@ export default function SettingsScreen() {
   const app = useApp()
   const [s, setS] = useState({ ...app.settings })
   const [newPerDayStr, setNewPerDayStr] = useState(String(app.settings.newPerDay))
-  const [newPerLessonStr, setNewPerLessonStr] = useState(String(app.settings.newPerLesson || 4))
+  const [newPerLessonStr, setNewPerLessonStr] = useState(String(app.settings.newPerLesson || 3))
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -46,7 +46,7 @@ export default function SettingsScreen() {
       branch: s.branch.trim(),
       basePath,
       newPerDay: Math.min(100, Math.round(n)),
-      newPerLesson: Math.min(10, Math.round(nl)),
+      newPerLesson: Math.min(5, Math.round(nl)),
       requestRetention: s.requestRetention || DEFAULT_SETTINGS.requestRetention
     }
     if (!next.pat) {

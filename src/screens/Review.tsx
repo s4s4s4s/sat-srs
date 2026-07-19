@@ -4,7 +4,7 @@ import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJo
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention
+  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP
 } from '../lib/scheduler'
 import Tex from '../components/Tex'
 import { newIntroducedOn, minutesToday, MIN_MINUTES, cardTimeCap } from '../lib/journal'
@@ -55,6 +55,7 @@ interface Task {
   options: string[] // mc/prep
   answer: string    // слово, предлог или авторский вариант
   ctx: string       // выбранный контекст (ротация)
+  cue: 'sentence' | 'meaning' // по чему вспоминаем: пропуск в предложении или значение
 }
 
 const lastCtxIdx = new Map<string, number>()
@@ -70,21 +71,28 @@ function pickContext(view: CardView): string {
 function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: Set<string>): Task {
   const format = pickFormat(item, deck.map(r => r), introduced)
   const ctx = format === 'prep' ? item.view.prepContext : pickContext(item.view)
+  // если у слова один пример и он уже показан на знакомстве, спрашивать по нему нельзя:
+  // это проверка памяти на предложение, а не на слово. Тогда цель — значение.
+  const exampleSpent = introduced?.has(itemKey(item)) && item.view.contexts.length < 2
+  const cue: Task['cue'] =
+    (format === 'reveal' || format === 'type') && exampleSpent && !item.view.answerNum && !!item.view.meaning_ru
+      ? 'meaning' : 'sentence'
+  const base = { item, format, ctx, cue }
   if (format === 'mc') {
     // авторские варианты (error/grammar) приоритетнее дистракторов из колоды
     if (item.view.choices.length >= 2) {
       const answer = item.view.answerText || item.view.choices[0]
-      return { item, format, options: shuffleOnce(item.view.choices), answer, ctx }
+      return { ...base, options: shuffleOnce(item.view.choices), answer }
     }
-    return { item, format, options: shuffleOnce([item.view.word, ...mcDistractors(item.view, deck)]), answer: item.view.word, ctx }
+    return { ...base, options: shuffleOnce([item.view.word, ...mcDistractors(item.view, deck)]), answer: item.view.word }
   }
   if (format === 'prep') {
-    return { item, format, options: prepOptions(item.view.prep), answer: item.view.prep, ctx }
+    return { ...base, options: prepOptions(item.view.prep), answer: item.view.prep }
   }
   if (format === 'type' && item.view.answerNum) {
-    return { item, format, options: [], answer: item.view.answerNum, ctx }
+    return { ...base, options: [], answer: item.view.answerNum }
   }
-  return { item, format, options: [], answer: item.view.word, ctx }
+  return { ...base, options: [], answer: item.view.word }
 }
 
 const FORMAT_HINT: Record<Format, { text: string; cls: string }> = {
@@ -115,7 +123,7 @@ export default function Review() {
       // новых за урок — не больше newPerLesson (и не больше остатка дневного лимита);
       // режим «только повторение» — ноль новых
       const dayLeft = Math.max(0, app.settings.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
-      const budget = app.sessionReviewOnly ? 0 : Math.min(dayLeft, app.settings.newPerLesson || 4)
+      const budget = app.sessionReviewOnly ? 0 : Math.min(dayLeft, app.settings.newPerLesson || 3)
       setQueue(buildQueue(views().filter(v => sectionOf(v) === section), budget))
     })()
     return () => { alive = false }
@@ -134,6 +142,8 @@ export default function Review() {
   const pendingAdvance = useRef<{ next: StudyItem; atFront: boolean } | null>(null)
   // слова, уже показанные интро в этой сессии: их New-показы дальше — отработка, не интро
   const introduced = useRef(new Set<string>())
+  // сколько отработок прошло с прошлого знакомства (новые слова не идут пачкой)
+  const sinceIntro = useRef(NEW_GAP)
   const answeredMs = useRef(0)
   // зачётные секунды: тот же кап на карточку, что и в журнале — таймер согласован с минутами дня
   const creditedSec = useRef(0)
@@ -168,8 +178,10 @@ export default function Review() {
     return () => clearInterval(t)
   }, [])
 
+  // в «показе» вердикт появляется, только если пользователь сам ввёл слово —
+  // тогда сигнал объективный и оценка считается как у ввода
   const suggested = task && verdict !== null
-    ? suggestedGrade(task.format, verdict === 'correct', verdict === 'typo', answeredMs.current, task.item.view.kind)
+    ? suggestedGrade(task.format === 'reveal' ? 'type' : task.format, verdict === 'correct', verdict === 'typo', answeredMs.current, task.item.view.kind)
     : null
 
   async function finish(queueEmpty: boolean) {
@@ -180,8 +192,24 @@ export default function Review() {
     await finishSession(res.current)
   }
 
+  /**
+   * Разрядка новых слов: пока после знакомства не прошло NEW_GAP отработок,
+   * очередное знакомство уступает место ближайшей отработке (в том числе отработке
+   * только что введённого слова). Если в очереди одни знакомства — разряжать нечем.
+   */
+  function spaceOutNew(list: StudyItem[]): StudyItem[] {
+    if (sinceIntro.current >= NEW_GAP || !list.length) return list
+    const isIntro = (i: StudyItem) => i.fsrs.state === State.New && !introduced.current.has(itemKey(i))
+    if (!isIntro(list[0])) return list
+    const j = list.findIndex(i => !isIntro(i))
+    if (j < 1) return list
+    const out = [...list]
+    const [practice] = out.splice(j, 1)
+    return [practice, ...out]
+  }
+
   function advance(next: StudyItem | null, atFront = false, insertAt?: number) {
-    const rest = (queue ?? []).slice(1)
+    let rest = (queue ?? []).slice(1)
     if (next && insertAt !== undefined) {
       rest.splice(Math.min(rest.length, insertAt), 0, next)
     } else if (next && atFront) {
@@ -190,6 +218,7 @@ export default function Review() {
     } else if (next && shouldRequeue(next.fsrs, new Date())) {
       rest.splice(requeuePosition(rest.length, next.fsrs, new Date()), 0, next)
     }
+    rest = spaceOutNew(rest)
     setDone(d => d + 1)
     if (rest.length === 0) {
       setQueue([])
@@ -208,9 +237,9 @@ export default function Review() {
   }
 
   /** Ответ в объективных форматах: фиксируем результат и открываем ответ с предложенной оценкой */
-  function submitObjective(value: string) {
+  function submitObjective(value: string, byTyping = false) {
     if (!task || revealed) return
-    const ok = task.format === 'type'
+    const ok = byTyping || task.format === 'type'
       ? (task.item.view.answerNum ? checkNumeric(value, task.answer) : checkTyped(value, task.answer))
       : value.trim().toLowerCase() === task.answer.toLowerCase() ? 'correct' : 'wrong'
     answeredMs.current = Date.now() - shownAt.current
@@ -233,6 +262,7 @@ export default function Review() {
       // интро — знакомство, не вспоминание: FSRS не трогаем; отработка через пару карточек
       if (task.format === 'intro' && g !== Rating.Easy) {
         introduced.current.add(itemKey(task.item))
+        sinceIntro.current = 0
         await markIntroduced(task.item)
         advance(task.item, false, 2)
         return
@@ -249,6 +279,7 @@ export default function Review() {
       }
 
       creditedSec.current += Math.min(elapsed, cardTimeCap(task.item.view.kind)) / 1000
+      sinceIntro.current++
 
       // комбо верных подряд — чистый session-делайт, на FSRS не влияет
       const passed = verdict !== null ? verdict !== 'wrong' : g > Rating.Again
@@ -290,7 +321,7 @@ export default function Review() {
       }
       if (e.code === 'Enter' && typing && !revealed) {
         e.preventDefault()
-        submitObjective(typed)
+        if (typed.trim()) submitObjective(typed, true)
       } else if ((e.code === 'Space' && !typing) || (e.code === 'Enter' && !typing)) {
         e.preventDefault()
         if (!revealed && task.format === 'reveal') setRevealed(true)
@@ -336,11 +367,16 @@ export default function Review() {
   const answerWord = isPrep ? card.prep : task.format === 'mc' && card.choices.length >= 2 ? task.answer : card.word
   const isNumeric = !!card.answerNum
   const isAuthored = card.choices.length >= 2
+  // «показ» тоже даёт ввести слово: самооценка без проверки завышает результат
+  // («показалось знакомым»). Многословные ответы вводить не просим.
+  const canTypeAnswer = task.format === 'reveal' && !card.word.includes(' ')
   // у ввода слова цель задана значением: иначе «popular» вместо «ubiquitous» — честный ответ носителя, а не ошибка
   const taskHint =
-    task.format === 'mc' ? (isAuthored ? 'Выберите правильный вариант' : 'Какое слово подходит в пропуск?')
+    task.cue === 'meaning' ? (canTypeAnswer || task.format === 'type' ? 'Какое это слово? Впишите его' : 'Какое это слово?')
+    : task.format === 'mc' ? (isAuthored ? 'Выберите правильный вариант' : 'Какое слово подходит в пропуск?')
     : task.format === 'prep' ? 'Какой предлог здесь правильный?'
     : task.format === 'type' ? (isNumeric ? 'Решите и введите ответ' : card.meaning_ru ? `Впишите слово со значением «${card.meaning_ru}»` : 'Впишите слово, подходящее в пропуск')
+    : canTypeAnswer ? 'Вспомните слово и впишите — или посмотрите ответ'
     : 'Вспомните слово — потом проверьте себя'
 
   // зачётное время: база дня + закрытые карточки (с капом) + текущая карточка (с капом)
@@ -384,11 +420,20 @@ export default function Review() {
           {isPrep && <> · {card.word}</>}
           {card.desmos && <> · Desmos</>}
         </span>
-        <Sentence context={sentence} word={answerWord} revealed={revealed} />
+        {task.cue === 'meaning' && !revealed ? (
+          /* пример уже показан на знакомстве — вспоминаем слово по значению, а не по нему же */
+          <div className="rev-cue">
+            <div className="rev-cue-ru">{card.meaning_ru}</div>
+            {card.meaning_en && <div className="rev-cue-en">{card.meaning_en}</div>}
+          </div>
+        ) : (
+          <Sentence context={sentence} word={answerWord} revealed={revealed} />
+        )}
         {!revealed && <div className="rev-task">{taskHint}</div>}
-        {!revealed && task.format === 'type' && (
+        {!revealed && (task.format === 'type' || canTypeAnswer) && (
           // поле ПОД предложением: всегда видно; кнопка «Проверить» — в нижнем листе,
-          // который сам поднимается над клавиатурой (см. --kb)
+          // который сам поднимается над клавиатурой (см. --kb).
+          // В «показе» фокус не форсируем: сначала вспомнить молча, клавиатура — по тапу
           <input
             ref={inputRef}
             className="type-input"
@@ -397,7 +442,7 @@ export default function Review() {
             onFocus={e => e.currentTarget.scrollIntoView({ block: 'nearest' })}
             placeholder={isNumeric ? 'Ваш ответ…' : 'Введите слово…'}
             inputMode={isNumeric ? 'decimal' : 'text'}
-            autoFocus
+            autoFocus={task.format === 'type'}
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
@@ -457,10 +502,19 @@ export default function Review() {
           </>
         ) : !revealed ? (
           task.format === 'reveal' ? (
-            <>
-              <button className="btn btn-green" onClick={() => setRevealed(true)}>Показать ответ</button>
-              <div className="hint-keys kb-only">Space — показать</div>
-            </>
+            canTypeAnswer ? (
+              <>
+                <button className="btn btn-green" onClick={() => submitObjective(typed, true)} disabled={!typed.trim()}>
+                  Проверить
+                </button>
+                <button className="intro-know" onClick={() => setRevealed(true)}>Не помню — показать ответ</button>
+              </>
+            ) : (
+              <>
+                <button className="btn btn-green" onClick={() => setRevealed(true)}>Показать ответ</button>
+                <div className="hint-keys kb-only">Space — показать</div>
+              </>
+            )
           ) : task.format === 'type' ? (
             <button className="btn btn-green" onClick={() => submitObjective(typed)} disabled={!typed.trim()}>
               Проверить

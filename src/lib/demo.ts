@@ -62,6 +62,11 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
       mathCard('math-sys', -1)
     ] : v === 'new' ? [
       card('ephemeral', 'недолговечный, мимолётный', 'lasting for a very short time', 'The fame of most online trends is ______, fading within weeks.', 0, 0, 0)
+    ] : v === 'newmany' ? [
+      // худший случай для разрядки: одни новые, повторений-разделителей нет
+      card('ephemeral', 'недолговечный', 'lasting a very short time', 'The fame of trends is ______, fading fast.', 0, 0, 0),
+      card('tenuous', 'шаткий', 'very weak', 'The link remains ______ at best.', 0, 0, 0),
+      card('prudent', 'благоразумный', 'acting with care', 'Saving is a ______ habit.', 0, 0, 0)
     ] : v === 'type' ? [
       card('ephemeral', 'недолговечный, мимолётный', 'lasting for a very short time', 'The fame of most online trends is ______, fading within weeks.', 2, 1, -1),
       card('prudent', 'благоразумный', 'acting with care', 'Saving is a ______ habit.', 0, 0, 5)
