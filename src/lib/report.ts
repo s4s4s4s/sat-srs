@@ -168,7 +168,9 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   // линтер карточек: битые файлы ПОИМЁННО + структурные дефекты, которые делают карточку мёртвой или нечестной
   const brokenPaths = cards.filter(c => c.broken).map(c => c.path.split('/').pop())
   const badAnswer = active.filter(v => v.choices.length >= 2 && (!v.answerText || !v.choices.some(ch => ch.trim().toLowerCase() === v.answerText.trim().toLowerCase())))
-  const noBlank = active.filter(v => v.kind === 'vocab' && v.context && !/_{3,}/.test(v.context))
+  // пропуск проверяем в КАЖДОМ примере: ротация показывает любой из contexts, а не только первый.
+  // Пример без пропуска печатается целиком (вместе с искомым словом) и уходит в FSRS как честный ответ
+  const noBlank = active.filter(v => v.kind === 'vocab' && v.contexts.some(c => c && !/_{3,}/.test(c)))
   const noPrepBlank = active.filter(v => v.prep && v.prepContext && !/_{3,}/.test(v.prepContext))
   if (brokenPaths.length || badAnswer.length || noBlank.length || noPrepBlank.length) {
     out.push('## ⚠️ Дефекты карточек — исправить тьютору', '')
