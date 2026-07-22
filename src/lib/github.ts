@@ -9,34 +9,69 @@ export class GhError extends Error {
 /** Срок жизни PAT из заголовка последнего ответа GitHub (ISO-строка или null) */
 export let tokenExpiration: string | null = null
 
+const REQ_TIMEOUT_MS = 20000
+const MAX_RETRIES = 3
+
+/** Экспоненциальный бэкофф с джиттером; уважает Retry-After (сек), потолок 15 с */
+function backoff(attempt: number, retryAfterSec = 0): Promise<void> {
+  const base = retryAfterSec > 0 ? retryAfterSec * 1000 : 500 * 2 ** attempt
+  const ms = Math.min(base + Math.random() * 400, 15000)
+  return new Promise(r => setTimeout(r, ms))
+}
+
 export class GitHubClient {
   constructor(private token: string, private owner: string, private repo: string) {}
 
   private async req(method: string, path: string, body?: unknown): Promise<any> {
-    let res: Response
-    try {
-      res = await fetch(`https://api.github.com/repos/${this.owner}/${this.repo}${path}`, {
-        method,
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-          ...(body ? { 'Content-Type': 'application/json' } : {})
-        },
-        body: body ? JSON.stringify(body) : undefined
-      })
-    } catch (e: any) {
-      // status 0 = сетевой отказ самого fetch; только он трактуется как «офлайн»
-      throw new GhError(0, `сеть: ${e?.message ?? e}`)
-    }
-    const exp = res.headers.get('github-authentication-token-expiration')
-    if (exp) tokenExpiration = exp
-    if (!res.ok) {
+    const url = `https://api.github.com/repos/${this.owner}/${this.repo}${path}`
+    let lastErr: GhError | null = null
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS)
+      let res: Response
+      try {
+        res = await fetch(url, {
+          method,
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+            ...(body ? { 'Content-Type': 'application/json' } : {})
+          },
+          body: body ? JSON.stringify(body) : undefined,
+          signal: ctrl.signal
+        })
+      } catch (e: any) {
+        clearTimeout(timer)
+        // abort (наш таймаут) или сетевой отказ fetch — оба ретраибельны
+        lastErr = new GhError(0, ctrl.signal.aborted ? `таймаут ${REQ_TIMEOUT_MS} мс` : `сеть: ${e?.message ?? e}`)
+        if (attempt < MAX_RETRIES) { await backoff(attempt); continue }
+        throw lastErr
+      }
+      clearTimeout(timer)
+
+      const exp = res.headers.get('github-authentication-token-expiration')
+      if (exp) tokenExpiration = exp
+
+      if (res.ok) return res.json()
+
+      // Ретраибельны только 5xx и secondary-rate-limit (429 / 403 с Retry-After или исчерпанным лимитом).
+      // 401/404/409/422 — детерминированы (протухший токен, нет ветки, гонка ref) → сразу наверх:
+      // 422/409 ловит doSync и перечитывает — их ретраить внутри req НЕЛЬЗЯ.
+      const retryAfter = Number(res.headers.get('retry-after'))
+      const isRateLimit = res.status === 429 ||
+        (res.status === 403 && (retryAfter > 0 || res.headers.get('x-ratelimit-remaining') === '0'))
+      const retryable = res.status >= 500 || isRateLimit
       let msg = res.statusText
       try { msg = (await res.json()).message ?? msg } catch { /* ignore */ }
-      throw new GhError(res.status, `GitHub ${res.status}: ${msg}`)
+      lastErr = new GhError(res.status, `GitHub ${res.status}: ${msg}`)
+      if (retryable && attempt < MAX_RETRIES) {
+        await backoff(attempt, Number.isFinite(retryAfter) ? retryAfter : 0)
+        continue
+      }
+      throw lastErr
     }
-    return res.json()
+    throw lastErr ?? new GhError(0, 'req: неизвестная ошибка')
   }
 
   async checkRepo(): Promise<{ default_branch: string }> {

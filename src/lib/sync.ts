@@ -145,18 +145,28 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
     else if (isJournalPath(e.path, settings.basePath)) remoteJournals.push(e)
   }
 
-  // сетевые запросы — ДО транзакции; снапшот используется только для sha-skip
+  // сетевые запросы — ДО транзакции; снапшот используется только для sha-skip.
+  // Блобы качаются пулом (CONCURRENCY параллельно), а не по одному: 150+ файлов
+  // последовательно = 150+ round-trip. Порядок неважен — applyPull индексирует по path.
   const fetched: db.FetchedCard[] = []
   const conflictedFiles: string[] = []
-  for (const [path, entry] of remoteCards) {
-    if (shaByPath.get(path) === entry.sha) continue
-    const text = await gh.getBlobText(entry.sha)
-    const remote = parseMd(text)
-    // git-конфликт-маркеры (watcher слил криво) — карантин, даже если YAML случайно распарсился
-    const conflicted = text.includes('<<<<<<<') || text.includes('>>>>>>>')
-    if (conflicted) conflictedFiles.push(path.split('/').pop()!)
-    fetched.push({ path, sha: entry.sha, fm: remote.fm, body: remote.body, broken: conflicted ? 1 : remote.broken })
+  const toFetch = [...remoteCards].filter(([path, entry]) => shaByPath.get(path) !== entry.sha)
+  const CONCURRENCY = 8
+  let nextIdx = 0
+  const fetchWorker = async () => {
+    for (;;) {
+      const i = nextIdx++
+      if (i >= toFetch.length) return
+      const [path, entry] = toFetch[i]
+      const text = await gh.getBlobText(entry.sha)
+      const remote = parseMd(text)
+      // git-конфликт-маркеры (watcher слил криво) — карантин, даже если YAML случайно распарсился
+      const conflicted = text.includes('<<<<<<<') || text.includes('>>>>>>>')
+      if (conflicted) conflictedFiles.push(path.split('/').pop()!)
+      fetched.push({ path, sha: entry.sha, fm: remote.fm, body: remote.body, broken: conflicted ? 1 : remote.broken })
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, toFetch.length) }, fetchWorker))
   // подтверждение массового удаления: второй Синк в течение 10 минут после предупреждения
   const pendingTs = await db.kvGet<number>('pendingMassDelete')
   const allowMass = !!pendingTs && Date.now() - pendingTs < 10 * 60_000
