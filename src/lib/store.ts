@@ -1,8 +1,8 @@
 import { useSyncExternalStore } from 'react'
 import { State, Rating, type Grade, type Card as FsrsCard } from 'ts-fsrs'
 import * as db from './db'
-import { sync, type SyncStatus } from './sync'
-import { tokenExpiration } from './github'
+import { sync, syncIdle, type SyncStatus } from './sync'
+import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
 import { makeScheduler, effectiveRetention, homeCounts, DUE_CAP, type Section } from './scheduler'
 import { dayKey, isoLocal, setHomeOffset } from './daytime'
@@ -132,6 +132,37 @@ export async function startSync(): Promise<void> {
   state.tokenExpiresAt = tokenExpiration
   emit()
   updateBadge()
+}
+
+/**
+ * Полная пересинхронизация (remote wins): локальный кэш стирается целиком и состояние
+ * строится заново из репозитория — файл без fsrs-блока снова становится New.
+ * Локальные несинканные оценки и правки при этом теряются: вызывать только по явному
+ * подтверждению пользователя. Токен и настройки сохраняются (они в localStorage).
+ * Возвращает число загруженных карточек.
+ */
+export async function fullResync(): Promise<number> {
+  if (!state.settings.pat) throw new Error('Сначала подключите репозиторий.')
+  // репозиторий проверяем ДО очистки: незачем оставлять приложение пустым,
+  // если ветка недоступна или токен протух — сбрасывать будет уже нечего
+  const gh = new GitHubClient(state.settings.pat, state.settings.owner, state.settings.repo)
+  await gh.getHead(state.settings.branch)
+  await syncIdle()
+  state.syncStatus = 'syncing'
+  state.syncError = ''
+  emit()
+  await db.clearLocalData()
+  state.cards = []
+  state.journal = []
+  state.lastSyncAt = null
+  emit()
+  await startSync()
+  // startSync ошибку не бросает — она оседает в syncStatus; для вызывающего это провал.
+  // Приведение типа нужно, потому что TS помнит присвоенное выше 'syncing' и не знает про мутацию внутри startSync.
+  if ((state.syncStatus as SyncStatus) !== 'ok') {
+    throw new Error(state.syncError || 'Не удалось загрузить карточки — нажмите Синк.')
+  }
+  return state.cards.length
 }
 
 export function views(): CardView[] {

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useApp, saveSettings, setScreen, startSync } from '../lib/store'
+import { useApp, saveSettings, setScreen, startSync, fullResync, unsyncedCount } from '../lib/store'
 import { GitHubClient } from '../lib/github'
 import { DEFAULT_SETTINGS } from '../lib/types'
 import { ChevronLeft } from '../components/Icon'
@@ -15,6 +15,9 @@ export default function SettingsScreen() {
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
+  const [resyncMsg, setResyncMsg] = useState('')
+  const [resyncErr, setResyncErr] = useState('')
   const firstRun = !app.settings.pat
 
   const set = (k: 'pat' | 'owner' | 'repo' | 'branch' | 'basePath' | 'pauseFrom' | 'pauseTo') => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -72,6 +75,21 @@ export default function SettingsScreen() {
       setScreen('home')
     } catch (e: any) {
       setErr(e?.message ?? String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function resync() {
+    setResyncMsg('')
+    setResyncErr('')
+    setBusy(true)
+    try {
+      const n = await fullResync()
+      setConfirmReset(false)
+      setResyncMsg(`Готово: загружено карточек — ${n}.`)
+    } catch (e: any) {
+      setResyncErr(e?.message ?? String(e))
     } finally {
       setBusy(false)
     }
@@ -173,6 +191,40 @@ export default function SettingsScreen() {
       <button className="btn btn-green btn-lg" onClick={() => void connect()} disabled={busy}>
         {busy ? 'Проверяю…' : firstRun ? 'Подключить' : 'Сохранить'}
       </button>
+      {!firstRun && (
+        <div className="card settings-help help-warn" style={{ marginTop: 18 }}>
+          <b>Полная пересинхронизация</b>
+          <div style={{ margin: '8px 0' }}>
+            Стирает локальные данные этого устройства и строит состояние заново из репозитория.
+            Нужна, когда приложение показывает не то, что лежит в vault: карточка без <b>fsrs</b>-блока
+            в файле снова станет новой. Раньше это требовало переустановки приложения и повторного ввода токена.
+          </div>
+          {resyncErr && <div className="form-error">{resyncErr}</div>}
+          {resyncMsg && <div className="form-ok">{resyncMsg}</div>}
+          {!confirmReset ? (
+            <button className="btn btn-red" onClick={() => setConfirmReset(true)} disabled={busy}>
+              Пересинхронизировать
+            </button>
+          ) : (
+            <>
+              <div style={{ margin: '8px 0' }}>
+                <b>Точно?</b> Оценки, ещё не уехавшие в GitHub, строки журнала и локальные правки будут
+                потеряны — восстановить их будет нельзя.
+                {unsyncedCount() > 0 && <> Сейчас не отправлено: <b>{unsyncedCount()}</b>.</>}
+                {' '}Всё состояние заново скачается из <b>{app.settings.owner}/{app.settings.repo}</b> (ветка {app.settings.branch}).
+                Токен и настройки сохранятся — вводить заново ничего не придётся.
+              </div>
+              <div className="row">
+                <button className="btn btn-red" onClick={() => void resync()} disabled={busy}>
+                  {busy ? 'Загружаю…' : 'Стереть и скачать заново'}
+                </button>
+                <button className="btn btn-white" onClick={() => setConfirmReset(false)} disabled={busy}>Отмена</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="syncline" style={{ marginTop: 12 }}>
         FSRS-6 · retention {app.settings.requestRetention} · сборка {__BUILD_ID__}
         {app.tokenExpiresAt && <> · токен до {app.tokenExpiresAt.slice(0, 10)}</>}

@@ -27,6 +27,12 @@ const isJournalPath = (p: string, base: string) =>
 
 let running: Promise<SyncResult> | null = null
 
+/** Дождаться завершения идущего цикла (или вернуться сразу, если его нет).
+ *  Нужно перед сбросом кэша: очистка посреди push-а вернула бы старые данные обратно. */
+export async function syncIdle(): Promise<void> {
+  try { await running } catch { /* исход неважен — ждём только завершения */ }
+}
+
 /** Полный цикл: pull (слияние) → push (если есть локальные изменения). Повторный вызов во время работы вернёт тот же promise. */
 export function sync(settings: Settings): Promise<SyncResult> {
   if (running) return running

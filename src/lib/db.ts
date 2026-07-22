@@ -37,6 +37,22 @@ export async function deleteCard(path: string): Promise<void> {
   await (await db()).delete('cards', path)
 }
 
+/**
+ * Полная очистка локального кэша: карточки, журнал и служебные ключи синка
+ * (shas, сырые строки журнала, метки последнего коммита) — одной транзакцией.
+ * Настройки подключения и PAT живут в localStorage и НЕ затрагиваются:
+ * в этом смысл функции — сбросить состояние без повторного ввода токена.
+ */
+export async function clearLocalData(): Promise<void> {
+  const tx = (await db()).transaction(['cards', 'journal', 'kv'], 'readwrite')
+  await Promise.all([
+    tx.objectStore('cards').clear(),
+    tx.objectStore('journal').clear(),
+    tx.objectStore('kv').clear()
+  ])
+  await tx.done
+}
+
 export interface FetchedCard {
   path: string
   sha: string
