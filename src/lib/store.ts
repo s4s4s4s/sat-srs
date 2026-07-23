@@ -4,7 +4,7 @@ import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
-import { makeScheduler, effectiveRetention, homeCounts, activeLevel, DUE_CAP, type Section } from './scheduler'
+import { makeScheduler, effectiveRetention, homeCounts, DUE_CAP, type Section } from './scheduler'
 import { dayKey, isoLocal, setHomeOffset } from './daytime'
 import { newId, newIntroducedOn } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
@@ -350,8 +350,8 @@ export async function addCard(fields: { word: string; pos: string; context: stri
   while (taken.has(path)) {
     path = `${state.settings.basePath}/${slug}-${i++}.md`
   }
-  // слово из чтения/дриллов входит в ТЕКУЩИЙ активный уровень — иначе (level=999) молча уедет в хвост
-  const isTransition = fields.pos.trim().toLowerCase() === 'transition'
+  // level НЕ проставляется здесь: уровень = ступень развития слова по содержанию, его назначает
+  // тьютор, а не дата добавления. Слово из приложения ждёт разметки тьютором (отчёт ловит «vocab без level»).
   const fm: Record<string, any> = {
     type: 'card',
     word: fields.word.trim(),
@@ -363,7 +363,6 @@ export async function addCard(fields: { word: string; pos: string; context: stri
     my_sentence: '',
     source: 'manual',
     added: dayKey(now),
-    ...(isTransition ? {} : { level: activeLevel(views()) }),
     suspended: false,
     fsrs: {
       state: 0,

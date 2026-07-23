@@ -218,6 +218,11 @@ export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<s
     // знакомство один раз за сессию; после него первая отработка — reveal (первый настоящий FSRS-рейтинг)
     return introduced?.has(itemKey(item)) ? 'reveal' : 'intro'
   }
+  // слово, которое не смогли вспомнить (Relearning после «Заново»), один раз переznakomим —
+  // то же окно-знакомство, что и у нового (значение + пример), но с другой подписью в UI
+  if (item.fsrs.state === State.Relearning && !introduced?.has(itemKey(item))) {
+    return 'intro'
+  }
   if (item.fsrs.state !== State.Review) {
     // выпускной шаг learning — объективный формат: самооценка склонна к «показалось знакомым»
     return item.fsrs.reps >= 1 && typable ? 'type' : 'reveal'

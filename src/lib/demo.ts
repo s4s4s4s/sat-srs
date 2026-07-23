@@ -51,6 +51,10 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
       fsrs: { state: 2, due: day(dueOff).toISOString(), stability: 5, difficulty: 5, elapsed_days: 0, scheduled_days: 1, learning_steps: 0, reps: 1, lapses: 0, last_review: day(-2).toISOString() } }
   })
   const cards: CardRec[] =
+    v === 'reintro' ? [
+      // слово в Relearning (после «Заново») — первый показ должен быть окном-знакомством с подписью «Подзабылось»
+      card('ubiquitous', 'вездесущий', 'present everywhere', 'Smartphones are ______ now.', 3, 3, -1)
+    ] :
     v === 'path' ? [
       // визуальная проверка экрана «Путь»: L1 пройден, L2 активный, L3–L4 заперты
       card('adhere', 'придерживаться', 'to stick to', 'Members must ______ to the rules.', 2, 4, 3, { pos: 'verb', level: 1 }),

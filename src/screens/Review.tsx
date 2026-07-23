@@ -363,6 +363,8 @@ export default function Review() {
   const card = task.item.view
   const isPrep = task.format === 'prep'
   const isIntro = task.format === 'intro'
+  // переznakomство: слово не смогли вспомнить («Заново» → Relearning) — то же окно, другая подпись
+  const isReintro = isIntro && task.item.fsrs.state === State.Relearning
   const sentence = task.ctx
   const answerWord = isPrep ? card.prep : task.format === 'mc' && card.choices.length >= 2 ? task.answer : card.word
   const isNumeric = !!card.answerNum
@@ -397,7 +399,7 @@ export default function Review() {
       <div className="rev-body" key={done}>
         {isIntro ? (
           <>
-            <span className="pill pill-green">Новое слово</span>
+            <span className={`pill ${isReintro ? 'pill-yellow' : 'pill-green'}`}>{isReintro ? 'Подзабылось' : 'Новое слово'}</span>
             <div className="intro">
               {card.kind === 'vocab' && canSpeak() ? (
                 <button className="speak-word intro-word" onClick={() => speak(card.word)} aria-label="Произнести">
