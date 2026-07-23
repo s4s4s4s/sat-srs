@@ -68,8 +68,8 @@ function pickContext(view: CardView): string {
   return pool[idx]
 }
 
-function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: Set<string>): Task {
-  const format = pickFormat(item, deck.map(r => r), introduced)
+function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: Set<string>, lapsed?: Set<string>): Task {
+  const format = pickFormat(item, deck.map(r => r), introduced, lapsed)
   const ctx = format === 'prep' ? item.view.prepContext : pickContext(item.view)
   // если у слова один пример и он уже показан на знакомстве, спрашивать по нему нельзя:
   // это проверка памяти на предложение, а не на слово. Тогда цель — значение.
@@ -142,6 +142,8 @@ export default function Review() {
   const pendingAdvance = useRef<{ next: StudyItem; atFront: boolean } | null>(null)
   // слова, уже показанные интро в этой сессии: их New-показы дальше — отработка, не интро
   const introduced = useRef(new Set<string>())
+  // слова, только что помеченные «Заново» (не вспомнил): следующий показ — окно-переznakomство «Подзабылось»
+  const lapsed = useRef(new Set<string>())
   // сколько отработок прошло с прошлого знакомства (новые слова не идут пачкой)
   const sinceIntro = useRef(NEW_GAP)
   const answeredMs = useRef(0)
@@ -159,7 +161,7 @@ export default function Review() {
   // задание пересобирается при смене головы очереди
   useEffect(() => {
     if (!head) { setTask(null); return }
-    setTask(makeTask(head, deck, introduced.current))
+    setTask(makeTask(head, deck, introduced.current, lapsed.current))
     setRevealed(false)
     setPicked(null)
     setTyped('')
@@ -259,6 +261,8 @@ export default function Review() {
     try {
       const elapsed = Date.now() - shownAt.current
 
+      // окно-знакомство показано (в т.ч. переznakomство «Подзабылось») — флаг провала снят
+      if (task.format === 'intro') lapsed.current.delete(itemKey(task.item))
       // интро — знакомство, не вспоминание: FSRS не трогаем; отработка через пару карточек
       if (task.format === 'intro' && g !== Rating.Easy) {
         introduced.current.add(itemKey(task.item))
@@ -288,7 +292,8 @@ export default function Review() {
       const r = res.current
       r.reviews++
       if (prevState === State.New) r.newSeen++
-      if (g === Rating.Again) r.again++
+      // «Заново» на любой стадии → следующий показ этого слова будет окном-переznakomством «Подзабылось»
+      if (g === Rating.Again) { r.again++; lapsed.current.add(itemKey(task.item)) }
       if (prevState === State.Review) {
         r.totalRev++
         if (g > Rating.Again) r.passRev++
@@ -363,8 +368,9 @@ export default function Review() {
   const card = task.item.view
   const isPrep = task.format === 'prep'
   const isIntro = task.format === 'intro'
-  // переznakomство: слово не смогли вспомнить («Заново» → Relearning) — то же окно, другая подпись
-  const isReintro = isIntro && task.item.fsrs.state === State.Relearning
+  // переznakomство: слово не смогли вспомнить («Заново») — то же окно, подпись «Подзабылось».
+  // Ловим и внутрисессионный провал (lapsed, на любой стадии), и приход в Relearning из прошлой сессии.
+  const isReintro = isIntro && (lapsed.current.has(itemKey(task.item)) || task.item.fsrs.state === State.Relearning)
   const sentence = task.ctx
   const answerWord = isPrep ? card.prep : task.format === 'mc' && card.choices.length >= 2 ? task.answer : card.word
   const isNumeric = !!card.answerNum
