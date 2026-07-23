@@ -68,8 +68,8 @@ function pickContext(view: CardView): string {
   return pool[idx]
 }
 
-function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: Set<string>, lapsed?: Set<string>): Task {
-  const format = pickFormat(item, deck.map(r => r), introduced, lapsed)
+function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true): Task {
+  const format = pickFormat(item, deck.map(r => r), introduced, lapsed, reintroAllowed)
   const ctx = format === 'prep' ? item.view.prepContext : pickContext(item.view)
   // если у слова один пример и он уже показан на знакомстве, спрашивать по нему нельзя:
   // это проверка памяти на предложение, а не на слово. Тогда цель — значение.
@@ -144,6 +144,10 @@ export default function Review() {
   const introduced = useRef(new Set<string>())
   // слова, только что помеченные «Заново» (не вспомнил): следующий показ — окно-переznakomство «Подзабылось»
   const lapsed = useRef(new Set<string>())
+  // окон-знакомств за урок (новые intro + «Подзабылось»): «Подзабылось» для мозга — та же нагрузка,
+  // поэтому входит в общий урочный лимит. Новые приоритетны, переznakomство берёт остаток.
+  const introShown = useRef(0)
+  const introLimit = Math.max(1, app.settings.newPerLesson || 3)
   // сколько отработок прошло с прошлого знакомства (новые слова не идут пачкой)
   const sinceIntro = useRef(NEW_GAP)
   const answeredMs = useRef(0)
@@ -161,7 +165,16 @@ export default function Review() {
   // задание пересобирается при смене головы очереди
   useEffect(() => {
     if (!head) { setTask(null); return }
-    setTask(makeTask(head, deck, introduced.current, lapsed.current))
+    // новое слово сверх урочного лимита окон-знакомств не вводим (переznakomство уже съело бюджет) —
+    // новое нельзя показать упражнением, поэтому откладываем его на следующий урок/день, а не показываем
+    const isNewIntro = head.fsrs.state === State.New && !introduced.current.has(itemKey(head))
+      && head.view.choices.length < 2 && !head.view.answerNum && head.skill !== 'prep'
+    if (isNewIntro && introShown.current >= introLimit) {
+      const rest = (queue ?? []).slice(1)
+      if (rest.length === 0) { setQueue([]); void finish(true) } else setQueue(rest)
+      return
+    }
+    setTask(makeTask(head, deck, introduced.current, lapsed.current, introShown.current < introLimit))
     setRevealed(false)
     setPicked(null)
     setTyped('')
@@ -204,7 +217,7 @@ export default function Review() {
     // «показ без упражнения» = всё, что отрисуется окном-знакомством: новое (intro) И переznakomство
     // после «Заново» (lapsed/Relearning → intro). Иначе переznakomство считалось бы разделителем-отработкой
     // и несколько показов слипались бы подряд.
-    const isIntro = (i: StudyItem) => pickFormat(i, deck, introduced.current, lapsed.current) === 'intro'
+    const isIntro = (i: StudyItem) => pickFormat(i, deck, introduced.current, lapsed.current, introShown.current < introLimit) === 'intro'
     if (!isIntro(list[0])) return list
     const j = list.findIndex(i => !isIntro(i))
     if (j < 1) return list
@@ -264,8 +277,8 @@ export default function Review() {
     try {
       const elapsed = Date.now() - shownAt.current
 
-      // окно-знакомство показано (в т.ч. переznakomство «Подзабылось») — флаг провала снят
-      if (task.format === 'intro') lapsed.current.delete(itemKey(task.item))
+      // окно-знакомство показано (новое ИЛИ «Подзабылось») — тратит урочный лимит, флаг провала снят
+      if (task.format === 'intro') { introShown.current++; lapsed.current.delete(itemKey(task.item)) }
       // интро — знакомство, не вспоминание: FSRS не трогаем; отработка через пару карточек
       if (task.format === 'intro' && g !== Rating.Easy) {
         introduced.current.add(itemKey(task.item))
@@ -295,8 +308,10 @@ export default function Review() {
       const r = res.current
       r.reviews++
       if (prevState === State.New) r.newSeen++
-      // «Заново» на любой стадии → следующий показ этого слова будет окном-переznakomством «Подзабылось»
+      // «Заново» на любой стадии → следующий показ этого слова будет окном-переznakomством «Подзабылось»;
+      // вспомнил (не «Заново») → снимаем флаг подзабывания
       if (g === Rating.Again) { r.again++; lapsed.current.add(itemKey(task.item)) }
+      else lapsed.current.delete(itemKey(task.item))
       if (prevState === State.Review) {
         r.totalRev++
         if (g > Rating.Again) r.passRev++

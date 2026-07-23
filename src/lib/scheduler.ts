@@ -207,7 +207,7 @@ export function shouldRequeue(next: FsrsCard, now: Date): boolean {
  * - recall в Review → чередование по reps: MC (формат Words in Context цифрового SAT,
  *   дистракторы из колоды) и ввод с клавиатуры (production + написание).
  */
-export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>): Format {
+export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true): Format {
   if (item.skill === 'prep') return 'prep'
   // авторские варианты (error/grammar/math) — всегда MC, включая первый показ
   if (item.view.choices.length >= 2) return 'mc'
@@ -220,9 +220,11 @@ export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<s
   }
   // слово, которое не смогли вспомнить («Заново» в этой сессии — на ЛЮБОЙ стадии, не только Review;
   // либо пришедшее в Relearning из прошлой сессии) — один раз переznakomим окном-знакомством
-  // (значение + пример), в UI подпись «Подзабылось» вместо «Новое слово».
+  // (значение + пример), в UI подпись «Подзабылось» вместо «Новое слово». Но окно-переznakomство
+  // тратит тот же урочный лимит, что и новые (для мозга «Подзабылось» — та же нагрузка знакомства):
+  // сверх лимита провал отрабатывается обычным упражнением, без окна.
   const failed = lapsed?.has(itemKey(item)) || (item.fsrs.state === State.Relearning && !introduced?.has(itemKey(item)))
-  if (failed) return 'intro'
+  if (failed && reintroAllowed) return 'intro'
   if (item.fsrs.state !== State.Review) {
     // выпускной шаг learning — объективный формат: самооценка склонна к «показалось знакомым»
     return item.fsrs.reps >= 1 && typable ? 'type' : 'reveal'
