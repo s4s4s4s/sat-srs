@@ -201,7 +201,10 @@ export default function Review() {
    */
   function spaceOutNew(list: StudyItem[]): StudyItem[] {
     if (sinceIntro.current >= NEW_GAP || !list.length) return list
-    const isIntro = (i: StudyItem) => i.fsrs.state === State.New && !introduced.current.has(itemKey(i))
+    // «показ без упражнения» = всё, что отрисуется окном-знакомством: новое (intro) И переznakomство
+    // после «Заново» (lapsed/Relearning → intro). Иначе переznakomство считалось бы разделителем-отработкой
+    // и несколько показов слипались бы подряд.
+    const isIntro = (i: StudyItem) => pickFormat(i, deck, introduced.current, lapsed.current) === 'intro'
     if (!isIntro(list[0])) return list
     const j = list.findIndex(i => !isIntro(i))
     if (j < 1) return list
