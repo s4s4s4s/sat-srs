@@ -3,6 +3,7 @@ import type { CardRec, JournalRec, JournalLine } from './types'
 import { cardView } from './yamlfm'
 import { addDaysKey, dayKey, isoLocal } from './daytime'
 import { minutesByDay, streak, trueRetention30, type PauseRange } from './journal'
+import { activeLevel, levelStats, isLevelled } from './scheduler'
 
 /**
  * Автогенерируемый отчёт для ИИ-тьютора: `_отчёт.md` рядом с карточками.
@@ -131,6 +132,10 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
 
   out.push('## Сводка', '')
   out.push(`- Слов: **${active.length}** (new ${byState.new} · learning ${byState.learning} · review ${byState.review}) · prep-навыков: ${prepCount}${brokenCount ? ` · битых файлов: ⚠️ ${brokenCount}` : ''}`)
+  const actLv = activeLevel(active)
+  const lvStats = levelStats(active)
+  const curLv = lvStats.find(s => s.level === actLv)
+  if (curLv) out.push(`- Активный уровень: **${actLv}** (введено ${curLv.introduced}/${curLv.total} · в review ${curLv.review}) · всего уровней: ${lvStats.length}`)
   out.push(`- Серия: **${st.days} дн** (${st.todayDone ? 'сегодня зачтён' : 'сегодня НЕ зачтён'}) · минут сегодня: ${Math.round(minutes.get(today) ?? 0)} · за 7 дн: ${Math.round(min7)}`)
   out.push(`- True retention 30 дн (review-показы): **${ret.pct === null ? '—' : ret.pct + '%'}**${ret.n ? ` (n=${ret.n})` : ''}`)
   const fmtNames: Record<string, string> = { mc: 'MC', type: 'ввод', prep: 'предлоги', reveal: 'показ' }
@@ -172,12 +177,15 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   // Пример без пропуска печатается целиком (вместе с искомым словом) и уходит в FSRS как честный ответ
   const noBlank = active.filter(v => v.kind === 'vocab' && v.contexts.some(c => c && !/_{3,}/.test(c)))
   const noPrepBlank = active.filter(v => v.prep && v.prepContext && !/_{3,}/.test(v.prepContext))
-  if (brokenPaths.length || badAnswer.length || noBlank.length || noPrepBlank.length) {
+  // словарь без уровня уедет в хвост-999 позади всех размеченных — «тихая смерть»: слово никогда не всплывёт
+  const noLevel = active.filter(v => isLevelled(v) && v.level >= 999)
+  if (brokenPaths.length || badAnswer.length || noBlank.length || noPrepBlank.length || noLevel.length) {
     out.push('## ⚠️ Дефекты карточек — исправить тьютору', '')
     if (brokenPaths.length) out.push(`- **Битый YAML (карточка исключена из обучения!):** ${brokenPaths.join(', ')}`)
     if (badAnswer.length) out.push(`- **answer отсутствует или не совпадает ни с одним choices (карточка невыигрываема):** ${badAnswer.map(v => v.slug).join(', ')}`)
     if (noBlank.length) out.push(`- Нет пропуска ______ в context: ${noBlank.map(v => v.slug).join(', ')}`)
     if (noPrepBlank.length) out.push(`- Нет пропуска ______ в prep_context: ${noPrepBlank.map(v => v.slug).join(', ')}`)
+    if (noLevel.length) out.push(`- **vocab без level (уедет в хвост-999, не всплывёт при обычном темпе):** ${noLevel.map(v => v.slug).join(', ')}`)
     out.push('')
   }
 
@@ -199,20 +207,21 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   }
 
   out.push('## Слова', '')
-  out.push('| слово | добавлено | первый показ | сост. | стаб., дн | след. повтор | lapses | reps | prep |')
-  out.push('|---|---|---|---|---|---|---|---|---|')
+  out.push('| слово | ур. | добавлено | первый показ | сост. | стаб., дн | след. повтор | lapses | reps | prep |')
+  out.push('|---|---|---|---|---|---|---|---|---|---|')
   const sorted = [...active].sort((a, b) => a.fsrs.due.getTime() - b.fsrs.due.getTime())
   const cap = 300
   for (const v of sorted.slice(0, cap)) {
     const rec = cards.find(c => c.path === v.path)
     const firstSeen = rec?.fm.first_seen ?? '—'
     const added = rec?.fm.added ?? '—'
+    const lv = isLevelled(v) ? (v.level >= 999 ? '⚠' : String(v.level)) : '—'
     const prep = v.prep
       ? `${v.prep} · ${STATE_RU[v.fsrsPrep!.state]}${v.fsrsPrep!.state !== State.New ? ' · ' + fmtDay(v.fsrsPrep!.due) : ''}`
       : '—'
-    out.push(`| ${v.word} | ${added} | ${firstSeen} | ${STATE_RU[v.fsrs.state]} | ${v.fsrs.stability ? v.fsrs.stability.toFixed(1) : '0'} | ${v.fsrs.state === State.New ? '—' : fmtDay(v.fsrs.due)} | ${v.fsrs.lapses} | ${v.fsrs.reps} | ${prep} |`)
+    out.push(`| ${v.word} | ${lv} | ${added} | ${firstSeen} | ${STATE_RU[v.fsrs.state]} | ${v.fsrs.stability ? v.fsrs.stability.toFixed(1) : '0'} | ${v.fsrs.state === State.New ? '—' : fmtDay(v.fsrs.due)} | ${v.fsrs.lapses} | ${v.fsrs.reps} | ${prep} |`)
   }
-  if (sorted.length > cap) out.push(`| … ещё ${sorted.length - cap} | | | | | | | | |`)
+  if (sorted.length > cap) out.push(`| … ещё ${sorted.length - cap} | | | | | | | | | |`)
   out.push('')
   return out.join('\n')
 }

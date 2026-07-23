@@ -887,6 +887,56 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
   }
 }
 
+/* ── Путь (уровни) ──────────────────────────────────────────────── */
+.path-chip {
+  display: flex; align-items: center; gap: 6px;
+  margin: 2px 0 10px; padding: 7px 12px;
+  background: var(--blue-soft); border: 1px solid var(--blue-line);
+  border-radius: var(--r-pill); color: var(--blue-text);
+  font-size: 13.5px; font-weight: 700; cursor: pointer; width: fit-content;
+}
+.path-chip-arr { font-size: 16px; line-height: 1; opacity: .7; }
+
+.path-track { display: flex; flex-direction: column; gap: 10px; }
+.path-node {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+}
+.path-node.active { border-color: var(--blue-line); box-shadow: 0 0 0 2px var(--ring), var(--shadow-card); }
+.path-node.locked { opacity: .62; }
+.path-node.done .path-ring { --ring-col: var(--green); }
+.path-node.active .path-ring { --ring-col: var(--blue); }
+.path-node.partial .path-ring { --ring-col: var(--blue); }
+.path-node.locked .path-ring { --ring-col: var(--line-strong); }
+
+.path-ring {
+  flex: none; width: 46px; height: 46px; border-radius: 50%;
+  background: conic-gradient(var(--ring-col, var(--blue)) var(--p, 0%), var(--surface2) 0);
+  display: grid; place-items: center;
+}
+.path-ring-mid {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--surface); display: grid; place-items: center;
+  color: var(--ring-col, var(--blue));
+}
+.path-node.done .path-ring-mid { color: var(--green); }
+.path-node.locked .path-ring-mid { color: var(--text-faint); }
+
+.path-body { min-width: 0; }
+.path-name {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 15.5px; font-weight: 800; color: var(--text-strong);
+}
+.path-tag {
+  font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 7px; border-radius: var(--r-pill);
+  background: var(--blue-soft); color: var(--blue-text);
+}
+.path-sub { margin-top: 3px; font-size: 13px; color: var(--text2); }
+.path-mastery { color: var(--green-text); }
+
 /* ── Доступность ────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

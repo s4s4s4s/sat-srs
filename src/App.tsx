@@ -5,6 +5,7 @@ import Summary from './screens/Summary'
 import AddCard from './screens/AddCard'
 import Stats from './screens/Stats'
 import SettingsScreen from './screens/Settings'
+import Path from './screens/Path'
 
 export default function App() {
   const app = useApp()
@@ -15,6 +16,7 @@ export default function App() {
       case 'summary': return <Summary />
       case 'add': return <AddCard />
       case 'stats': return <Stats />
+      case 'path': return <Path />
       case 'settings': return <SettingsScreen />
       default: return <Home />
     }

@@ -7,9 +7,11 @@ export function makeScheduler(requestRetention: number): FSRS {
   return fsrs(generatorParameters({ request_retention: requestRetention, enable_fuzz: true }))
 }
 
-/** Экзамен и потолок интервалов: всё должно вернуться на повтор до SAT */
-export const EXAM_DATE = new Date(2026, 11, 5)   // 05.12.2026, локально
-export const DUE_CAP = new Date(2026, 10, 28)    // 28.11.2026
+/** Экзамен и потолок интервалов: всё должно вернуться на повтор до SAT.
+    07.11 — суперскор-попытка (реально зачитываемый балл); конфиг покрывает и диагностическую 03.10.
+    Решение А. 23.07 (см. [[План SRS-уровни]] · [[Метрики]]). */
+export const EXAM_DATE = new Date(2026, 10, 7)   // 07.11.2026, локально
+export const DUE_CAP = new Date(2026, 9, 31)     // 31.10.2026
 
 /** Последние 2 недели перед экзаменом — retention поднимается до 0.95 */
 export function effectiveRetention(base: number, now: Date = new Date()): number {
@@ -50,6 +52,46 @@ export function sectionOf(v: CardView): Section {
   // грамматика: пунктуация/правила SEC + связки/логика EOI — отдельно от словаря
   if (v.kind === 'grammar' || v.domain === 'SEC' || v.domain === 'EOI' || v.pos === 'transition') return 'grammar'
   return 'rw'
+}
+
+/** Приоритет типа при выборе новых: error/grammar (доказанные пробелы) → math → словарь */
+export function kindRank(v: CardView): number {
+  const r: Record<string, number> = { error: 0, grammar: 1, math: 2 }
+  return r[v.kind] ?? 3
+}
+
+/** Карточка, которой управляет система уровней: словарь без связок. Только у неё осмыслен level. */
+export function isLevelled(v: CardView): boolean {
+  return v.kind === 'vocab' && v.pos !== 'transition'
+}
+
+/**
+ * Текущий активный уровень: минимальный уровень со ещё не введёнными (New) словами.
+ * Все ранние уровни введены → берём максимальный существующий (новые слова падают к последнему).
+ * Уровней нет вовсе → 1. Используется для штампа level в самодобавленные карточки и для UI.
+ */
+export function activeLevel(cards: CardView[]): number {
+  const levelled = cards.filter(c => !c.suspended && isLevelled(c) && c.level < 999)
+  if (!levelled.length) return 1
+  const fresh = levelled.filter(c => c.fsrs.state === State.New)
+  if (fresh.length) return Math.min(...fresh.map(c => c.level))
+  return Math.max(...levelled.map(c => c.level))
+}
+
+export interface LevelStat { level: number; total: number; introduced: number; review: number }
+
+/** Прогресс по уровням для экрана «Путь»: сколько слов покинуло New (introduced) и ушло в Review (mastery). */
+export function levelStats(cards: CardView[]): LevelStat[] {
+  const m = new Map<number, LevelStat>()
+  for (const c of cards) {
+    if (c.suspended || !isLevelled(c) || c.level >= 999) continue
+    const e = m.get(c.level) ?? { level: c.level, total: 0, introduced: 0, review: 0 }
+    e.total++
+    if (c.fsrs.state !== State.New) e.introduced++
+    if (c.fsrs.state === State.Review) e.review++
+    m.set(c.level, e)
+  }
+  return [...m.values()].sort((a, b) => a.level - b.level)
 }
 
 /** Learning-карточки показываем чуть раньше срока (Anki learn-ahead), чтобы шаг не терялся на конце сессии/дня */
@@ -108,14 +150,20 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
   const review = shuffle(items.filter(i => i.fsrs.state === State.Review && i.fsrs.due.getTime() < eod.getTime()))
 
   // выбор новых: сначала error/grammar (закрывают доказанные пробелы), потом math, потом словарь;
-  // внутри типа — свежедобавленные первыми (короткий лаг «ошибка → первая отработка»)
-  const kindRank: Record<string, number> = { error: 0, grammar: 1, math: 2 }
+  // словарь идёт уровнями (Duolingo-путь): level ASC, внутри уровня — свежедобавленные последними
+  // (added ASC, стабильный порядок). error/grammar/math/transition — порядок прежний: added DESC.
   const fresh = items
     .filter(i => i.fsrs.state === State.New)
     .sort((a, b) => {
-      const ka = kindRank[a.view.kind] ?? 3
-      const kb = kindRank[b.view.kind] ?? 3
+      const ka = kindRank(a.view)
+      const kb = kindRank(b.view)
       if (ka !== kb) return ka - kb
+      if (isLevelled(a.view) && isLevelled(b.view)) {
+        if (a.view.level !== b.view.level) return a.view.level - b.view.level
+        const ad = a.view.added.localeCompare(b.view.added)
+        if (ad !== 0) return ad
+        return a.view.slug.localeCompare(b.view.slug)
+      }
       const ad = b.view.added.localeCompare(a.view.added)
       if (ad !== 0) return ad
       return a.view.slug.localeCompare(b.view.slug)

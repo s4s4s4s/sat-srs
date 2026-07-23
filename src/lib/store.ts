@@ -4,7 +4,7 @@ import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
-import { makeScheduler, effectiveRetention, homeCounts, DUE_CAP, type Section } from './scheduler'
+import { makeScheduler, effectiveRetention, homeCounts, activeLevel, DUE_CAP, type Section } from './scheduler'
 import { dayKey, isoLocal, setHomeOffset } from './daytime'
 import { newId, newIntroducedOn } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
@@ -25,6 +25,7 @@ interface AppState {
   lastSyncAt: number | null
   tokenExpiresAt: string | null
   session: SessionResult | null
+  levelNames: Record<string, string>
 }
 
 let state: AppState = {
@@ -39,7 +40,8 @@ let state: AppState = {
   syncError: '',
   lastSyncAt: null,
   tokenExpiresAt: null,
-  session: null
+  session: null,
+  levelNames: {}
 }
 
 const listeners = new Set<() => void>()
@@ -95,6 +97,7 @@ export async function init() {
     state.cards = await db.getAllCards()
     state.journal = await db.getAllJournal()
     state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? null
+    state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? {}
   } catch (e: any) {
     // локальная база не открылась (бывает на холодном старте WebKit) — не виснем на «Загрузка…»
     state.syncStatus = 'error'
@@ -127,6 +130,7 @@ export async function startSync(): Promise<void> {
   state.cards = await db.getAllCards()
   state.journal = await db.getAllJournal()
   state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? state.lastSyncAt
+  state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? state.levelNames
   state.syncStatus = res.status
   state.syncError = res.error ?? res.warning ?? (res.conflicts ? `Конфликт имён с тьютором: ваша карточка сохранена с суффиксом -2 (${res.conflicts})` : '')
   state.tokenExpiresAt = tokenExpiration
@@ -188,8 +192,8 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
   const now = new Date()
   const prev = fsrsFromKey(rec.fm, fsrsKey)
   let { card: next } = f.next(prev, now, grade)
-  // потолок интервалов: всё возвращается до экзамена; окно 5–14 дней, взвешено по стабильности —
-  // прочные карточки раньше (14–21.11), хрупкие ближе к 28.11; без свалки в одну неделю
+  // потолок интервалов: всё возвращается до экзамена; окно 5–14 дней перед DUE_CAP (31.10),
+  // взвешено по стабильности — прочные карточки раньше, хрупкие ближе к 31.10; без свалки в одну неделю
   if (next.state === State.Review && now < DUE_CAP && next.due > DUE_CAP) {
     const span = Math.min(14, Math.max(5, Math.round(next.stability / 10)))
     const due = new Date(DUE_CAP.getTime() - Math.floor(Math.random() * span) * 86400_000)
@@ -346,6 +350,8 @@ export async function addCard(fields: { word: string; pos: string; context: stri
   while (taken.has(path)) {
     path = `${state.settings.basePath}/${slug}-${i++}.md`
   }
+  // слово из чтения/дриллов входит в ТЕКУЩИЙ активный уровень — иначе (level=999) молча уедет в хвост
+  const isTransition = fields.pos.trim().toLowerCase() === 'transition'
   const fm: Record<string, any> = {
     type: 'card',
     word: fields.word.trim(),
@@ -357,6 +363,7 @@ export async function addCard(fields: { word: string; pos: string; context: stri
     my_sentence: '',
     source: 'manual',
     added: dayKey(now),
+    ...(isTransition ? {} : { level: activeLevel(views()) }),
     suspended: false,
     fsrs: {
       state: 0,

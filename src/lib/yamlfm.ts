@@ -100,6 +100,7 @@ export function cardView(rec: CardRec): CardView {
     roots: String(fm.roots ?? ''),
     source: String(fm.source ?? 'manual'),
     added: String(fm.added ?? ''),
+    level: fm.level != null && Number.isFinite(Number(fm.level)) ? Number(fm.level) : 999,
     kind: String(fm.kind ?? 'vocab'),
     domain: String(fm.domain ?? ''),
     confusables: Array.isArray(fm.confusables) ? fm.confusables.map(String) : [],

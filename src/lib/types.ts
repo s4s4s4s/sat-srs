@@ -23,6 +23,7 @@ export interface CardView {
   roots: string
   source: string
   added: string         // дата добавления (для приоритета новых)
+  level: number         // уровень ввода (Duolingo-путь); только у vocab (kind vocab, pos≠transition); 999 = без уровня, в хвост
   kind: string          // vocab | error | grammar | …
   domain: string        // домен College Board (II/CS/EOI/SEC/ALG/AM/PSDA/GEO)
   confusables: string[] // авторские «путаемые» дистракторы от тьютора — приоритетнее выборки из колоды
@@ -114,7 +115,7 @@ export const DEFAULT_SETTINGS: Settings = {
   homeOffset: '180'
 }
 
-export type Screen = 'home' | 'review' | 'summary' | 'add' | 'stats' | 'settings'
+export type Screen = 'home' | 'review' | 'summary' | 'add' | 'stats' | 'settings' | 'path'
 
 export interface SessionResult {
   day: string       // учебный день, зафиксированный на старте сессии (не в момент финиша)

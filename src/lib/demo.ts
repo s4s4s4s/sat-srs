@@ -51,6 +51,18 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
       fsrs: { state: 2, due: day(dueOff).toISOString(), stability: 5, difficulty: 5, elapsed_days: 0, scheduled_days: 1, learning_steps: 0, reps: 1, lapses: 0, last_review: day(-2).toISOString() } }
   })
   const cards: CardRec[] =
+    v === 'path' ? [
+      // визуальная проверка экрана «Путь»: L1 пройден, L2 активный, L3–L4 заперты
+      card('adhere', 'придерживаться', 'to stick to', 'Members must ______ to the rules.', 2, 4, 3, { pos: 'verb', level: 1 }),
+      card('surmise', 'предполагать', 'to guess', 'We can only ______ the cause.', 2, 4, 3, { pos: 'verb', level: 1 }),
+      card('advocate', 'отстаивать', 'to support', 'They ______ for reform.', 2, 3, 2, { pos: 'verb', level: 2 }),
+      card('refute', 'опровергать', 'to disprove', 'The data ______ the claim.', 1, 1, 0, { pos: 'verb', level: 2 }),
+      card('bolster', 'укреплять', 'to support', 'Results ______ the theory.', 0, 0, 0, { pos: 'verb', level: 2 }),
+      card('ambiguous', 'неоднозначный', 'unclear', 'The wording is ______.', 0, 0, 0, { pos: 'adjective', level: 3 }),
+      card('nuanced', 'тонкий', 'subtle', 'A ______ argument.', 0, 0, 0, { pos: 'adjective', level: 3 }),
+      card('anomaly', 'аномалия', 'irregularity', 'An ______ in the data.', 0, 0, 0, { pos: 'noun', level: 4 }),
+      card('premise', 'посылка', 'basis', 'The ______ is flawed.', 0, 0, 0, { pos: 'noun', level: 4 })
+    ] :
     v === 'mix' ? [
       card('ephemeral', 'недолговечный', 'lasting a very short time', 'The fame of trends is ______, fading fast.', 2, 2, -1),
       card('tenuous', 'шаткий', 'very weak', 'The link remains ______ at best.', 0, 0, 0),
@@ -94,6 +106,11 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
   }
   await db.putCards(cards)
   await db.putJournal(journal)
+  if (v === 'path') {
+    await db.kvSet('levelNames', {
+      '1': 'Твои ошибки PT4', '2': 'Аргументация I', '3': 'Прилагательные I', '4': 'Существительные'
+    })
+  }
   const section = v === 'grammar' ? 'grammar' : v === 'math' ? 'math' : 'rw'
   return { screen: p.get('screen'), section }
 }

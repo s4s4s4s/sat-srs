@@ -197,6 +197,25 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
   }
   await db.kvSet('journalRaw', rawByMonth)
   await db.kvSet('journalShas', newShas)
+
+  // манифест названий уровней (_уровни.md) — под фильтр isCardPath не попадает (префикс _),
+  // тянем адресно и кэшируем по sha, чтобы не перекачивать каждый pull
+  const manifestPath = `${settings.basePath}/_уровни.md`
+  const manifestEntry = entries.find(e => e.type === 'blob' && e.path === manifestPath)
+  if (manifestEntry) {
+    const prevSha = await db.kvGet<string>('levelsSha')
+    if (prevSha !== manifestEntry.sha) {
+      const text = await gh.getBlobText(manifestEntry.sha)
+      const { fm } = parseMd(text)
+      const names: Record<string, string> = {}
+      if (fm.levels && typeof fm.levels === 'object' && !Array.isArray(fm.levels)) {
+        for (const [k, v] of Object.entries(fm.levels)) names[String(k)] = String(v)
+      }
+      await db.kvSet('levelNames', names)
+      await db.kvSet('levelsSha', manifestEntry.sha)
+    }
+  }
+
   await db.kvSet('lastRemoteCommit', headSha)
   await db.kvSet('lastSyncAt', Date.now())
   return { headSha, treeSha, pulled: fetched.length, conflicts, warning }

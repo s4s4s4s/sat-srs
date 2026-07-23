@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useApp, views, setScreen, startSync, startLesson, creditEmptyDay, unsyncedCount } from '../lib/store'
-import { homeCounts, sectionOf, EXAM_DATE, type Section } from '../lib/scheduler'
+import { homeCounts, sectionOf, levelStats, activeLevel, EXAM_DATE, type Section } from '../lib/scheduler'
 import { streak, newIntroducedOn, minutesToday, MIN_MINUTES, type PauseRange } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt } from '../components/Icon'
@@ -8,7 +8,7 @@ import FlameBuddy from '../components/FlameBuddy'
 import FjordScene from '../components/FjordScene'
 import type { CardView } from '../lib/types'
 
-function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart, onReview }: {
+function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart, onReview, levelLine, onPath }: {
   title: string
   icon: React.ReactNode
   badge: string
@@ -17,6 +17,8 @@ function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart, onRev
   budget: number
   onStart: () => void
   onReview: () => void
+  levelLine?: string
+  onPath?: () => void
 }) {
   const c = homeCounts(cards, budget)
   const reviewDue = c.learnDue + c.revDue
@@ -30,6 +32,9 @@ function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart, onRev
         </span>
         <span className="hero-sub">{c.total ? `${c.total} карт.` : 'пока пусто'}</span>
       </div>
+      {levelLine && onPath && (
+        <button className="path-chip" onClick={onPath}>{levelLine}<span className="path-chip-arr">›</span></button>
+      )}
       <div className="stats3">
         <div className={`stat stat-learn${c.learnDue ? '' : ' is-zero'}`}><div className="n">{c.learnDue}</div><div className="t">учу</div></div>
         <div className={`stat stat-due${c.revDue ? '' : ' is-zero'}`}><div className="n">{c.revDue}</div><div className="t">повторить</div></div>
@@ -85,6 +90,13 @@ export default function Home() {
 
   const go = (s: Section, reviewOnly = false) => () => startLesson(s, reviewOnly)
 
+  // строка активного уровня для блока «Слова»
+  const rwStats = levelStats(rw)
+  const rwActive = activeLevel(rw)
+  const curStat = rwStats.find(s => s.level === rwActive)
+  const levelName = app.levelNames[String(rwActive)] ?? `Уровень ${rwActive}`
+  const levelLine = curStat ? `${levelName} · ${curStat.introduced}/${curStat.total}` : undefined
+
   return (
     <div className="screen">
       <FjordScene />
@@ -118,7 +130,7 @@ export default function Home() {
         {st.freezeSpentYesterday && <div className="freeze-note">❄ Заморозка спасла серию — осталось {st.freezes}</div>}
       </div>
 
-      <SectionBlock title="Слова" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budget} onStart={go('rw')} onReview={go('rw', true)} />
+      <SectionBlock title="Слова" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budget} onStart={go('rw')} onReview={go('rw', true)} levelLine={levelLine} onPath={() => setScreen('path')} />
       <SectionBlock title="Грамматика" icon={<span className="sec-x">¶</span>} badge="badge-green" glyph="var(--rune-ansuz)" cards={grammar} budget={budget} onStart={go('grammar')} onReview={go('grammar', true)} />
       <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budget} onStart={go('math')} onReview={go('math', true)} />
 
