@@ -189,7 +189,9 @@ body::before {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior: contain;
+  /* none, а не contain: contain гасит только проброс скролла родителю, а сам экран на iOS
+     всё равно резиново оттягивается за край (пустота над шапкой). none убирает и оттяг. */
+  overscroll-behavior: none;
   -webkit-overflow-scrolling: touch;
 }
 
