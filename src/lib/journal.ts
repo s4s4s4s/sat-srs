@@ -187,3 +187,37 @@ export function newIntroducedOn(lines: JournalLine[], day: string): number {
 export function minutesToday(lines: JournalLine[], today: string = dayKey()): number {
   return minutesByDay(lines).get(today) ?? 0
 }
+
+/**
+ * Слова, введённые в этот учебный день и подлежащие обязательной отработке (point 3/4).
+ * Механизм — вывод из журнала (без нового поля в карточке): слово считается введённым
+ * сегодня, если у него есть recall-строка этого дня с format:intro или prev_state:0.
+ * Пометка снимается, когда слово отработано (не-intro recall) в ДВУХ отдельных сессиях
+ * ПОСЛЕ сессии знакомства — сессии разделяются строками type:session. До этого слово
+ * принудительно добирается в последующие уроки дня; со сменой учебного дня список пуст.
+ */
+export function forcedTodaySlugs(lines: JournalLine[], today: string = dayKey()): Set<string> {
+  const todays = lines
+    .filter(l => l.day === today && (l.type === 'review' || l.type === 'session'))
+    .sort((a, b) => (a.ts ?? '').localeCompare(b.ts ?? ''))
+  let block = 0
+  const introBlock = new Map<string, number>()      // slug → индекс сессии знакомства
+  const laterPractice = new Map<string, Set<number>>() // slug → индексы сессий с отработкой после знакомства
+  for (const l of todays) {
+    if (l.type === 'session') { block++; continue }
+    if ((l.skill ?? 'recall') !== 'recall' || !l.slug) continue
+    const isIntro = l.format === 'intro' || l.prev_state === State.New
+    if (isIntro && !introBlock.has(l.slug)) introBlock.set(l.slug, block)
+    const intro = introBlock.get(l.slug)
+    if (intro !== undefined && block > intro && l.format !== 'intro') {
+      const s = laterPractice.get(l.slug) ?? new Set<number>()
+      s.add(block)
+      laterPractice.set(l.slug, s)
+    }
+  }
+  const out = new Set<string>()
+  for (const slug of introBlock.keys()) {
+    if ((laterPractice.get(slug)?.size ?? 0) < 2) out.add(slug)
+  }
+  return out
+}

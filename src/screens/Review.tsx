@@ -4,10 +4,10 @@ import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJo
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP
+  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP, MIN_SHOW_GAP_MS
 } from '../lib/scheduler'
 import Tex from '../components/Tex'
-import { newIntroducedOn, minutesToday, MIN_MINUTES, cardTimeCap } from '../lib/journal'
+import { newIntroducedOn, minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
 import type { Format, SessionResult, StudyItem } from '../lib/types'
 import { Close, Sprout, Timer, Speaker, Flame } from '../components/Icon'
@@ -57,6 +57,9 @@ interface Task {
   ctx: string       // выбранный контекст (ротация)
   cue: 'sentence' | 'meaning' // по чему вспоминаем: пропуск в предложении или значение
 }
+
+/** Сколько раз добирать одно сегодняшнее новое слово за сессию (point 4), прежде чем счесть урок исчерпанным */
+const DRILL_PER_SESSION = 2
 
 const lastCtxIdx = new Map<string, number>()
 
@@ -124,7 +127,10 @@ export default function Review() {
       // режим «только повторение» — ноль новых
       const dayLeft = Math.max(0, app.settings.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
       const budget = app.sessionReviewOnly ? 0 : Math.min(dayLeft, app.settings.newPerLesson || 3)
-      setQueue(buildQueue(views().filter(v => sectionOf(v) === section), budget))
+      // point 3: слова, введённые сегодня в прошлых уроках и ещё не отработанные дважды,
+      // принудительно добираются в этот урок (buildQueue дотягивает их из Learning с due на завтра)
+      const forced = forcedTodaySlugs(currentJournal(), dayKey())
+      setQueue(buildQueue(views().filter(v => sectionOf(v) === section), budget, new Date(), forced))
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -150,6 +156,10 @@ export default function Review() {
   const introLimit = Math.max(1, app.settings.newPerLesson || 3)
   // сколько отработок прошло с прошлого знакомства (новые слова не идут пачкой)
   const sinceIntro = useRef(NEW_GAP)
+  // point 2: время последнего показа каждой единицы — не показываем одну карту чаще, чем раз в минуту
+  const shownTimes = useRef(new Map<string, number>())
+  // point 4: сколько раз слово отработано в ЭТОЙ сессии — добор сегодняшних новых имеет предел
+  const drilled = useRef(new Map<string, number>())
   const answeredMs = useRef(0)
   // зачётные секунды: тот же кап на карточку, что и в журнале — таймер согласован с минутами дня
   const creditedSec = useRef(0)
@@ -171,10 +181,16 @@ export default function Review() {
       && head.view.choices.length < 2 && !head.view.answerNum && head.skill !== 'prep'
     if (isNewIntro && introShown.current >= introLimit) {
       const rest = (queue ?? []).slice(1)
-      if (rest.length === 0) { setQueue([]); void finish(true) } else setQueue(rest)
+      if (rest.length === 0) {
+        const extra = topUp()
+        if (extra.length) { setQueue(extra); return }
+        setQueue([]); void finish(true)
+      } else setQueue(rest)
       return
     }
     setTask(makeTask(head, deck, introduced.current, lapsed.current, introShown.current < introLimit))
+    // point 2: отметка момента показа этой единицы — deferRecent следит за 60-секундным разрывом
+    shownTimes.current.set(itemKey(head), Date.now())
     setRevealed(false)
     setPicked(null)
     setTyped('')
@@ -226,7 +242,40 @@ export default function Review() {
     return [practice, ...out]
   }
 
-  function advance(next: StudyItem | null, atFront = false, insertAt?: number) {
+  /**
+   * point 2: не показываем одну карточку чаще, чем раз в 60 c. Если голова очереди
+   * показывалась меньше минуты назад, выводим вперёд первую «готовую по времени» единицу
+   * (в т.ч. ещё не показанную — например, новое слово). Готовых нет — оставляем как есть:
+   * лучше повтор той же карты, чем пустой экран.
+   */
+  function deferRecent(list: StudyItem[]): StudyItem[] {
+    if (list.length < 2) return list
+    const now = Date.now()
+    const ready = (i: StudyItem) => now - (shownTimes.current.get(itemKey(i)) ?? 0) >= MIN_SHOW_GAP_MS
+    if (ready(list[0])) return list
+    const j = list.findIndex(ready)
+    if (j < 1) return list
+    const out = [...list]
+    const [pick] = out.splice(j, 1)
+    return [pick, ...out]
+  }
+
+  /**
+   * point 4: пустая очередь ≠ конец урока, пока сегодняшние новые слова недоработаны.
+   * Добираем recall-единицы слов, введённых сегодня (по журналу), которые в этой сессии
+   * показаны меньше DRILL_PER_SESSION раз. Список конечен и убывает (каждый показ учитывается
+   * в drilled), поэтому урок гарантированно завершится, когда добирать станет нечего.
+   */
+  function topUp(): StudyItem[] {
+    const forced = forcedTodaySlugs(currentJournal(), dayKey())
+    if (!forced.size) return []
+    return deck
+      .filter(v => forced.has(v.slug) && (v.fsrs.state === State.Learning || v.fsrs.state === State.Relearning))
+      .map(v => ({ view: v, skill: 'recall' as const, fsrs: v.fsrs }))
+      .filter(i => (drilled.current.get(itemKey(i)) ?? 0) < DRILL_PER_SESSION)
+  }
+
+  async function advance(next: StudyItem | null, atFront = false, insertAt?: number) {
     let rest = (queue ?? []).slice(1)
     if (next && insertAt !== undefined) {
       rest.splice(Math.min(rest.length, insertAt), 0, next)
@@ -236,11 +285,15 @@ export default function Review() {
     } else if (next && shouldRequeue(next.fsrs, new Date())) {
       rest.splice(requeuePosition(rest.length, next.fsrs, new Date()), 0, next)
     }
-    rest = spaceOutNew(rest)
+    rest = deferRecent(spaceOutNew(rest))
     setDone(d => d + 1)
     if (rest.length === 0) {
+      const extra = topUp()
+      if (extra.length) { setQueue(extra); return }
       setQueue([])
-      void finish(true)
+      // point 5: finish дожидается finishSession — строка session пишется ПОСЛЕ того,
+      // как await rateItem последней карточки уже занёс её review-строку (иначе итоги занижены)
+      await finish(true)
     } else {
       setQueue(rest)
     }
@@ -251,7 +304,7 @@ export default function Review() {
     setCauseFor(null)
     const p = pendingAdvance.current
     pendingAdvance.current = null
-    if (p) advance(p.next, p.atFront)
+    if (p) await advance(p.next, p.atFront)
   }
 
   /** Ответ в объективных форматах: фиксируем результат и открываем ответ с предложенной оценкой */
@@ -284,7 +337,7 @@ export default function Review() {
         introduced.current.add(itemKey(task.item))
         sinceIntro.current = 0
         await markIntroduced(task.item)
-        advance(task.item, false, 2)
+        await advance(task.item, false, 2)
         return
       }
 
@@ -294,12 +347,14 @@ export default function Review() {
         rated = await rateItem(task.item, g, elapsed, task.format, verdict === null ? undefined : verdict !== 'wrong')
       } catch {
         // карточка исчезла (синк удалил/тьютор переименовал) — пропускаем, не блокируя сессию
-        advance(null)
+        await advance(null)
         return
       }
 
       creditedSec.current += Math.min(elapsed, cardTimeCap(task.item.view.kind)) / 1000
       sinceIntro.current++
+      // point 4: учитываем отработку слова в этой сессии — добор сегодняшних новых имеет предел
+      drilled.current.set(itemKey(task.item), (drilled.current.get(itemKey(task.item)) ?? 0) + 1)
 
       // комбо верных подряд — чистый session-делайт, на FSRS не влияет
       const passed = verdict !== null ? verdict !== 'wrong' : g > Rating.Again
@@ -323,7 +378,7 @@ export default function Review() {
         pendingAdvance.current = { next: { ...task.item, fsrs: rated.card }, atFront: false }
         setCauseFor(rated.lineId)
       } else {
-        advance({ ...task.item, fsrs: rated.card })
+        await advance({ ...task.item, fsrs: rated.card })
       }
     } finally {
       busy.current = false

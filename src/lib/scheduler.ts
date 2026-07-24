@@ -98,6 +98,14 @@ export function levelStats(cards: CardView[]): LevelStat[] {
 export const LEARN_AHEAD_MS = 30 * 60000
 
 /**
+ * Минимальный разрыв между двумя показами ОДНОЙ карточки (point 2).
+ * Три верных ответа за минуту проверяют кратковременный буфер, а не память; между
+ * извлечениями должно пройти хотя бы столько, чтобы след успел «остыть». Побочный
+ * эффект, который и нужен: очередь начинает чередовать слова, а не долбить одно.
+ */
+export const MIN_SHOW_GAP_MS = 60_000
+
+/**
  * Минимум отработок между знакомствами с новыми словами.
  * Новые подряд грузят рабочую память и мешают друг другу (interference):
  * слово должно быть хотя бы раз извлечено, прежде чем в голову зайдёт следующее.
@@ -139,7 +147,7 @@ export const itemKey = (i: StudyItem) => `${i.view.path}#${i.skill}`
  * Очередь сессии: Learning/Relearning → Review (due сегодня) → New (лимит).
  * Review и New перемешаны interleaving-ом, learning — впереди по due.
  */
-export function buildQueue(cards: CardView[], newBudget: number, now: Date = new Date()): StudyItem[] {
+export function buildQueue(cards: CardView[], newBudget: number, now: Date = new Date(), forced?: Set<string>): StudyItem[] {
   const eod = endOfStudyDay(now)
   const items = expandItems(cards)
 
@@ -182,7 +190,18 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
       mixed.splice(pos, 0, it)
     })
   }
-  return [...learning, ...mixed]
+
+  // point 3: обязательный добор. Слова, введённые сегодня и ещё не отработанные в двух
+  // последующих сессиях (список forced считает вызывающий по журналу), принудительно
+  // попадают в урок — даже если их due перенесён на завтра (см. point 1, держим в Learning).
+  // Берём только recall-единицы в Learning/Relearning: New уже в пуле новых, Review-слова
+  // (напр. «уже знаю это слово») отработки не требуют. Добор — в хвост, перемешанный.
+  const already = new Set([...learning, ...review, ...newItems].map(itemKey))
+  const drills = forced?.size
+    ? shuffle(items.filter(i =>
+        i.skill === 'recall' && forced.has(i.view.slug) && isLearning(i.fsrs.state) && !already.has(itemKey(i))))
+    : []
+  return [...learning, ...mixed, ...drills]
 }
 
 /**
