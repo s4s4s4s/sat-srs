@@ -6,7 +6,7 @@ import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
   pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP
 } from '../lib/scheduler'
-import { pickNextIndex, type OrderCtx } from '../lib/session'
+import { pickNextIndex, isGiveUp, type OrderCtx } from '../lib/session'
 import Tex from '../components/Tex'
 import { newIntroducedOn, minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
@@ -141,6 +141,9 @@ export default function Review() {
   const [picked, setPicked] = useState<string | null>(null) // выбранный вариант mc/prep
   const [typed, setTyped] = useState('')
   const [verdict, setVerdict] = useState<'correct' | 'typo' | 'wrong' | null>(null)
+  // C3/C4: карточка раскрыта через «не помню» (или пустой ввод) — ответ показан, но оценку
+  // не спрашиваем: рейтинг фиксирован Again. Кнопки «Хорошо»/«Легко» в этом случае не рисуются.
+  const [gaveUp, setGaveUp] = useState(false)
   const [done, setDone] = useState(0)
   const [activeSec, setActiveSec] = useState(0)
   const [combo, setCombo] = useState(0)
@@ -207,6 +210,7 @@ export default function Review() {
     setPicked(null)
     setTyped('')
     setVerdict(null)
+    setGaveUp(false)
     setNeedConfirm(null)
     shownAt.current = Date.now()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -222,8 +226,11 @@ export default function Review() {
   }, [])
 
   // в «показе» вердикт появляется, только если пользователь сам ввёл слово —
-  // тогда сигнал объективный и оценка считается как у ввода
-  const suggested = task && verdict !== null
+  // тогда сигнал объективный и оценка считается как у ввода.
+  // C3: «не помню» — рейтинг фиксирован Again, выбора оценки нет (одна кнопка «Дальше»).
+  const suggested = task && gaveUp
+    ? Rating.Again
+    : task && verdict !== null
     ? suggestedGrade(task.format === 'reveal' ? 'type' : task.format, verdict === 'correct', verdict === 'typo', answeredMs.current, task.item.view.kind)
     : null
 
@@ -311,9 +318,22 @@ export default function Review() {
     if (p) await advance(p.next, p.atFront)
   }
 
+  /**
+   * C3/C4: честный выход «не помню» — показать ответ и зафиксировать Again, без запроса оценки.
+   * Работает во всех форматах ввода/показа (reveal и type). Оценка не спрашивается: suggested = Again.
+   */
+  function giveUp() {
+    if (!task || revealed) return
+    answeredMs.current = Date.now() - shownAt.current
+    setGaveUp(true)
+    setRevealed(true)
+  }
+
   /** Ответ в объективных форматах: фиксируем результат и открываем ответ с предложенной оценкой */
   function submitObjective(value: string, byTyping = false) {
     if (!task || revealed) return
+    // C4: пустой/пробельный ответ — не ошибка ввода, а «не помню» (тот же путь, что кнопка)
+    if (isGiveUp(value)) { giveUp(); return }
     const ok = byTyping || task.format === 'type'
       ? (task.item.view.answerNum ? checkNumeric(value, task.answer) : checkTyped(value, task.answer))
       : value.trim().toLowerCase() === task.answer.toLowerCase() ? 'correct' : 'wrong'
@@ -348,7 +368,7 @@ export default function Review() {
       const prevState = task.item.fsrs.state
       let rated
       try {
-        rated = await rateItem(task.item, g, elapsed, task.format, verdict === null ? undefined : verdict !== 'wrong')
+        rated = await rateItem(task.item, g, elapsed, task.format, verdict === null ? undefined : verdict !== 'wrong', gaveUp)
       } catch {
         // карточка исчезла (синк удалил/тьютор переименовал) — пропускаем, не блокируя сессию
         await advance(null)
@@ -388,9 +408,10 @@ export default function Review() {
         if (g > Rating.Again) r.passRev++
       }
 
-      // причина ошибки — только для зрелых (Review) карточек: провал на learning = «ещё не выучил»
+      // причина ошибки — только для зрелых (Review) карточек: провал на learning = «ещё не выучил».
+      // C3: честное «не помню» ход не тормозит — разбор причины не спрашиваем (незнание слова само по себе причина).
       const wrong = verdict === 'wrong' || (verdict === null && g === Rating.Again && task.format !== 'intro')
-      if (wrong && prevState === State.Review) {
+      if (wrong && prevState === State.Review && !gaveUp) {
         pendingAdvance.current = { next: { ...task.item, fsrs: rated.card }, atFront: false }
         setCauseFor(rated.lineId)
       } else {
@@ -415,7 +436,7 @@ export default function Review() {
       }
       if (e.code === 'Enter' && typing && !revealed) {
         e.preventDefault()
-        if (typed.trim()) submitObjective(typed, true)
+        submitObjective(typed, true) // C4: пустое поле → «не помню» внутри submitObjective
       } else if ((e.code === 'Space' && !typing) || (e.code === 'Enter' && !typing)) {
         e.preventDefault()
         if (!revealed && task.format === 'reveal') setRevealed(true)
@@ -472,7 +493,7 @@ export default function Review() {
     task.cue === 'meaning' ? (canTypeAnswer || task.format === 'type' ? 'Какое это слово? Впишите его' : 'Какое это слово?')
     : task.format === 'mc' ? (isAuthored ? 'Выберите правильный вариант' : 'Какое слово подходит в пропуск?')
     : task.format === 'prep' ? 'Какой предлог здесь правильный?'
-    : task.format === 'type' ? (isNumeric ? 'Решите и введите ответ' : card.meaning_ru ? `Впишите слово со значением «${card.meaning_ru}»` : 'Впишите слово, подходящее в пропуск')
+    : task.format === 'type' ? (isNumeric ? 'Решите и введите ответ' : `Впишите слово со значением «${card.meaning_ru || card.meaning_en}»`)
     : canTypeAnswer ? 'Вспомните слово и впишите — или посмотрите ответ'
     : 'Вспомните слово — потом проверьте себя'
 
@@ -601,10 +622,12 @@ export default function Review() {
           task.format === 'reveal' ? (
             canTypeAnswer ? (
               <>
-                <button className="btn btn-green" onClick={() => submitObjective(typed, true)} disabled={!typed.trim()}>
+                {/* C4: пустой «Проверить» не блокируется — он эквивалентен «не помню» (submitObjective → giveUp) */}
+                <button className="btn btn-green" onClick={() => submitObjective(typed, true)}>
                   Проверить
                 </button>
-                <button className="intro-know" onClick={() => setRevealed(true)}>Не помню — показать ответ</button>
+                {/* C3: «не помню» ставит Again и показывает ответ, без ряда оценок Хорошо/Легко */}
+                <button className="intro-know" onClick={() => giveUp()}>Не помню — показать ответ</button>
               </>
             ) : (
               <>
@@ -613,9 +636,14 @@ export default function Review() {
               </>
             )
           ) : task.format === 'type' ? (
-            <button className="btn btn-green" onClick={() => submitObjective(typed)} disabled={!typed.trim()}>
-              Проверить
-            </button>
+            <>
+              {/* C4: пустой «Проверить» = «не помню» (submitObjective → giveUp), поэтому без disabled */}
+              <button className="btn btn-green" onClick={() => submitObjective(typed)}>
+                Проверить
+              </button>
+              {/* C3: в форматах с вводом кнопка «не помню» обязательна — не заставляем гадать вслепую */}
+              <button className="intro-know" onClick={() => giveUp()}>Не помню — показать ответ</button>
+            </>
           ) : (
             <div className="mc-stack">
               {task.options.map(o => (

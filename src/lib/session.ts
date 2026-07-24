@@ -20,6 +20,15 @@ export interface OrderCtx {
   sinceIntro: number               // отработок с последнего знакомства (A4 — разнос по времени)
 }
 
+/**
+ * C4: пустой или пробельный ответ — не ошибка ввода, а честное «не помню». «Проверить» с таким
+ * полем идёт по тому же пути, что и кнопка «не помню» (показ ответа + `Again`, без сравнения с
+ * правильным словом). Вынесено чистой функцией, чтобы правило проверялось тестом без React.
+ */
+export function isGiveUp(value: string): boolean {
+  return !value.trim()
+}
+
 /** Формат, которым единица отрисуется прямо сейчас — тот же расчёт, что и в UI (makeTask). */
 export function screenFormat(item: StudyItem, ctx: OrderCtx): Format {
   return pickFormat(item, ctx.deck, ctx.introduced, ctx.lapsed, ctx.reintroAllowed)

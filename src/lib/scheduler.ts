@@ -233,6 +233,9 @@ export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<s
   // числовой ответ (math) — всегда ввод, включая первый показ
   if (item.view.answerNum) return 'type'
   const typable = !item.view.word.includes(' ')
+  // C5: ввод по буквам допустим только при однозначном ответе — слово из одного токена И есть
+  // подсказка значения. Без значения задание по контексту неоднозначно (синонимы) — тогда reveal/mc.
+  const canProduce = typable && hasMeaningHint(item.view)
   if (item.fsrs.state === State.New) {
     // знакомство один раз за сессию; после него первая отработка — reveal (первый настоящий FSRS-рейтинг)
     return introduced?.has(itemKey(item)) ? 'reveal' : 'intro'
@@ -249,12 +252,23 @@ export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<s
     // реальные оценки (intro рейтинга не даёт), поэтому reps>=2 = после двух опознаний. Написание
     // по буквам через минуту после первого показа — гарантированный провал (scrutinize/bolster/
     // corroborate 17.07 застряли на type со stability 0.01). Выпускной шаг — объективный формат:
-    // самооценка склонна к «показалось знакомым».
-    return item.fsrs.reps >= 2 && typable ? 'type' : 'reveal'
+    // самооценка склонна к «показалось знакомым». C5: type — только если ответ однозначен (canProduce).
+    return item.fsrs.reps >= 2 && canProduce ? 'type' : 'reveal'
   }
   const wantMc = item.fsrs.reps % 2 === 0
   if (wantMc && mcDistractors(item.view, deck).length >= 3) return 'mc'
-  return typable ? 'type' : (mcDistractors(item.view, deck).length >= 3 ? 'mc' : 'reveal')
+  // C5: без подсказки значения ввод неоднозначен — предпочитаем mc, иначе reveal (показ), но не type
+  return canProduce ? 'type' : (mcDistractors(item.view, deck).length >= 3 ? 'mc' : 'reveal')
+}
+
+/**
+ * C5: задание на ввод (`type`) обязано иметь однозначный ответ. Для словарной карточки это
+ * значит, что дана подсказка значения (`meaning_ru`/`meaning_en`) — иначе «a ___ toward positive
+ * results» допускает bias/tendency/skew, и верный по смыслу ответ засчитается провалом. Числовой
+ * ответ (math) однозначен сам по себе и проверяется раньше, до вызова этого предиката.
+ */
+export function hasMeaningHint(v: CardView): boolean {
+  return !!(v.meaning_ru || v.meaning_en)
 }
 
 /** Дистракторы для MC: авторские confusables тьютора приоритетнее случайной выборки той же части речи */

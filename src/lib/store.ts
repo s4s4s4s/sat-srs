@@ -184,7 +184,7 @@ export function unsyncedCount(): number {
 }
 
 /** Оценка учебной единицы (карточка × навык): FSRS → запись в свой fsrs-блок файла (dirty) → строка журнала. */
-export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, correct?: boolean): Promise<{ card: FsrsCard; lineId: string }> {
+export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, correct?: boolean, gaveUp?: boolean): Promise<{ card: FsrsCard; lineId: string }> {
   const rec = state.cards.find(c => c.path === item.view.path)
   if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${item.view.path}`)
   const fsrsKey = item.skill === 'prep' ? 'fsrs_prep' : 'fsrs'
@@ -228,6 +228,8 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     skill: item.skill,
     format,
     ...(correct === undefined ? {} : { correct }),
+    // C3/C4: «не помню» / пустой ввод — честное признание незнания, семантически ≠ неверный ответ
+    ...(gaveUp ? { gave_up: true } : {}),
     ...(item.view.kind !== 'vocab' ? { kind: item.view.kind } : {}),
     ...(item.view.domain ? { domain: item.view.domain } : {}),
     rating: grade,

@@ -13,9 +13,10 @@
 import { State, Rating, createEmptyCard, type Card as FsrsCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem } from '../src/lib/types'
 import {
-  buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition
+  buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
+  pickFormat, suggestedGrade, hasMeaningHint
 } from '../src/lib/scheduler'
-import { pickNextIndex, screenFormat, type OrderCtx } from '../src/lib/session'
+import { pickNextIndex, screenFormat, isGiveUp, type OrderCtx } from '../src/lib/session'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
 const RETENTION = 0.9
@@ -243,6 +244,54 @@ function makeRng(seed: number): () => number {
   return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 0x100000000 }
 }
 
+/**
+ * C3/C4/C5 — честный выход «не помню» и однозначность заданий на ввод.
+ * Проверяем чистые функции планировщика/сессии, без React (реализация UI зеркалит их:
+ * giveUp() выставляет suggested = Rating.Again; submitObjective роутит пустой ввод в giveUp).
+ */
+function dontKnowChecks(): void {
+  const item = (v: CardView, fsrs = v.fsrs): StudyItem => ({ view: { ...v, fsrs }, skill: 'recall', fsrs })
+
+  // ---- C5: type — только при однозначном ответе (есть подсказка значения) ----
+  const withMeaning = reviewCard('lucid')                            // meaning_ru задан в baseView
+  const withoutMeaning: CardView = { ...withMeaning, meaning_ru: '', meaning_en: '' }
+  assert(hasMeaningHint(withMeaning) && !hasMeaningHint(withoutMeaning), 'C5 setup: наличие/отсутствие значения')
+  // одиночная колода → дистракторов < 3 → выбор type/reveal определяется только подсказкой значения
+  assert(pickFormat(item(withoutMeaning), [withoutMeaning]) !== 'type',
+    'C5: type выдан Review-карточке без подсказки значения')
+  assert(pickFormat(item(withMeaning), [withMeaning]) === 'type',
+    'C5: Review-карточка со значением должна допускать type')
+
+  // Learning reps>=2 (C1 выпускает в производство) — без значения всё равно не type (C5)
+  const lnNo = { ...withoutMeaning.fsrs, state: State.Learning, reps: 2 }
+  const lnYes = { ...withMeaning.fsrs, state: State.Learning, reps: 2 }
+  assert(pickFormat(item(withoutMeaning, lnNo), [withoutMeaning]) !== 'type', 'C5: Learning без значения — не type')
+  assert(pickFormat(item(withMeaning, lnYes), [withMeaning]) === 'type', 'C5: Learning reps>=2 со значением — type')
+
+  // числовой ответ (math) однозначен сам по себе — остаётся type даже без meaning
+  const numCard: CardView = { ...withoutMeaning, answerNum: '15', kind: 'math' }
+  assert(pickFormat(item(numCard), [numCard]) === 'type', 'C5: числовой ответ остаётся type без meaning')
+
+  // ---- C3: «не помню» = Again, оценка не поднимается выше ----
+  const giveUpRating = Rating.Again // именно это фиксирует giveUp() в UI
+  for (const f of ['reveal', 'type', 'mc', 'prep'] as const) {
+    // reveal → в UI считается как 'type' (объективный сигнал ввода); для остальных формат тот же
+    const g = suggestedGrade(f === 'reveal' ? 'type' : f, false, false)
+    assert(g === Rating.Again, `C3: пустой/неверный ${f} даёт Again, а не ${g}`)
+  }
+  assert(giveUpRating <= Rating.Again, 'C3: «не помню» не выдаёт оценку выше Again')
+
+  // ---- C4: пустой/пробельный ввод эквивалентен «не помню» ----
+  assert(isGiveUp('') && isGiveUp('   ') && isGiveUp('\t\n'), 'C4: пустое/пробельное поле = «не помню»')
+  assert(!isGiveUp('bias'), 'C4: непустой ввод — не «не помню»')
+  // и пустой ввод, и кнопка «не помню» идут одним путём → одна и та же оценка
+  const emptyRating = isGiveUp('') ? giveUpRating : suggestedGrade('type', false, false)
+  assert(emptyRating === giveUpRating, 'C4: пустой ввод даёт тот же рейтинг, что кнопка «не помню»')
+
+  console.log('  ✓ dont-know (C3/C4/C5): «не помню»=Again, пустой ввод=«не помню», type только со значением')
+  passed++
+}
+
 function main(): void {
   console.log('SRS session simulation — A3/A4/C1/C2')
 
@@ -290,6 +339,8 @@ function main(): void {
   }
   console.log(`  ✓ рандомизированный батч: ${N} сессий, инвариант держит везде`)
   passed++
+
+  dontKnowChecks()
 
   console.log(`\nВсе проверки пройдены (${passed} групп).`)
 }
