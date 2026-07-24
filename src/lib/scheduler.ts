@@ -245,8 +245,12 @@ export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<s
   const failed = lapsed?.has(itemKey(item)) || (item.fsrs.state === State.Relearning && !introduced?.has(itemKey(item)))
   if (failed && reintroAllowed) return 'intro'
   if (item.fsrs.state !== State.Review) {
-    // выпускной шаг learning — объективный формат: самооценка склонна к «показалось знакомым»
-    return item.fsrs.reps >= 1 && typable ? 'type' : 'reveal'
+    // C1: производство (type) — не раньше, чем слово дважды опознано (reveal/mc). reps считает
+    // реальные оценки (intro рейтинга не даёт), поэтому reps>=2 = после двух опознаний. Написание
+    // по буквам через минуту после первого показа — гарантированный провал (scrutinize/bolster/
+    // corroborate 17.07 застряли на type со stability 0.01). Выпускной шаг — объективный формат:
+    // самооценка склонна к «показалось знакомым».
+    return item.fsrs.reps >= 2 && typable ? 'type' : 'reveal'
   }
   const wantMc = item.fsrs.reps % 2 === 0
   if (wantMc && mcDistractors(item.view, deck).length >= 3) return 'mc'

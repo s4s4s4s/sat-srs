@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Rating, State, type Grade } from 'ts-fsrs'
-import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause, markIntroduced } from '../lib/store'
+import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause, markIntroduced, deferItemToNextDay } from '../lib/store'
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP, MIN_SHOW_GAP_MS
+  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP
 } from '../lib/scheduler'
+import { pickNextIndex, type OrderCtx } from '../lib/session'
 import Tex from '../components/Tex'
 import { newIntroducedOn, minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
@@ -160,6 +161,13 @@ export default function Review() {
   const shownTimes = useRef(new Map<string, number>())
   // point 4: сколько раз слово отработано в ЭТОЙ сессии — добор сегодняшних новых имеет предел
   const drilled = useRef(new Map<string, number>())
+  // A3/A4: слово и «знакомство ли» предыдущего показанного экрана — очередь не ставит два экрана
+  // одного слова встык (A3) и не выдаёт два знакомства подряд без упражнения между ними (A4)
+  const lastShownPath = useRef<string | null>(null)
+  const lastWasIntro = useRef(false)
+  // C2: сколько раз слово провалено за ЭТУ сессию (по path) и множество отложенных до завтра (провал ×2)
+  const sessionFails = useRef(new Map<string, number>())
+  const deferredToday = useRef(new Set<string>())
   const answeredMs = useRef(0)
   // зачётные секунды: тот же кап на карточку, что и в журнале — таймер согласован с минутами дня
   const creditedSec = useRef(0)
@@ -188,9 +196,13 @@ export default function Review() {
       } else setQueue(rest)
       return
     }
-    setTask(makeTask(head, deck, introduced.current, lapsed.current, introShown.current < introLimit))
-    // point 2: отметка момента показа этой единицы — deferRecent следит за 60-секундным разрывом
+    const shown = makeTask(head, deck, introduced.current, lapsed.current, introShown.current < introLimit)
+    setTask(shown)
+    // point 2/A2: отметка момента показа этой единицы — pickNextIndex держит 60-секундный разрыв
     shownTimes.current.set(itemKey(head), Date.now())
+    // A3/A4: что показано этим экраном — вход для следующего выбора очереди
+    lastShownPath.current = head.view.path
+    lastWasIntro.current = shown.format === 'intro'
     setRevealed(false)
     setPicked(null)
     setTyped('')
@@ -223,41 +235,19 @@ export default function Review() {
     await finishSession(res.current)
   }
 
-  /**
-   * Разрядка новых слов: пока после знакомства не прошло NEW_GAP отработок,
-   * очередное знакомство уступает место ближайшей отработке (в том числе отработке
-   * только что введённого слова). Если в очереди одни знакомства — разряжать нечем.
-   */
-  function spaceOutNew(list: StudyItem[]): StudyItem[] {
-    if (sinceIntro.current >= NEW_GAP || !list.length) return list
-    // «показ без упражнения» = всё, что отрисуется окном-знакомством: новое (intro) И переznakomство
-    // после «Заново» (lapsed/Relearning → intro). Иначе переznakomство считалось бы разделителем-отработкой
-    // и несколько показов слипались бы подряд.
-    const isIntro = (i: StudyItem) => pickFormat(i, deck, introduced.current, lapsed.current, introShown.current < introLimit) === 'intro'
-    if (!isIntro(list[0])) return list
-    const j = list.findIndex(i => !isIntro(i))
-    if (j < 1) return list
-    const out = [...list]
-    const [practice] = out.splice(j, 1)
-    return [practice, ...out]
-  }
-
-  /**
-   * point 2: не показываем одну карточку чаще, чем раз в 60 c. Если голова очереди
-   * показывалась меньше минуты назад, выводим вперёд первую «готовую по времени» единицу
-   * (в т.ч. ещё не показанную — например, новое слово). Готовых нет — оставляем как есть:
-   * лучше повтор той же карты, чем пустой экран.
-   */
-  function deferRecent(list: StudyItem[]): StudyItem[] {
-    if (list.length < 2) return list
-    const now = Date.now()
-    const ready = (i: StudyItem) => now - (shownTimes.current.get(itemKey(i)) ?? 0) >= MIN_SHOW_GAP_MS
-    if (ready(list[0])) return list
-    const j = list.findIndex(ready)
-    if (j < 1) return list
-    const out = [...list]
-    const [pick] = out.splice(j, 1)
-    return [pick, ...out]
+  /** Текущий контекст выбора следующего экрана (A2/A3/A4) — снимок refs в момент вызова. */
+  function orderCtx(): OrderCtx {
+    return {
+      deck,
+      introduced: introduced.current,
+      lapsed: lapsed.current,
+      reintroAllowed: introShown.current < introLimit,
+      shownTimes: shownTimes.current,
+      now: Date.now(),
+      lastPath: lastShownPath.current,
+      lastWasIntro: lastWasIntro.current,
+      sinceIntro: sinceIntro.current
+    }
   }
 
   /**
@@ -277,26 +267,40 @@ export default function Review() {
 
   async function advance(next: StudyItem | null, atFront = false, insertAt?: number) {
     let rest = (queue ?? []).slice(1)
-    if (next && insertAt !== undefined) {
-      rest.splice(Math.min(rest.length, insertAt), 0, next)
-    } else if (next && atFront) {
-      // после знакомства слово отрабатывается СРАЗУ, следующим экраном
-      rest.splice(0, 0, next)
-    } else if (next && shouldRequeue(next.fsrs, new Date())) {
-      rest.splice(requeuePosition(rest.length, next.fsrs, new Date()), 0, next)
+    // C2: слова, дважды проваленные за сессию, из остатка урока убираются совсем
+    if (deferredToday.current.size) rest = rest.filter(i => !deferredToday.current.has(i.view.path))
+    // возврат оценённой карточки в очередь — но не той, что ушла на завтра (C2)
+    if (next && !deferredToday.current.has(next.view.path)) {
+      if (insertAt !== undefined) {
+        rest.splice(Math.min(rest.length, insertAt), 0, next)
+      } else if (atFront) {
+        rest.splice(0, 0, next)
+      } else if (shouldRequeue(next.fsrs, new Date())) {
+        rest.splice(requeuePosition(rest.length, next.fsrs, new Date()), 0, next)
+      }
     }
-    rest = deferRecent(spaceOutNew(rest))
     setDone(d => d + 1)
-    if (rest.length === 0) {
-      const extra = topUp()
-      if (extra.length) { setQueue(extra); return }
+    // A2/A3/A4: следующий экран — первая допустимая единица; −1 = показывать без нарушения нечего
+    let idx = pickNextIndex(rest, orderCtx())
+    if (idx < 0) {
+      // «карточка ждёт» (A3): добираем сегодняшние недоработанные (point 4) и пробуем снова
+      const extra = topUp().filter(i =>
+        !deferredToday.current.has(i.view.path) && !rest.some(r => itemKey(r) === itemKey(i)))
+      if (extra.length) { rest = [...rest, ...extra]; idx = pickNextIndex(rest, orderCtx()) }
+    }
+    if (idx < 0) {
+      // добирать нечего и всё, что осталось, нарушило бы инвариант — урок закончен (B3)
       setQueue([])
       // point 5: finish дожидается finishSession — строка session пишется ПОСЛЕ того,
       // как await rateItem последней карточки уже занёс её review-строку (иначе итоги занижены)
       await finish(true)
-    } else {
-      setQueue(rest)
+      return
     }
+    if (idx > 0) {
+      const [pick] = rest.splice(idx, 1)
+      rest = [pick, ...rest]
+    }
+    setQueue(rest)
   }
 
   async function pickCauseAndGo(c: string | null) {
@@ -365,8 +369,20 @@ export default function Review() {
       if (prevState === State.New) r.newSeen++
       // «Заново» на любой стадии → следующий показ этого слова будет окном-переznakomством «Подзабылось»;
       // вспомнил (не «Заново») → снимаем флаг подзабывания
-      if (g === Rating.Again) { r.again++; lapsed.current.add(itemKey(task.item)) }
-      else lapsed.current.delete(itemKey(task.item))
+      if (g === Rating.Again) {
+        r.again++
+        lapsed.current.add(itemKey(task.item))
+        // C2: провал ×2 за сессию — слово уходит на завтра, из урока убирается (не переznakomим,
+        // не крутим). Считаем по слову (path), а не по единице: и recall, и prep — одно слово.
+        const p = task.item.view.path
+        const fails = (sessionFails.current.get(p) ?? 0) + 1
+        sessionFails.current.set(p, fails)
+        if (fails >= 2) {
+          deferredToday.current.add(p)
+          lapsed.current.delete(itemKey(task.item))
+          await deferItemToNextDay(task.item)
+        }
+      } else lapsed.current.delete(itemKey(task.item))
       if (prevState === State.Review) {
         r.totalRev++
         if (g > Rating.Again) r.passRev++

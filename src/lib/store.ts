@@ -284,6 +284,28 @@ export async function markIntroduced(item: StudyItem): Promise<void> {
   emit()
 }
 
+/**
+ * C2: карточка, дважды проваленная за одну сессию, откладывается — её due переносится
+ * на начало следующего учебного дня, чтобы она не крутилась в пределах текущего урока.
+ * Это пост-фактум коррекция срока над уже записанным FSRS-состоянием (E1: формулы не трогаем),
+ * рейтинга и строки журнала не пишет — оценка провала уже занесена rateItem.
+ */
+export async function deferItemToNextDay(item: StudyItem): Promise<void> {
+  const rec = state.cards.find(c => c.path === item.view.path)
+  if (!rec || rec.broken) return
+  const fsrsKey = item.skill === 'prep' ? 'fsrs_prep' : 'fsrs'
+  const now = new Date()
+  const prev = fsrsFromKey(rec.fm, fsrsKey)
+  const due = endOfStudyDay(now)
+  if (prev.due.getTime() >= due.getTime()) return // уже за пределами дня — переносить нечего
+  const next: FsrsCard = { ...prev, due, scheduled_days: Math.max(1, Math.round((due.getTime() - now.getTime()) / 86400_000)) }
+  const updated: CardRec = { ...rec, fm: { ...rec.fm, [fsrsKey]: fsrsToFm(next) }, dirty: 1 }
+  await db.putCard(updated)
+  state.cards = state.cards.map(c => (c.path === rec.path ? updated : c))
+  emit()
+  updateBadge()
+}
+
 /** Идеальный день: всё повторено вовремя, очередь пуста — день зачитывается сам, без сессии */
 export async function creditEmptyDay(): Promise<void> {
   const today = dayKey()
