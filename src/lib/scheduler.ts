@@ -205,6 +205,33 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
 }
 
 /**
+ * Заполнитель (B4, третья ступень лестницы добора): повтор, срок которого ещё не пришёл,
+ * но придёт в пределах суток. Нужен, когда урок обязан развести знакомство и первую отработку
+ * слова (A3), а разбавлять нечем: после большой сессии всё введённое уезжает на следующий день
+ * (A1), пул созревших пустеет, и урок вырождался в одно знакомство. Ранний повтор — правка
+ * состава очереди, не формул: FSRS штатно обрабатывает досрочный показ (E1 не нарушается).
+ * Ступень включается ТОЛЬКО когда без неё урок встанет, и ограничена MAX_EARLY_FILLERS,
+ * чтобы не вычерпывать завтрашний день.
+ */
+export const FILLER_LOOKAHEAD_MS = 24 * 3600_000
+export const MAX_EARLY_FILLERS = 6
+
+export function earlyFillers(cards: CardView[], now: Date, exclude: Set<string>, limit = MAX_EARLY_FILLERS): StudyItem[] {
+  const eod = endOfStudyDay(now)
+  const horizon = now.getTime() + FILLER_LOOKAHEAD_MS
+  return expandItems(cards)
+    .filter(i => {
+      if (i.fsrs.state === State.New) return false
+      const t = i.fsrs.due.getTime()
+      // уже созревшее в заполнители не берём — оно и так попадает в очередь обычным путём
+      const readyNow = isLearning(i.fsrs.state) ? t <= now.getTime() + LEARN_AHEAD_MS : t < eod.getTime()
+      return !readyNow && t <= horizon && !exclude.has(itemKey(i))
+    })
+    .sort((a, b) => a.fsrs.due.getTime() - b.fsrs.due.getTime())
+    .slice(0, Math.max(0, limit))
+}
+
+/**
  * Возврат карточки в очередь после оценки: позиция пропорциональна времени до due
  * (~20 c на карточку), иначе 10-минутный learning-шаг схлопнулся бы в ~30 секунд
  * и слово «выучивалось» бы из рабочей памяти, минуя запланированный интервал.

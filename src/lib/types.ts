@@ -60,6 +60,7 @@ export interface JournalLine {
   v?: number // версия схемы строки
   type: 'review' | 'session'
   ts: string   // ISO с локальным смещением
+  ms?: number  // миллисекунды внутри секунды ts — тайбрейк хронологии (D1); в старых строках нет = 0
   day: string  // локальный день с rollover 04:00, YYYY-MM-DD — фиксируется при записи
   // review:
   slug?: string

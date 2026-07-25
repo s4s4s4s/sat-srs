@@ -4,9 +4,10 @@ import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJo
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP
+  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP,
+  earlyFillers, MAX_EARLY_FILLERS
 } from '../lib/scheduler'
-import { pickNextIndex, isGiveUp, type OrderCtx } from '../lib/session'
+import { pickNext, hasSeparator, screenFormat, isGiveUp, type OrderCtx } from '../lib/session'
 import Tex from '../components/Tex'
 import { newIntroducedOn, minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs } from '../lib/journal'
 import { dayKey } from '../lib/daytime'
@@ -160,6 +161,14 @@ export default function Review() {
   const introLimit = Math.max(1, app.settings.newPerLesson || 3)
   // сколько отработок прошло с прошлого знакомства (новые слова не идут пачкой)
   const sinceIntro = useRef(NEW_GAP)
+  // A4-bis: знакомств подряд без оценённой отработки между ними — батч, когда разбавлять нечем
+  const batchIntros = useRef(0)
+  // B4: сколько заполнителей (ранних повторов) урок уже подтянул — потолок MAX_EARLY_FILLERS
+  const fillersUsed = useRef(0)
+  // A2: следующий экран есть, но 60-секундный разрыв ещё не прошёл — короткая пауза вместо
+  // завершения урока. Раньше «сейчас нельзя» трактовалось как «нечего добирать» → урок кончался
+  const [waiting, setWaiting] = useState<{ until: number; list: StudyItem[] } | null>(null)
+  const [waitTick, setWaitTick] = useState(0) // перерисовка обратного отсчёта на экране паузы
   // point 2: время последнего показа каждой единицы — не показываем одну карту чаще, чем раз в минуту
   const shownTimes = useRef(new Map<string, number>())
   // point 4: сколько раз слово отработано в ЭТОЙ сессии — добор сегодняшних новых имеет предел
@@ -186,18 +195,19 @@ export default function Review() {
   // задание пересобирается при смене головы очереди
   useEffect(() => {
     if (!head) { setTask(null); return }
-    // новое слово сверх урочного лимита окон-знакомств не вводим (переznakomство уже съело бюджет) —
-    // новое нельзя показать упражнением, поэтому откладываем его на следующий урок/день, а не показываем
-    const isNewIntro = head.fsrs.state === State.New && !introduced.current.has(itemKey(head))
-      && head.view.choices.length < 2 && !head.view.answerNum && head.skill !== 'prep'
-    if (isNewIntro && introShown.current >= introLimit) {
-      const rest = (queue ?? []).slice(1)
-      if (rest.length === 0) {
-        const extra = topUp()
-        if (extra.length) { setQueue(extra); return }
-        setQueue([]); void finish(true)
-      } else setQueue(rest)
-      return
+    if (waiting) return // пауза A2: экран менять нельзя, следующий выберется после ожидания
+    // окно-знакомство выдаём только если урок сможет его отработать. Два запрета:
+    // — новое сверх урочного лимита окон (переznakomство уже съело бюджет) ждёт следующего урока;
+    // — A6: нечем развести знакомство и первую отработку (A3) → знакомство не показывается вовсе,
+    //   слово остаётся New без first_seen. Показать и бросить хуже, чем не показать: слово
+    //   числится введённым, не выучено, и следующий урок повторяет его один в один.
+    if (screenFormat(head, orderCtx(queue ?? [])) === 'intro') {
+      const freshNew = head.fsrs.state === State.New && !introduced.current.has(itemKey(head))
+      const overLimit = freshNew && introShown.current >= introLimit
+      if (overLimit || !hasSeparator(queue ?? [head], 0, orderCtx(queue ?? []))) {
+        void proceed((queue ?? []).slice(1))
+        return
+      }
     }
     const shown = makeTask(head, deck, introduced.current, lapsed.current, introShown.current < introLimit)
     setTask(shown)
@@ -220,10 +230,30 @@ export default function Review() {
 
   useEffect(() => {
     const t = setInterval(() => {
-      if (document.visibilityState === 'visible') setActiveSec(s => s + 1)
+      // пауза между показами одной карточки в длительность урока не идёт — иначе она
+      // накручивала бы dur_ms и «минуты сегодня» временем, когда ученик ничего не делал
+      if (document.visibilityState === 'visible' && !waiting) setActiveSec(s => s + 1)
     }, 1000)
     return () => clearInterval(t)
-  }, [])
+  }, [waiting])
+
+  /**
+   * Пауза A2: ждём истечения 60-секундного разрыва и выбираем экран заново. Урок при этом
+   * НЕ завершён — раньше именно здесь он и заканчивался, оставляя новое слово без отработки.
+   * Ожидание конечно: pickNext возвращает минимальный остаток разрыва, после которого
+   * хотя бы одна единица становится допустимой.
+   */
+  useEffect(() => {
+    if (!waiting) return
+    const t = setTimeout(() => {
+      const list = waiting.list
+      setWaiting(null)
+      void proceed(list)
+    }, Math.max(250, waiting.until - Date.now()))
+    const tick = setInterval(() => setWaitTick(x => x + 1), 500)
+    return () => { clearTimeout(t); clearInterval(tick) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waiting])
 
   // в «показе» вердикт появляется, только если пользователь сам ввёл слово —
   // тогда сигнал объективный и оценка считается как у ввода.
@@ -242,19 +272,35 @@ export default function Review() {
     await finishSession(res.current)
   }
 
-  /** Текущий контекст выбора следующего экрана (A2/A3/A4) — снимок refs в момент вызова. */
-  function orderCtx(): OrderCtx {
+  /** Текущий контекст выбора следующего экрана (A2/A3/A4/A4-bis/A6) — снимок refs в момент вызова. */
+  function orderCtx(extra: StudyItem[] = []): OrderCtx {
     return {
       deck,
       introduced: introduced.current,
       lapsed: lapsed.current,
       reintroAllowed: introShown.current < introLimit,
+      introsLeft: introLimit - introShown.current,
       shownTimes: shownTimes.current,
       now: Date.now(),
       lastPath: lastShownPath.current,
       lastWasIntro: lastWasIntro.current,
-      sinceIntro: sinceIntro.current
+      sinceIntro: sinceIntro.current,
+      batchIntros: batchIntros.current,
+      // A6: знакомство можно выдавать, если урок способен развести его с первой отработкой —
+      // в т.ч. заполнителем, который ещё не подтянут в очередь
+      hasFiller: availableFillers(extra).length > 0
     }
+  }
+
+  /**
+   * B4, третья ступень лестницы: повторы, срок которых наступит в пределах суток. Подтягиваются
+   * только когда урок иначе встанет (см. proceed) и не больше MAX_EARLY_FILLERS за урок.
+   */
+  function availableFillers(exclude: StudyItem[]): StudyItem[] {
+    if (fillersUsed.current >= MAX_EARLY_FILLERS) return []
+    const used = new Set(exclude.map(itemKey))
+    return earlyFillers(deck, new Date(), used, MAX_EARLY_FILLERS - fillersUsed.current)
+      .filter(i => !deferredToday.current.has(i.view.path) && !drilled.current.has(itemKey(i)))
   }
 
   /**
@@ -267,9 +313,59 @@ export default function Review() {
     const forced = forcedTodaySlugs(currentJournal(), dayKey())
     if (!forced.size) return []
     return deck
-      .filter(v => forced.has(v.slug) && (v.fsrs.state === State.Learning || v.fsrs.state === State.Relearning))
+      // B4: сюда же попадает слово в состоянии New — знакомство рейтинга не даёт, и слово,
+      // которому урок показал знакомство, остаётся New до первой оценки. Прежний фильтр
+      // (только Learning/Relearning) такое слово не видел, и добирать было «нечего»
+      .filter(v => forced.has(v.slug) && v.fsrs.state !== State.Review)
       .map(v => ({ view: v, skill: 'recall' as const, fsrs: v.fsrs }))
       .filter(i => (drilled.current.get(itemKey(i)) ?? 0) < DRILL_PER_SESSION)
+  }
+
+  /**
+   * Лестница добора (B3/B4): показать следующий экран, а если сейчас показывать нечего —
+   * сначала добрать, а не заканчивать урок.
+   *   1) первая допустимая единица очереди (A2/A3/A4, затем батч знакомств A4-bis);
+   *   2) недоработанные сегодняшние слова (в т.ч. New после знакомства);
+   *   3) заполнитель — повтор со сроком в пределах суток, поднятый заранее;
+   *   4) единственное препятствие — 60-секундный разрыв A2 → короткая пауза, не конец урока;
+   *   5) и только если добирать действительно нечего — урок завершён.
+   */
+  async function proceed(list: StudyItem[]) {
+    let rest = list
+    let pick = pickNext(rest, orderCtx(rest))
+    if (pick.idx < 0) {
+      const extra = topUp().filter(i =>
+        !deferredToday.current.has(i.view.path) && !rest.some(r => itemKey(r) === itemKey(i)))
+      if (extra.length) { rest = [...rest, ...extra]; pick = pickNext(rest, orderCtx(rest)) }
+    }
+    if (pick.idx < 0) {
+      const fill = availableFillers(rest)
+      if (fill.length) {
+        const grown = [...rest, ...fill]
+        const p = pickNext(grown, orderCtx(grown))
+        if (p.idx >= 0 || p.waitMs > 0) { rest = grown; fillersUsed.current += fill.length; pick = p }
+      }
+    }
+    if (pick.idx < 0 && pick.waitMs > 0) {
+      // экран есть, но слишком рано его показывать (A2) — ждём, урок не закончен
+      setWaiting({ until: Date.now() + pick.waitMs, list: rest })
+      return
+    }
+    if (pick.idx < 0) {
+      // добирать нечего и всё, что осталось, нарушило бы инвариант — урок закончен (B3)
+      setQueue([])
+      // point 5: finish дожидается finishSession — строка session пишется ПОСЛЕ того,
+      // как await rateItem последней карточки уже занёс её review-строку (иначе итоги занижены)
+      await finish(true)
+      return
+    }
+    const q = [...rest]
+    if (pick.idx > 0) {
+      const [it] = q.splice(pick.idx, 1)
+      q.unshift(it)
+    }
+    setDone(d => d + 1)
+    setQueue(q)
   }
 
   async function advance(next: StudyItem | null, atFront = false, insertAt?: number) {
@@ -286,28 +382,7 @@ export default function Review() {
         rest.splice(requeuePosition(rest.length, next.fsrs, new Date()), 0, next)
       }
     }
-    setDone(d => d + 1)
-    // A2/A3/A4: следующий экран — первая допустимая единица; −1 = показывать без нарушения нечего
-    let idx = pickNextIndex(rest, orderCtx())
-    if (idx < 0) {
-      // «карточка ждёт» (A3): добираем сегодняшние недоработанные (point 4) и пробуем снова
-      const extra = topUp().filter(i =>
-        !deferredToday.current.has(i.view.path) && !rest.some(r => itemKey(r) === itemKey(i)))
-      if (extra.length) { rest = [...rest, ...extra]; idx = pickNextIndex(rest, orderCtx()) }
-    }
-    if (idx < 0) {
-      // добирать нечего и всё, что осталось, нарушило бы инвариант — урок закончен (B3)
-      setQueue([])
-      // point 5: finish дожидается finishSession — строка session пишется ПОСЛЕ того,
-      // как await rateItem последней карточки уже занёс её review-строку (иначе итоги занижены)
-      await finish(true)
-      return
-    }
-    if (idx > 0) {
-      const [pick] = rest.splice(idx, 1)
-      rest = [pick, ...rest]
-    }
-    setQueue(rest)
+    await proceed(rest)
   }
 
   async function pickCauseAndGo(c: string | null) {
@@ -360,6 +435,8 @@ export default function Review() {
       if (task.format === 'intro' && g !== Rating.Easy) {
         introduced.current.add(itemKey(task.item))
         sinceIntro.current = 0
+        // A4-bis: счётчик батча растёт до первой оценённой отработки
+        batchIntros.current++
         await markIntroduced(task.item)
         await advance(task.item, false, 2)
         return
@@ -377,6 +454,8 @@ export default function Review() {
 
       creditedSec.current += Math.min(elapsed, cardTimeCap(task.item.view.kind)) / 1000
       sinceIntro.current++
+      // A4-bis: оценённая отработка закрывает батч знакомств — следующее знакомство снова по A4
+      batchIntros.current = 0
       // point 4: учитываем отработку слова в этой сессии — добор сегодняшних новых имеет предел
       drilled.current.set(itemKey(task.item), (drilled.current.get(itemKey(task.item)) ?? 0) + 1)
 
@@ -451,6 +530,22 @@ export default function Review() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  if (waiting) {
+    // A2: следующий экран уже выбран, но между двумя показами одной карточки должна пройти
+    // минута. Честная пауза с отсчётом вместо преждевременного «Очередь пуста».
+    void waitTick
+    const left = Math.max(1, Math.ceil((waiting.until - Date.now()) / 1000))
+    return (
+      <div className={`screen rev-wash wash-${section}`}>
+        <div className="rev-body" style={{ textAlign: 'center', alignItems: 'center', justifyContent: 'center' }}>
+          <FlameBuddy size={72} mood="think" />
+          <h2 className="sum-title">Секунду — {left} с</h2>
+          <div className="sum-sub">Даём слову остыть: между двумя показами одной карточки должна пройти минута, иначе это проверка внимания, а не памяти.</div>
+          <button className="intro-know" onClick={() => { if (!busy.current) void finish(false) }}>Завершить урок</button>
+        </div>
+      </div>
+    )
+  }
   if (!queue || (head && !task)) {
     return (
       <div className="screen">

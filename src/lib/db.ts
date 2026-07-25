@@ -53,6 +53,12 @@ export async function clearLocalData(): Promise<void> {
   await tx.done
 }
 
+/** Слово, у которого была хотя бы одна оценка: fsrs-блок есть и reps > 0 (знакомство reps не даёт). */
+export function hasRatedFsrs(fm: Record<string, any>): boolean {
+  const f = fm.fsrs
+  return !!f && typeof f === 'object' && Number(f.reps) > 0
+}
+
 export interface FetchedCard {
   path: string
   sha: string
@@ -104,7 +110,10 @@ export async function applyPull(
       const lostFsrs = ok && cur.fm.fsrs && typeof cur.fm.fsrs === 'object' && (!f.fm.fsrs || typeof f.fm.fsrs !== 'object')
       const lostPrep = ok && cur.fm.fsrs_prep && f.fm.prep && f.fm.prep_context && !f.fm.fsrs_prep
       const lostSentence = ok && cur.fm.my_sentence && !f.fm.my_sentence
-      const lostFirstSeen = ok && cur.fm.first_seen && !f.fm.first_seen
+      // A7: first_seen восстанавливаем только у слова, которое реально оценивали (есть fsrs с reps>0).
+      // Иначе снятая тьютором дата «сожжённого» знакомства (показали и бросили без отработки)
+      // возвращалась бы приложением обратно, и слово навсегда оставалось бы вне ввода.
+      const lostFirstSeen = ok && cur.fm.first_seen && !f.fm.first_seen && hasRatedFsrs(cur.fm)
       if (lostFsrs || lostPrep || lostSentence || lostFirstSeen) {
         const fm = { ...f.fm }
         if (lostFsrs) fm.fsrs = cur!.fm.fsrs

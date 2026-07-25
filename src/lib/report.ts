@@ -2,7 +2,7 @@ import { State } from 'ts-fsrs'
 import type { CardRec, JournalRec, JournalLine } from './types'
 import { cardView } from './yamlfm'
 import { addDaysKey, dayKey, isoLocal } from './daytime'
-import { minutesByDay, streak, trueRetention30, type PauseRange } from './journal'
+import { byTime, minutesByDay, streak, trueRetention30, type PauseRange } from './journal'
 import { activeLevel, levelStats, isLevelled } from './scheduler'
 
 /**
@@ -51,7 +51,7 @@ function planVsFact(lines: JournalLine[], today: string) {
   }
   const perDay = new Map<string, { done: number; onTime: number; delaySum: number }>()
   for (const seq of byItem.values()) {
-    seq.sort((a, b) => a.ts.localeCompare(b.ts))
+    seq.sort(byTime)
     for (let i = 1; i < seq.length; i++) {
       const planned = seq[i - 1].due ? dueDay(seq[i - 1].due!) : ''
       const actual = seq[i].day
@@ -165,6 +165,12 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   out.push(`- Ошибки написания (ввод, 14 дн): ${errList('type')}`)
   out.push(`- Ошибки предлогов (14 дн): ${errList('prep')}`)
   out.push(`- Ошибки выбора в контексте (MC, 14 дн): ${errList('mc')}`)
+  // A6/A7: слово, которому показали знакомство и не дали ни одной отработки. Осталось New,
+  // но с датой первого показа — в обучении не участвует, в прогрессе уровня не числится.
+  // После правки планировщика (знакомство не выдаётся, если урок не может его отработать)
+  // строка обязана быть пустой; непусто = либо старые данные, либо регрессия.
+  const burnedIntro = active.filter(v => v.fsrs.state === State.New && !!cards.find(c => c.path === v.path)?.fm.first_seen)
+  out.push(`- Знакомство без отработки (показано и брошено — должно быть пусто): ${burnedIntro.length ? burnedIntro.map(v => v.slug).join(', ') : '—'}`)
   const fewCtx = active.filter(v => v.kind === 'vocab' && v.fsrs.state === State.Review && v.contexts.length < 2)
   out.push(`- Нужны доп. контексты (review-слова с < 2 предложений — риск заучивания предложения): ${fewCtx.length ? fewCtx.map(v => v.word).join(', ') : '—'}`)
   out.push(`- Нужны confusables (review-слова без авторских дистракторов): ${active.filter(v => v.kind === 'vocab' && v.fsrs.state === State.Review && !v.confusables.length).slice(0, 20).map(v => v.word).join(', ') || '—'}`)

@@ -42,9 +42,21 @@ export function parseNdjson(text: string): { lines: JournalLine[]; rejects: stri
   return { lines, rejects }
 }
 
+/**
+ * Хронологический порядок строк журнала. `ts` пишется с точностью до секунды, поэтому оценка
+ * и завершение сессии в одну секунду сравнивались как равные, а фактический порядок задавала
+ * выдача IndexedDB (ключ = случайный uuid) — отсюда нарушения D1: строка `session` оказывалась
+ * в файле раньше последней `review` своей сессии, а `forcedTodaySlugs` рвал сессию не там.
+ * Тайбрейк — миллисекунды внутри секунды (`ms`, D3: схема расширяется добавлением поля;
+ * старые строки без него читаются как ms = 0 и сохраняют свой относительный порядок).
+ */
+export function byTime(a: JournalLine, b: JournalLine): number {
+  const t = (typeof a.ts === 'string' ? a.ts : '').localeCompare(typeof b.ts === 'string' ? b.ts : '')
+  return t !== 0 ? t : (a.ms ?? 0) - (b.ms ?? 0)
+}
+
 export function toNdjson(lines: JournalLine[], rawExtras: string[] = []): string {
-  const key = (l: JournalLine) => (typeof l.ts === 'string' ? l.ts : '')
-  const sorted = [...lines].sort((a, b) => key(a).localeCompare(key(b)))
+  const sorted = [...lines].sort(byTime)
   const body = sorted.map(l => JSON.stringify(stripSynced(l)))
   const all = [...body, ...rawExtras]
   return all.join('\n') + (all.length ? '\n' : '')
@@ -199,7 +211,7 @@ export function minutesToday(lines: JournalLine[], today: string = dayKey()): nu
 export function forcedTodaySlugs(lines: JournalLine[], today: string = dayKey()): Set<string> {
   const todays = lines
     .filter(l => l.day === today && (l.type === 'review' || l.type === 'session'))
-    .sort((a, b) => (a.ts ?? '').localeCompare(b.ts ?? ''))
+    .sort(byTime)
   let block = 0
   const introBlock = new Map<string, number>()      // slug → индекс сессии знакомства
   const laterPractice = new Map<string, Set<number>>() // slug → индексы сессий с отработкой после знакомства

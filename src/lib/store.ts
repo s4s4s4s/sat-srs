@@ -223,6 +223,7 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     v: 1,
     type: 'review',
     ts: isoLocal(now),
+    ms: now.getMilliseconds(),
     day: dayKey(now),
     slug: item.view.slug,
     skill: item.skill,
@@ -265,20 +266,20 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
 
 /**
  * Знакомство с новым словом БЕЗ оценки FSRS: «Продолжить» на интро — это показ, не вспоминание.
- * Фиксирует first_seen и строку журнала format:intro; первый настоящий рейтинг даст отработка.
+ * Пишет только строку журнала format:intro; первый настоящий рейтинг даст отработка.
+ *
+ * A7: `first_seen` здесь НЕ ставится. Раньше ставился — и слово, знакомство которого урок показал
+ * и бросил без единой отработки, оставалось New с датой первого показа: в отчёте оно выглядело
+ * введённым, а по факту не было выучено (25.07: `hypothesis` получил три знакомства за 40 секунд
+ * и ни одной оценки). Дату первого показа фиксирует rateItem при первой оценке recall из New.
  */
 export async function markIntroduced(item: StudyItem): Promise<void> {
   const rec = state.cards.find(c => c.path === item.view.path)
   if (!rec || rec.broken) return
   const now = new Date()
-  if (!rec.fm.first_seen) {
-    const updated: CardRec = { ...rec, fm: { ...rec.fm, first_seen: dayKey(now) }, dirty: 1 }
-    await db.putCard(updated)
-    state.cards = state.cards.map(c => (c.path === rec.path ? updated : c))
-  }
   const line: JournalRec = {
     id: newId(),
-    v: 1, type: 'review', ts: isoLocal(now), day: dayKey(now),
+    v: 1, type: 'review', ts: isoLocal(now), ms: now.getMilliseconds(), day: dayKey(now),
     slug: item.view.slug, skill: item.skill, format: 'intro', synced: 0
   }
   await db.putJournal([line])
@@ -315,7 +316,7 @@ export async function creditEmptyDay(): Promise<void> {
   const now = new Date()
   const line: JournalRec = {
     id: newId(),
-    v: 1, type: 'session', ts: isoLocal(now), day: today,
+    v: 1, type: 'session', ts: isoLocal(now), ms: now.getMilliseconds(), day: today,
     dur_ms: 0, reviews: 0, new_seen: 0, acc: null, queue_empty: true, synced: 0
   }
   await db.putJournal([line])
@@ -353,6 +354,9 @@ export async function finishSession(r: SessionResult) {
     v: 1,
     type: 'session',
     ts: isoLocal(now),
+    // D1: миллисекунды — тайбрейк внутри секунды, иначе строка session могла встать в файле
+    // раньше последней review своей сессии (порядок задавала выдача IndexedDB по uuid)
+    ms: now.getMilliseconds(),
     // день из старта сессии: финиш в 04:10 не должен уносить queue_empty на следующий учебный день
     day: r.day || dayKey(now),
     dur_ms: r.durMs,

@@ -1,25 +1,33 @@
 /**
  * Симуляция очереди сессии на моках — без PWA/IndexedDB/React. Гоняет РЕАЛЬНЫЕ функции
- * планировщика (buildQueue, pickFormat) и выбора экрана (pickNextIndex, screenFormat),
- * воспроизводя цикл grade→advance из src/screens/Review.tsx. Проверяет инвариант обучения
- * (Учёба/Карточки/_правила-srs.md):
+ * планировщика (buildQueue, pickFormat, earlyFillers) и выбора экрана (pickNext, hasSeparator,
+ * screenFormat), воспроизводя цикл grade→advance→proceed из src/screens/Review.tsx.
+ * Проверяет инвариант обучения (Учёба/Карточки/_правила-srs.md):
+ *   A2 — между двумя показами одной карточки не меньше минуты;
  *   A3 — нет двух подряд идущих экранов одного слова;
- *   A4 — нет двух подряд идущих знакомств (intro);
+ *   A4-bis — знакомств подряд не больше INTRO_BATCH_MAX;
+ *   A6 — каждое показанное знакомство отработано в том же уроке (главный регресс-тест:
+ *        25.07 знакомство показывалось и бросалось, и урок повторялся один в один);
+ *   B4 — урок не заканчивается, пока сегодняшнее слово не отработано;
  *   C1 — type у введённого слова не раньше двух опознаний (reveal/mc);
  *   C2 — слово, дважды проваленное за сессию, из урока выбывает.
  *
  * Запуск: `npm test` (esbuild бандлит этот файл и node его исполняет).
  */
-import { State, Rating, createEmptyCard, type Card as FsrsCard, type Grade } from 'ts-fsrs'
+import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
-  pickFormat, suggestedGrade, hasMeaningHint
+  pickFormat, suggestedGrade, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS
 } from '../src/lib/scheduler'
-import { pickNextIndex, screenFormat, isGiveUp, type OrderCtx } from '../src/lib/session'
+import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
+import { endOfStudyDay } from '../src/lib/daytime'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
 const RETENTION = 0.9
+const DRILL_PER_SESSION = 2
+/** Секунд на экран: реальные показы 25.07 занимали 5–16 c, поэтому разрыв A2 действительно мешает */
+const SCREEN_MS = 10_000
 
 // ---- фабрики карточек ----------------------------------------------------
 
@@ -42,7 +50,7 @@ function newCard(word: string, level = 1): CardView {
   return baseView(word, level, 'vocab')
 }
 
-/** Дозревшее до Review слово с due в прошлом (просрочка → в урок). */
+/** Дозревшее до Review слово; dueOffsetMs < 0 — просрочка (в урок), > суток — только заполнитель. */
 function reviewCard(word: string, level = 1, dueOffsetMs = -3600_000): CardView {
   const v = baseView(word, level, 'vocab')
   const f = makeScheduler(RETENTION)
@@ -56,115 +64,208 @@ function reviewCard(word: string, level = 1, dueOffsetMs = -3600_000): CardView 
   return v
 }
 
+/** Повтор со сроком завтра (после rollover, но в пределах суток) — кандидат в заполнители B4. */
+function tomorrowCard(word: string, level = 1): CardView {
+  return reviewCard(word, level, 20 * 3600_000)
+}
+
 // ---- лог показов ---------------------------------------------------------
 
-interface Show { path: string; format: string; skill: string; graded: Grade | null }
+interface Show {
+  path: string; format: string; skill: string; graded: Grade | null; at: number; key: string
+  reps: number      // fsrs.reps на момент показа — по нему проверяется C1
+  wasNew: boolean   // слово было New на момент показа (знакомство, а не «Подзабылось» зрелого слова)
+}
 
-interface SessionOpts { budget: number; introLimit: number; failWords?: Set<string> }
+interface DayOpts { budget: number; introLimit: number; failWords?: Set<string>; lessons?: number }
+
+interface DayRun { lessons: Show[][]; pauses: number[] }
 
 /**
- * Один прогон сессии. Зеркалит Review.tsx: тот же контекст выбора очереди, те же обновления
- * introduced/lapsed/sinceIntro/introShown, тот же advance с pickNextIndex. Возвращает
- * последовательность показанных экранов.
+ * Прогон учебного дня: несколько уроков подряд по одной колоде (состояние карточек мутирует,
+ * как в store.rateItem). Зеркалит Review.tsx: тот же контекст выбора, те же обновления
+ * introduced/lapsed/sinceIntro/introShown/batchIntros, та же лестница добора proceed
+ * (очередь → недоработанные сегодняшние → заполнители → пауза A2 → конец урока).
  */
-function runSession(deck: CardView[], opts: SessionOpts): Show[] {
+function runDay(deck: CardView[], opts: DayOpts): DayRun {
   const f = makeScheduler(RETENTION)
   const failWords = opts.failWords ?? new Set<string>()
-  const introduced = new Set<string>()
-  const lapsed = new Set<string>()
-  let introShown = 0
-  const introLimit = opts.introLimit
-  let sinceIntro = NEW_GAP
-  const shownTimes = new Map<string, number>()
-  const drilled = new Map<string, number>()
-  const sessionFails = new Map<string, number>()
-  const deferred = new Set<string>()
-  let lastPath: string | null = null
-  let lastWasIntro = false
+  const lessonsN = opts.lessons ?? 1
   let now = BASE
-  const shows: Show[] = []
+  const lessons: Show[][] = []
+  const pauses: number[] = []
+  // эмуляция forcedTodaySlugs: slug → { первый урок со знакомством, уроки с отработкой после него }
+  const introAt = new Map<string, number>()
+  const practiceAt = new Map<string, Set<number>>()
 
-  const ctx = (): OrderCtx => ({
-    deck, introduced, lapsed, reintroAllowed: introShown < introLimit,
-    shownTimes, now, lastPath, lastWasIntro, sinceIntro
-  })
+  for (let lesson = 0; lesson < lessonsN; lesson++) {
+    const introduced = new Set<string>()
+    const lapsed = new Set<string>()
+    let introShown = 0
+    const introLimit = opts.introLimit
+    let sinceIntro = NEW_GAP
+    let batchIntros = 0
+    let fillersUsed = 0
+    const shownTimes = new Map<string, number>()
+    const drilled = new Map<string, number>()
+    const sessionFails = new Map<string, number>()
+    const deferred = new Set<string>()
+    let lastPath: string | null = null
+    let lastWasIntro = false
+    const shows: Show[] = []
 
-  // журнала нет → forcedTodaySlugs пуст → topUp ничего не добирает
-  const topUp = (): StudyItem[] => []
-
-  function advance(q: StudyItem[], next: StudyItem | null, insertAt?: number): StudyItem[] {
-    let rest = q.slice(1)
-    if (deferred.size) rest = rest.filter(i => !deferred.has(i.view.path))
-    if (next && !deferred.has(next.view.path)) {
-      if (insertAt !== undefined) rest.splice(Math.min(rest.length, insertAt), 0, next)
-      else if (shouldRequeue(next.fsrs, new Date(now))) rest.splice(requeuePosition(rest.length, next.fsrs, new Date(now)), 0, next)
-    }
-    let idx = pickNextIndex(rest, ctx())
-    if (idx < 0) {
-      const extra = topUp().filter(i => !deferred.has(i.view.path) && !rest.some(r => itemKey(r) === itemKey(i)))
-      if (extra.length) { rest = [...rest, ...extra]; idx = pickNextIndex(rest, ctx()) }
-    }
-    if (idx < 0) return []
-    if (idx > 0) { const [pick] = rest.splice(idx, 1); rest = [pick, ...rest] }
-    return rest
-  }
-
-  let queue = buildQueue(deck, opts.budget, new Date(now))
-  let guard = 0
-  while (queue.length && guard++ < 2000) {
-    const head = queue[0]
-    const fmt = screenFormat(head, ctx())
-    // render-эффект Review: новое сверх лимита окон-знакомств не показываем — снимаем с головы
-    const isNewIntro = head.fsrs.state === State.New && !introduced.has(itemKey(head))
-      && head.view.choices.length < 2 && !head.view.answerNum && head.skill !== 'prep'
-    if (isNewIntro && introShown >= introLimit) { queue = queue.slice(1); continue }
-
-    // показ
-    shownTimes.set(itemKey(head), now)
-    lastPath = head.view.path
-    lastWasIntro = fmt === 'intro'
-
-    now += 20_000 // ~20 c на экран: A2-разрыв в 60 c закрывается через три чужих показа
-
-    if (fmt === 'intro') {
-      shows.push({ path: head.view.path, format: fmt, skill: head.skill, graded: null })
-      introShown++
-      lapsed.delete(itemKey(head))
-      introduced.add(itemKey(head))
-      sinceIntro = 0
-      queue = advance(queue, head, 2)
-      continue
-    }
-
-    const willFail = failWords.has(head.view.word)
-    const g: Grade = willFail ? Rating.Again : Rating.Good
-    shows.push({ path: head.view.path, format: fmt, skill: head.skill, graded: g })
-
-    const rated = f.next(head.fsrs, new Date(now), g).card
-    head.view.fsrs = rated // зеркалит store.rateItem: обновление состояния карточки в колоде
-    sinceIntro++
-    drilled.set(itemKey(head), (drilled.get(itemKey(head)) ?? 0) + 1)
-
-    if (g === Rating.Again) {
-      lapsed.add(itemKey(head))
-      const p = head.view.path
-      const fails = (sessionFails.get(p) ?? 0) + 1
-      sessionFails.set(p, fails)
-      if (fails >= 2) {
-        deferred.add(p)
-        lapsed.delete(itemKey(head))
-        head.view.fsrs = { ...rated, due: new Date(now + 2 * 86400_000) } // deferItemToNextDay
+    const forced = (): Set<string> => {
+      const out = new Set<string>()
+      for (const [slug, at] of introAt) {
+        const later = [...(practiceAt.get(slug) ?? [])].filter(l => l > at).length
+        if (later < 2) out.add(slug)
       }
-    } else {
-      lapsed.delete(itemKey(head))
+      return out
     }
 
-    const nextItem: StudyItem = { view: head.view, skill: head.skill, fsrs: head.view.fsrs }
-    queue = advance(queue, nextItem)
+    const availableFillers = (exclude: StudyItem[]): StudyItem[] => {
+      if (fillersUsed >= MAX_EARLY_FILLERS) return []
+      const used = new Set(exclude.map(itemKey))
+      return earlyFillers(deck, new Date(now), used, MAX_EARLY_FILLERS - fillersUsed)
+        .filter(i => !deferred.has(i.view.path) && !drilled.has(itemKey(i)))
+    }
+
+    const ctx = (extra: StudyItem[] = []): OrderCtx => ({
+      deck, introduced, lapsed, reintroAllowed: introShown < introLimit, introsLeft: introLimit - introShown,
+      shownTimes, now, lastPath, lastWasIntro, sinceIntro, batchIntros,
+      hasFiller: availableFillers(extra).length > 0
+    })
+
+    const topUp = (): StudyItem[] => {
+      const fs = forced()
+      if (!fs.size) return []
+      return deck
+        .filter(v => fs.has(v.slug) && v.fsrs.state !== State.Review)
+        .map(v => ({ view: v, skill: 'recall' as const, fsrs: v.fsrs }))
+        .filter(i => (drilled.get(itemKey(i)) ?? 0) < DRILL_PER_SESSION)
+    }
+
+    /** Лестница добора из Review.tsx::proceed. [] = урок закончен. */
+    function proceed(list: StudyItem[]): StudyItem[] {
+      let rest = list
+      let guard = 0
+      for (;;) {
+        if (guard++ > 200) throw new Error('proceed не сошлась — вероятно, бесконечная пауза')
+        let pick = pickNext(rest, ctx(rest))
+        if (pick.idx < 0) {
+          const extra = topUp().filter(i => !deferred.has(i.view.path) && !rest.some(r => itemKey(r) === itemKey(i)))
+          if (extra.length) { rest = [...rest, ...extra]; pick = pickNext(rest, ctx(rest)) }
+        }
+        if (pick.idx < 0) {
+          const fill = availableFillers(rest)
+          if (fill.length) {
+            const grown = [...rest, ...fill]
+            const p = pickNext(grown, ctx(grown))
+            if (p.idx >= 0 || p.waitMs > 0) { rest = grown; fillersUsed += fill.length; pick = p }
+          }
+        }
+        if (pick.idx < 0 && pick.waitMs > 0) { now += pick.waitMs; pauses.push(pick.waitMs); continue }
+        if (pick.idx < 0) return []
+        const q = [...rest]
+        if (pick.idx > 0) { const [it] = q.splice(pick.idx, 1); q.unshift(it) }
+        return q
+      }
+    }
+
+    function advance(q: StudyItem[], next: StudyItem | null, insertAt?: number): StudyItem[] {
+      let rest = q.slice(1)
+      if (deferred.size) rest = rest.filter(i => !deferred.has(i.view.path))
+      if (next && !deferred.has(next.view.path)) {
+        if (insertAt !== undefined) rest.splice(Math.min(rest.length, insertAt), 0, next)
+        else if (shouldRequeue(next.fsrs, new Date(now))) rest.splice(requeuePosition(rest.length, next.fsrs, new Date(now)), 0, next)
+      }
+      return proceed(rest)
+    }
+
+    let queue = buildQueue(deck, opts.budget, new Date(now), forced())
+    // старт урока — тот же выбор экрана, что и дальше (иначе первый экран обходил бы инвариант)
+    if (queue.length) queue = proceed(queue)
+    let guard = 0
+    while (queue.length && guard++ < 2000) {
+      const head = queue[0]
+      const fmt = screenFormat(head, ctx(queue))
+      // render-эффект Review: окно-знакомство не показываем, если его нельзя отработать
+      if (fmt === 'intro') {
+        const freshNew = head.fsrs.state === State.New && !introduced.has(itemKey(head))
+        if ((freshNew && introShown >= introLimit) || !hasSeparator(queue, 0, ctx(queue))) {
+          queue = proceed(queue.slice(1))
+          continue
+        }
+      }
+
+      shownTimes.set(itemKey(head), now)
+      lastPath = head.view.path
+      lastWasIntro = fmt === 'intro'
+      shows.push({
+        path: head.view.path, format: fmt, skill: head.skill, graded: null, at: now, key: itemKey(head),
+        reps: head.fsrs.reps, wasNew: head.fsrs.state === State.New
+      })
+      const show = shows[shows.length - 1]
+      now += SCREEN_MS
+
+      if (fmt === 'intro') {
+        introShown++
+        lapsed.delete(itemKey(head))
+        introduced.add(itemKey(head))
+        sinceIntro = 0
+        batchIntros++
+        if (!introAt.has(head.view.slug)) introAt.set(head.view.slug, lesson)
+        queue = advance(queue, head, 2)
+        continue
+      }
+
+      const willFail = failWords.has(head.view.word)
+      const g: Grade = willFail ? Rating.Again : Rating.Good
+      show.graded = g
+
+      let rated = f.next(head.fsrs, new Date(now), g).card
+      // A1 (зеркалит store.rateItem): слово, введённое сегодня, не выходит в Review внутри дня —
+      // держим в Learning со сроком на следующий учебный день. Без этого мок расходился с
+      // приложением: слова уезжали в Review и выпадали из обязательной отработки.
+      const introToday = introAt.has(head.view.slug)
+      const wasIntroState = head.fsrs.state !== State.Review
+      if (rated.state === State.Review && wasIntroState && introToday) {
+        rated = { ...rated, state: State.Learning, due: endOfStudyDay(new Date(now)) }
+      }
+      head.view.fsrs = rated // зеркалит store.rateItem: обновление состояния карточки в колоде
+      sinceIntro++
+      batchIntros = 0
+      drilled.set(itemKey(head), (drilled.get(itemKey(head)) ?? 0) + 1)
+      if (introAt.has(head.view.slug)) {
+        const s = practiceAt.get(head.view.slug) ?? new Set<number>()
+        s.add(lesson)
+        practiceAt.set(head.view.slug, s)
+      }
+
+      if (g === Rating.Again) {
+        lapsed.add(itemKey(head))
+        const p = head.view.path
+        const fails = (sessionFails.get(p) ?? 0) + 1
+        sessionFails.set(p, fails)
+        if (fails >= 2) {
+          deferred.add(p)
+          lapsed.delete(itemKey(head))
+          head.view.fsrs = { ...rated, due: new Date(now + 2 * 86400_000) } // deferItemToNextDay
+        }
+      } else {
+        lapsed.delete(itemKey(head))
+      }
+
+      queue = advance(queue, { view: head.view, skill: head.skill, fsrs: head.view.fsrs })
+    }
+    if (guard >= 2000) throw new Error('сессия не сошлась за 2000 шагов — вероятно, зацикливание')
+    lessons.push(shows)
+    now += 30 * 60000 // пауза между уроками
   }
-  if (guard >= 2000) throw new Error('сессия не сошлась за 2000 шагов — вероятно, зацикливание')
-  return shows
+  return { lessons, pauses }
 }
+
+const runSession = (deck: CardView[], opts: DayOpts): Show[] => runDay(deck, opts).lessons[0]
 
 // ---- проверки инварианта -------------------------------------------------
 
@@ -176,6 +277,19 @@ function fmtSeq(shows: Show[]): string {
   return shows.map(s => `${s.path.replace('deck/', '').replace('.md', '')}:${s.format}`).join(' → ')
 }
 
+/** A2 — между двумя показами одной единицы не меньше минуты. */
+function checkA2(shows: Show[], tag: string): void {
+  const last = new Map<string, number>()
+  for (const s of shows) {
+    const prev = last.get(s.key)
+    if (prev !== undefined) {
+      assert(s.at - prev >= MIN_SHOW_GAP_MS,
+        `[${tag}] A2 нарушено: ${s.key} показан через ${(s.at - prev) / 1000} c.\n  ${fmtSeq(shows)}`)
+    }
+    last.set(s.key, s.at)
+  }
+}
+
 /** A3 — нет двух подряд идущих экранов одного слова. */
 function checkA3(shows: Show[], tag: string): void {
   for (let i = 1; i < shows.length; i++) {
@@ -184,23 +298,47 @@ function checkA3(shows: Show[], tag: string): void {
   }
 }
 
-/** A4 — нет двух подряд идущих знакомств. */
+/** A4-bis — знакомств подряд не больше INTRO_BATCH_MAX (батч включается, когда разбавлять нечем). */
 function checkA4(shows: Show[], tag: string): void {
-  for (let i = 1; i < shows.length; i++) {
-    assert(!(shows[i].format === 'intro' && shows[i - 1].format === 'intro'),
-      `[${tag}] A4 нарушено на #${i}: два intro подряд.\n  ${fmtSeq(shows)}`)
+  let run = 0
+  for (const s of shows) {
+    run = s.format === 'intro' ? run + 1 : 0
+    assert(run <= INTRO_BATCH_MAX,
+      `[${tag}] A4-bis нарушено: ${run} знакомств подряд (> ${INTRO_BATCH_MAX}).\n  ${fmtSeq(shows)}`)
   }
 }
 
-/** C1 — у слова, введённого этой сессией (первый экран intro), type не раньше двух опознаний. */
+/**
+ * A6 — каждое показанное знакомство отработано в ТОМ ЖЕ уроке (есть оценённый показ того же
+ * слова после него). Это главный регресс-тест: 25.07 урок показывал знакомство и завершался,
+ * слово оставалось New с датой первого показа, и следующий урок повторял его один в один.
+ */
+function checkA6(shows: Show[], tag: string): void {
+  shows.forEach((s, i) => {
+    if (s.format !== 'intro') return
+    const drilled = shows.slice(i + 1).some(x => x.path === s.path && x.graded !== null)
+    assert(drilled, `[${tag}] A6 нарушено: знакомство ${s.path} брошено без отработки.\n  ${fmtSeq(shows)}`)
+  })
+}
+
+/**
+ * C1 — производство (type) не раньше двух реальных опознаний. Проверяется по `reps` на момент
+ * показа (знакомство рейтинга не даёт, поэтому reps ≥ 2 = после двух reveal/mc) и дополнительно
+ * по числу опознаний внутри урока у слова, введённого этим уроком (первый экран — знакомство
+ * НОВОГО слова; окно «Подзабылось» у зрелого слова под C1 не попадает — у него reps уже большой).
+ */
 function checkC1(shows: Show[], tag: string): void {
-  const firstFmt = new Map<string, string>()
-  for (const s of shows) if (!firstFmt.has(s.path)) firstFmt.set(s.path, s.format)
+  const firstShow = new Map<string, Show>()
+  for (const s of shows) if (!firstShow.has(s.path)) firstShow.set(s.path, s)
   const recog = new Map<string, number>()
   for (const s of shows) {
-    if (s.format === 'type' && firstFmt.get(s.path) === 'intro') {
-      assert((recog.get(s.path) ?? 0) >= 2,
-        `[${tag}] C1 нарушено: type у ${s.path} после ${recog.get(s.path) ?? 0} опознаний.\n  ${fmtSeq(shows)}`)
+    if (s.format === 'type') {
+      assert(s.reps >= 2, `[${tag}] C1 нарушено: type у ${s.path} при reps=${s.reps}.\n  ${fmtSeq(shows)}`)
+      const first = firstShow.get(s.path)!
+      if (first.format === 'intro' && first.wasNew) {
+        assert((recog.get(s.path) ?? 0) >= 2,
+          `[${tag}] C1 нарушено: type у ${s.path} после ${recog.get(s.path) ?? 0} опознаний.\n  ${fmtSeq(shows)}`)
+      }
     }
     if (s.format === 'reveal' || s.format === 'mc') recog.set(s.path, (recog.get(s.path) ?? 0) + 1)
   }
@@ -225,16 +363,51 @@ function checkC2(shows: Show[], tag: string): void {
 }
 
 function checkAll(shows: Show[], tag: string): void {
-  checkA3(shows, tag); checkA4(shows, tag); checkC1(shows, tag); checkC2(shows, tag)
+  checkA2(shows, tag); checkA3(shows, tag); checkA4(shows, tag)
+  checkA6(shows, tag); checkC1(shows, tag); checkC2(shows, tag)
 }
 
 // ---- сценарии ------------------------------------------------------------
 
 let passed = 0
-function scenario(tag: string, deck: CardView[], opts: SessionOpts): void {
+function scenario(tag: string, deck: CardView[], opts: DayOpts): void {
   const shows = runSession(deck, opts)
   checkAll(shows, tag)
   console.log(`  ✓ ${tag}: ${shows.length} экранов, инвариант держит`)
+  passed++
+}
+
+/**
+ * Репро 25.07: колода из одних новых и пул отработок из нуля/одной карточки. Три урока подряд
+ * не должны быть одинаковыми, а слова обязаны получать оценки, а не только знакомства.
+ */
+function progressScenario(tag: string, deck: CardView[], opts: DayOpts): void {
+  const newCount = deck.filter(v => v.fsrs.state === State.New).length
+  // сколько уроков обязаны быть содержательными: пока в колоде есть чем вводить.
+  // Дальше пустой урок законен — это честное «на сегодня всё», а не тупик.
+  const required = Math.min(3, Math.max(1, Math.ceil(newCount / Math.max(1, opts.budget))))
+  const { lessons } = runDay(deck, { ...opts, lessons: 3 })
+  lessons.forEach((shows, i) => checkAll(shows, `${tag}/урок${i + 1}`))
+  const rated = new Set<string>()
+  let prev = 0
+  lessons.forEach((shows, i) => {
+    for (const s of shows) if (s.graded !== null) rated.add(s.path)
+    if (i < required) {
+      assert(shows.length > 0, `[${tag}] урок ${i + 1} пуст, хотя вводить ещё есть что (новых ${newCount}).`)
+      assert(shows.some(s => s.graded !== null),
+        `[${tag}] урок ${i + 1} состоит из одних знакомств без оценок.\n  ${fmtSeq(shows)}`)
+      assert(rated.size > prev,
+        `[${tag}] урок ${i + 1} не добавил ни одного отработанного слова (было ${prev}).\n  ${fmtSeq(shows)}`)
+    }
+    prev = rated.size
+  })
+  // уроки не повторяются один в один (кроме двух пустых подряд — это «на сегодня всё»)
+  const sigs = lessons.map(fmtSeq)
+  for (let i = 1; i < sigs.length; i++) {
+    assert(sigs[i] !== sigs[i - 1] || sigs[i] === '',
+      `[${tag}] урок ${i + 1} повторил предыдущий один в один:\n  ${sigs[i]}`)
+  }
+  console.log(`  ✓ ${tag}: 3 урока — ${lessons.map(l => l.length).join('/')} экранов, отработано ${rated.size} слов, повторов нет`)
   passed++
 }
 
@@ -292,16 +465,47 @@ function dontKnowChecks(): void {
   passed++
 }
 
-function main(): void {
-  console.log('SRS session simulation — A3/A4/C1/C2')
+/** Заполнители (B4): в пул попадает только повтор со сроком в пределах суток, и не больше потолка. */
+function fillerChecks(): void {
+  const deck = [tomorrowCard('t1'), tomorrowCard('t2'), reviewCard('overdue'), newCard('fresh')]
+  const f = earlyFillers(deck, new Date(BASE), new Set<string>())
+  const slugs = f.map(i => i.view.slug).sort()
+  assert(slugs.join(',') === 't1,t2', `B4: в заполнители попало лишнее: ${slugs.join(',')}`)
+  assert(earlyFillers(deck, new Date(BASE), new Set(['deck/t1.md#recall'])).length === 1,
+    'B4: заполнитель, уже стоящий в очереди, не исключён')
+  assert(earlyFillers(deck, new Date(BASE), new Set<string>(), 0).length === 0, 'B4: потолок заполнителей не соблюдён')
+  console.log('  ✓ фильтр заполнителей (B4): просроченное и новое не берём, потолок работает')
+  passed++
+}
 
-  // Сценарий-репро бага: колода из одних новых, повторов нет (хвост урока, где ломалось).
+function main(): void {
+  console.log('SRS session simulation — A2/A3/A4-bis/A6/B4/C1/C2')
+
+  // ---- репро 25.07: пул отработок пуст или почти пуст --------------------
+  // Колода из одних новых, повторов на сегодня нет вообще.
+  progressScenario('пустой-пул', [
+    newCard('hypothesis'), newCard('derive'), newCard('imply'), newCard('yield'),
+    newCard('viable'), newCard('adhere'), newCard('substantial'), newCard('reinforce')
+  ], { budget: 3, introLimit: 3 })
+
+  // Буквальный репро: одна созревшая карточка + новые (25.07: concede + 147 новых).
+  progressScenario('одна-готовая-карта', [
+    reviewCard('concede'), newCard('hypothesis'), newCard('derive'), newCard('imply'),
+    newCard('yield'), newCard('viable'), newCard('adhere')
+  ], { budget: 3, introLimit: 3 })
+
+  // Пул пуст, но есть повторы на завтра — лестница должна поднять их заполнителями.
+  progressScenario('заполнители-из-завтра', [
+    tomorrowCard('advocate'), tomorrowCard('dismiss'), tomorrowCard('deter'), tomorrowCard('coherent'),
+    newCard('hypothesis'), newCard('derive'), newCard('imply'), newCard('yield')
+  ], { budget: 3, introLimit: 3 })
+
+  // ---- прежние сценарии (не должны сломаться) ---------------------------
   scenario('all-new-6', [
     newCard('characterize'), newCard('coherent'), newCard('bias'),
     newCard('compelling'), newCard('concede'), newCard('contest')
   ], { budget: 3, introLimit: 3 })
 
-  // Новые вперемешку с повторами.
   scenario('mixed', [
     reviewCard('alpha'), reviewCard('beta'), reviewCard('gamma'), reviewCard('delta'),
     newCard('scrutinize'), newCard('bolster'), newCard('corroborate'), newCard('undermine')
@@ -321,25 +525,38 @@ function main(): void {
     reviewCard('r1'), reviewCard('r2'), reviewCard('r3'), reviewCard('r4'), reviewCard('r5')
   ], { budget: 0, introLimit: 3 })
 
-  // Рандомизированный батч: разные размеры колод, лимиты, набор провальных слов.
-  const rng = makeRng(20260724)
+  // Единственная карточка в колоде: развести знакомство и отработку нечем (A3) — слово ждёт,
+  // но и не «сгорает»: знакомство не показывается вовсе.
+  const lone = [newCard('alone')]
+  const loneShows = runSession(lone, { budget: 3, introLimit: 3 })
+  checkAll(loneShows, 'одна-карточка')
+  assert(!loneShows.some(s => s.format === 'intro'),
+    `A6: знакомство выдано, хотя разделителя нет: ${fmtSeq(loneShows)}`)
+  console.log('  ✓ одна-карточка: знакомство не выдано (A6), слово осталось New')
+  passed++
+
+  // ---- рандомизированный батч -------------------------------------------
+  const rng = makeRng(20260725)
   const N = 400
   for (let t = 0; t < N; t++) {
     const nRev = Math.floor(rng() * 6)
     const nNew = Math.floor(rng() * 6) + 1
+    const nTom = Math.floor(rng() * 3)
     const deck: CardView[] = []
     for (let i = 0; i < nRev; i++) deck.push(reviewCard(`rev${t}_${i}`, 1 + (i % 3)))
+    for (let i = 0; i < nTom; i++) deck.push(tomorrowCard(`tom${t}_${i}`, 1 + (i % 3)))
     for (let i = 0; i < nNew; i++) deck.push(newCard(`new${t}_${i}`, 1 + (i % 3)))
     const failWords = new Set<string>()
     if (rng() < 0.5 && deck.length) failWords.add(deck[Math.floor(rng() * deck.length)].word)
     const budget = Math.floor(rng() * 4)
     const introLimit = 1 + Math.floor(rng() * 3)
-    const shows = runSession(deck, { budget, introLimit, failWords })
-    checkAll(shows, `rand#${t}`)
+    const { lessons } = runDay(deck, { budget, introLimit, failWords, lessons: 2 })
+    lessons.forEach((shows, i) => checkAll(shows, `rand#${t}/урок${i + 1}`))
   }
-  console.log(`  ✓ рандомизированный батч: ${N} сессий, инвариант держит везде`)
+  console.log(`  ✓ рандомизированный батч: ${N} дней по 2 урока, инвариант держит везде`)
   passed++
 
+  fillerChecks()
   dontKnowChecks()
 
   console.log(`\nВсе проверки пройдены (${passed} групп).`)
