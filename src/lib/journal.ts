@@ -68,6 +68,22 @@ function stripSynced(l: JournalLine): JournalLine {
   return rest
 }
 
+/**
+ * Точность УРОКА: доля непровальных ответов среди всех оценок сессии.
+ * Итоги урока раньше показывали ретеншн по зрелым карточкам (`passRev/totalRev`), и после
+ * 41 упражнения с 13 «Заново» экран выдавал «повторов 1 · точность 100%» — потому что зрелой
+ * в том уроке была одна карточка. Ретеншн остаётся отдельной строкой (matureRetention):
+ * он нужен FSRS-диагностике, но не описывает проделанную работу.
+ */
+export function sessionAccuracy(r: { reviews: number; again: number }): number | null {
+  return r.reviews > 0 ? Math.round(((r.reviews - r.again) / r.reviews) * 100) : null
+}
+
+/** Ретеншн по зрелым карточкам урока (prev_state = Review): null, если зрелых не было. */
+export function matureRetention(r: { passRev: number; totalRev: number }): number | null {
+  return r.totalRev > 0 ? Math.round((r.passRev / r.totalRev) * 100) : null
+}
+
 /** Кап зачётного времени на карточку: math-задачи решаются дольше слов */
 export function cardTimeCap(kind?: string): number {
   return kind === 'math' ? 180_000 : CARD_TIME_CAP_MS

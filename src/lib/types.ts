@@ -81,7 +81,9 @@ export interface JournalLine {
   dur_ms?: number
   reviews?: number
   new_seen?: number
-  acc?: number | null
+  acc?: number | null      // ретеншн по ЗРЕЛЫМ карточкам (prev_state = Review); null, если их не было
+  acc_all?: number | null  // точность за урок по ВСЕМ оценкам — то, что видит ученик на итогах
+  again?: number           // сколько раз за урок нажато «Заново» (включая честное «не помню»)
   queue_empty?: boolean
 }
 

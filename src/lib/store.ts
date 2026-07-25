@@ -6,7 +6,7 @@ import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
 import { makeScheduler, effectiveRetention, homeCounts, DUE_CAP, type Section } from './scheduler'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
-import { newId, newIntroducedOn } from './journal'
+import { newId, newIntroducedOn, matureRetention, sessionAccuracy } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS } from './types'
 
@@ -362,7 +362,11 @@ export async function finishSession(r: SessionResult) {
     dur_ms: r.durMs,
     reviews: r.reviews,
     new_seen: r.newSeen,
-    acc: r.totalRev ? Math.round((r.passRev / r.totalRev) * 100) : null,
+    acc: matureRetention(r),
+    // точность за весь урок и число провалов — то, что показывается на итогах; `acc` остаётся
+    // ретеншном по зрелым карточкам, чтобы старые строки и метрики читались как раньше (D3)
+    acc_all: sessionAccuracy(r),
+    again: r.again,
     queue_empty: r.queueEmpty,
     synced: 0
   }

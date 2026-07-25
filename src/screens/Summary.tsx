@@ -1,5 +1,5 @@
 import { useApp, setScreen } from '../lib/store'
-import { streak } from '../lib/journal'
+import { streak, sessionAccuracy, matureRetention } from '../lib/journal'
 import { Timer, Check, Bolt } from '../components/Icon'
 import FlameBuddy from '../components/FlameBuddy'
 import FjordScene from '../components/FjordScene'
@@ -13,7 +13,10 @@ export default function Summary() {
     setScreen('home')
     return null
   }
-  const acc = r.totalRev ? Math.round((r.passRev / r.totalRev) * 100) : null
+  // точность урока — по ВСЕМ оценкам сессии. Раньше здесь стоял ретеншн по зрелым карточкам,
+  // и урок из 41 упражнения с 13 «Заново» показывал «повторов 1 · точность 100%»
+  const acc = sessionAccuracy(r)
+  const ret = matureRetention(r)
   const mm = Math.floor(r.durMs / 60000)
   const ss = Math.floor((r.durMs % 60000) / 1000)
 
@@ -28,6 +31,10 @@ export default function Summary() {
             {st.todayDone ? `серия ${st.days} — день зачтён` : 'день ещё не зачтён'}
             {st.todayDone && st.toFreeze > 0 && ` · до ❄ ещё ${st.toFreeze} дн`}
           </div>
+          {/* зрелые повторы — отдельной строкой: это сигнал FSRS, а не описание проделанной работы */}
+          {ret !== null && (
+            <div className="sum-sub">зрелых повторов {r.totalRev} · ретеншн {ret}%</div>
+          )}
         </div>
         <div className="tiles">
           <div className="tile tile-new">
@@ -35,8 +42,8 @@ export default function Summary() {
             <div className="tile-body"><Bolt size={17} />{r.newSeen}</div>
           </div>
           <div className="tile tile-due">
-            <div className="tile-head">Повторов</div>
-            <div className="tile-body"><Check size={17} />{r.totalRev}</div>
+            <div className="tile-head">Упражнений</div>
+            <div className="tile-body"><Check size={17} />{r.reviews}</div>
           </div>
           {acc !== null && (
             <div className="tile tile-gold">

@@ -22,6 +22,7 @@ import {
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
 import { endOfStudyDay } from '../src/lib/daytime'
+import { sessionAccuracy, matureRetention } from '../src/lib/journal'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
 const RETENTION = 0.9
@@ -465,6 +466,22 @@ function dontKnowChecks(): void {
   passed++
 }
 
+/**
+ * Итоги урока: точность считается по ВСЕМ оценкам сессии, а не по зрелым карточкам.
+ * Числа взяты из настоящего урока 25.07 12:05–12:21 (журнал): 41 оценка, 12 «Заново»,
+ * зрелая карточка одна и пройдена. Экран показывал «повторов 1 · точность 100%».
+ */
+function summaryChecks(): void {
+  const real = { reviews: 41, again: 12, passRev: 1, totalRev: 1 }
+  assert(sessionAccuracy(real) === 71, `итоги: точность урока должна быть 71%, а не ${sessionAccuracy(real)}`)
+  assert(matureRetention(real) === 100, 'итоги: ретеншн по зрелым остаётся отдельным числом (100%)')
+  assert(sessionAccuracy({ reviews: 0, again: 0 }) === null, 'итоги: без оценок точности нет (null, а не 0%)')
+  assert(matureRetention({ passRev: 0, totalRev: 0 }) === null, 'итоги: без зрелых карточек ретеншна нет')
+  assert(sessionAccuracy({ reviews: 4, again: 4 }) === 0, 'итоги: все провалы — 0%, а не null')
+  console.log('  ✓ итоги урока: точность по всем оценкам (репро 25.07: 41 оценка/12 «Заново» → 71%, не 100%)')
+  passed++
+}
+
 /** Заполнители (B4): в пул попадает только повтор со сроком в пределах суток, и не больше потолка. */
 function fillerChecks(): void {
   const deck = [tomorrowCard('t1'), tomorrowCard('t2'), reviewCard('overdue'), newCard('fresh')]
@@ -557,6 +574,7 @@ function main(): void {
   passed++
 
   fillerChecks()
+  summaryChecks()
   dontKnowChecks()
 
   console.log(`\nВсе проверки пройдены (${passed} групп).`)
