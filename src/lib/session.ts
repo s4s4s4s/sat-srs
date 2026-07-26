@@ -1,6 +1,6 @@
 import { State } from 'ts-fsrs'
 import type { CardView, Format, StudyItem } from './types'
-import { pickFormat, itemKey, MIN_SHOW_GAP_MS, NEW_GAP } from './scheduler'
+import { pickFormat, itemKey, MIN_SHOW_GAP_MS, MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, NEW_GAP } from './scheduler'
 
 /**
  * Выбор следующего экрана сессии — чистая логика, без React и IndexedDB (её же гоняет
@@ -16,6 +16,8 @@ export interface OrderCtx {
   reintroAllowed: boolean          // остался ли лимит окон-знакомств за урок (== introsLeft > 0)
   introsLeft: number               // сколько окон-знакомств урок ещё может выдать
   shownTimes: Map<string, number>  // itemKey → мс последнего показа (A2)
+  drilled: Map<string, number>     // itemKey → сколько раз слово ОЦЕНЕНО в этой сессии
+  introPending: Set<string>        // itemKey, чей ПОСЛЕДНИЙ показ был окном-знакомством
   now: number
   lastPath: string | null          // path карточки, показанной ПРЕДЫДУЩИМ экраном (A3)
   lastWasIntro: boolean            // предыдущий экран был окном-знакомством (A4)
@@ -78,6 +80,9 @@ export function hasSeparator(list: StudyItem[], i: number, ctx: OrderCtx): boole
     if (j === i) continue
     const other = list[j]
     if (other.view.path === self) continue
+    // разделитель обязан быть доступен ПО ВРЕМЕНИ: карточка, показанная секунду назад, разделить
+    // знакомство и его отработку не сможет — её саму держит A2, и знакомство осталось бы брошенным
+    if (!gapPassed(other, ctx)) continue
     if (isFreshNew(other, ctx)) {
       // новое слово в разделители годится только если лимит окон-знакомств выдержит ДВА:
       // наше знакомство и его. Иначе после нашего оно станет непоказуемым, и отрабатывать
@@ -93,6 +98,17 @@ export function hasSeparator(list: StudyItem[], i: number, ctx: OrderCtx): boole
   return ctx.hasFiller
 }
 
+/** Прошёл ли для единицы её разрыв A2 (для только что введённого слова — сокращённый). */
+function gapPassed(item: StudyItem, ctx: OrderCtx, gap = MIN_SHOW_GAP_MS): boolean {
+  const key = itemKey(item)
+  const last = ctx.shownTimes.get(key) ?? 0
+  if (!last) return true
+  // если последним показом слова было окно-знакомство, отработка приходит быстрее: показ —
+  // не извлечение из памяти, «остывать» нечему (INTRO_GAP_MS). Касается и окна «Подзабылось»
+  const afterIntro = ctx.introPending.has(key)
+  return ctx.now - last >= (afterIntro ? Math.min(gap, INTRO_GAP_MS) : gap)
+}
+
 type Block = 'ok' | 'time' | 'struct'
 
 /**
@@ -100,7 +116,7 @@ type Block = 'ok' | 'time' | 'struct'
  * (пройдёт само), `struct` — нарушение, которое ожиданием не лечится.
  * relaxA4 = проход батча знакомств (A4-bis), когда строгим порядком показать нечего.
  */
-function evaluate(list: StudyItem[], i: number, ctx: OrderCtx, relaxA4: boolean): Block {
+function evaluate(list: StudyItem[], i: number, ctx: OrderCtx, relaxA4: boolean, gap = MIN_SHOW_GAP_MS): Block {
   const it = list[i]
   if (ctx.lastPath && it.view.path === ctx.lastPath) return 'struct'   // A3
   if (isIntroScreen(it, ctx)) {
@@ -113,41 +129,40 @@ function evaluate(list: StudyItem[], i: number, ctx: OrderCtx, relaxA4: boolean)
       if (ctx.sinceIntro < NEW_GAP) return 'struct'                    // A4
     }
   }
-  const last = ctx.shownTimes.get(itemKey(it)) ?? 0
-  if (last && ctx.now - last < MIN_SHOW_GAP_MS) return 'time'          // A2
+  if (!gapPassed(it, ctx, gap)) return 'time'                          // A2
   return 'ok'
 }
 
 export interface NextPick {
-  /** индекс следующей единицы в `list`; −1 = сейчас показывать нечего */
+  /** индекс следующей единицы в `list`; −1 = показывать нечего, урок исчерпан */
   idx: number
-  /**
-   * При idx < 0: сколько миллисекунд осталось до момента, когда ближайшая годная единица
-   * пройдёт разрыв A2. 0 = ждать бесполезно, ограничение структурное (урок исчерпан).
-   * Именно эта разница и была потеряна: «сейчас нельзя» трактовалось как «нечего добирать»,
-   * и урок завершался после одного знакомства.
-   */
-  waitMs: number
+  /** выбор сделан по аварийному полу разрыва (30 c) — альтернатив у урока не было */
+  byFloor: boolean
 }
 
 /**
  * Следующий экран урока. Порядок очереди сохраняется — берётся ПЕРВАЯ допустимая единица.
- * Сначала строгий проход (A2 + A3 + A4 + A6), и только если он пуст — проход батча знакомств
- * (A4-bis), где допускается знакомство сразу после знакомства. A2, A3 и A6 не смягчаются никогда.
+ * Три прохода, каждый включается только если предыдущий пуст:
+ *   1) строгий — A2 (60 c) + A3 + A4 + A6;
+ *   2) батч знакомств (A4-bis) — знакомство сразу после знакомства, когда разбавлять нечем;
+ *   3) аварийный пол A2 (30 c) — включается ТОЛЬКО с `allowFloor`, то есть когда вызывающий
+ *      уже прошёл всю лестницу добора (сегодняшние недоработанные → ранние повторы → лишнее
+ *      новое слово) и альтернатив нет вообще. Ожидания на экране нет: простой в учебном
+ *      приложении хуже, чем показ на тридцатой секунде вместо шестидесятой.
+ * A3 и A6 не смягчаются никогда.
  */
-export function pickNext(list: StudyItem[], ctx: OrderCtx): NextPick {
-  let wait = Infinity
+export function pickNext(list: StudyItem[], ctx: OrderCtx, allowFloor = false): NextPick {
   for (const relaxA4 of [false, true]) {
     for (let i = 0; i < list.length; i++) {
-      const b = evaluate(list, i, ctx, relaxA4)
-      if (b === 'ok') return { idx: i, waitMs: 0 }
-      if (b === 'time') {
-        const last = ctx.shownTimes.get(itemKey(list[i])) ?? 0
-        wait = Math.min(wait, MIN_SHOW_GAP_MS - (ctx.now - last))
-      }
+      if (evaluate(list, i, ctx, relaxA4) === 'ok') return { idx: i, byFloor: false }
     }
   }
-  return { idx: -1, waitMs: Number.isFinite(wait) ? Math.max(0, wait) : 0 }
+  if (allowFloor) {
+    for (let i = 0; i < list.length; i++) {
+      if (evaluate(list, i, ctx, true, MIN_SHOW_GAP_FLOOR_MS) === 'ok') return { idx: i, byFloor: true }
+    }
+  }
+  return { idx: -1, byFloor: false }
 }
 
 /**

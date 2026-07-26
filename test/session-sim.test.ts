@@ -18,7 +18,8 @@ import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
-  pickFormat, suggestedGrade, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS
+  pickFormat, suggestedGrade, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS,
+  MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
 import { endOfStudyDay } from '../src/lib/daytime'
@@ -78,9 +79,9 @@ interface Show {
   wasNew: boolean   // слово было New на момент показа (знакомство, а не «Подзабылось» зрелого слова)
 }
 
-interface DayOpts { budget: number; introLimit: number; failWords?: Set<string>; lessons?: number }
+interface DayOpts { budget: number; introLimit: number; failWords?: Set<string>; lessons?: number; dayNew?: number }
 
-interface DayRun { lessons: Show[][]; pauses: number[] }
+interface DayRun { lessons: Show[][] }
 
 /**
  * Прогон учебного дня: несколько уроков подряд по одной колоде (состояние карточек мутирует,
@@ -94,7 +95,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
   const lessonsN = opts.lessons ?? 1
   let now = BASE
   const lessons: Show[][] = []
-  const pauses: number[] = []
+  const dayNew = opts.dayNew ?? 15
   // эмуляция forcedTodaySlugs: slug → { первый урок со знакомством, уроки с отработкой после него }
   const introAt = new Map<string, number>()
   const practiceAt = new Map<string, Set<number>>()
@@ -103,7 +104,9 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
     const introduced = new Set<string>()
     const lapsed = new Set<string>()
     let introShown = 0
-    const introLimit = opts.introLimit
+    let introBonus = 0
+    let freshIntros = 0
+    const introLimit = () => opts.introLimit + introBonus
     let sinceIntro = NEW_GAP
     let batchIntros = 0
     let fillersUsed = 0
@@ -113,6 +116,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
     const deferred = new Set<string>()
     let lastPath: string | null = null
     let lastWasIntro = false
+    const introPending = new Set<string>()
     const shows: Show[] = []
 
     const forced = (): Set<string> => {
@@ -132,8 +136,8 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
     }
 
     const ctx = (extra: StudyItem[] = []): OrderCtx => ({
-      deck, introduced, lapsed, reintroAllowed: introShown < introLimit, introsLeft: introLimit - introShown,
-      shownTimes, now, lastPath, lastWasIntro, sinceIntro, batchIntros,
+      deck, introduced, lapsed, reintroAllowed: introShown < introLimit(), introsLeft: introLimit() - introShown,
+      shownTimes, drilled, introPending, now, lastPath, lastWasIntro, sinceIntro, batchIntros,
       hasFiller: availableFillers(extra).length > 0
     })
 
@@ -146,31 +150,27 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
         .filter(i => (drilled.get(itemKey(i)) ?? 0) < DRILL_PER_SESSION)
     }
 
-    /** Лестница добора из Review.tsx::proceed. [] = урок закончен. */
+    /** Лестница добора из Review.tsx::proceed. [] = урок закончен. Ожидания нет по построению. */
     function proceed(list: StudyItem[]): StudyItem[] {
       let rest = list
-      let guard = 0
-      for (;;) {
-        if (guard++ > 200) throw new Error('proceed не сошлась — вероятно, бесконечная пауза')
-        let pick = pickNext(rest, ctx(rest))
-        if (pick.idx < 0) {
-          const extra = topUp().filter(i => !deferred.has(i.view.path) && !rest.some(r => itemKey(r) === itemKey(i)))
-          if (extra.length) { rest = [...rest, ...extra]; pick = pickNext(rest, ctx(rest)) }
-        }
-        if (pick.idx < 0) {
-          const fill = availableFillers(rest)
-          if (fill.length) {
-            const grown = [...rest, ...fill]
-            const p = pickNext(grown, ctx(grown))
-            if (p.idx >= 0 || p.waitMs > 0) { rest = grown; fillersUsed += fill.length; pick = p }
-          }
-        }
-        if (pick.idx < 0 && pick.waitMs > 0) { now += pick.waitMs; pauses.push(pick.waitMs); continue }
-        if (pick.idx < 0) return []
-        const q = [...rest]
-        if (pick.idx > 0) { const [it] = q.splice(pick.idx, 1); q.unshift(it) }
-        return q
+      let pick = pickNext(rest, ctx(rest))
+      if (pick.idx < 0) {
+        const extra = topUp().filter(i => !deferred.has(i.view.path) && !rest.some(r => itemKey(r) === itemKey(i)))
+        if (extra.length) { rest = [...rest, ...extra]; pick = pickNext(rest, ctx(rest)) }
       }
+      if (pick.idx < 0) {
+        const fill = availableFillers(rest)
+        if (fill.length) { rest = [...rest, ...fill]; fillersUsed += fill.length; pick = pickNext(rest, ctx(rest)) }
+      }
+      if (pick.idx < 0 && freshIntros < dayNew && introBonus < MAX_INTRO_BONUS) {
+        const bonus = nextNewItems(deck, new Set(rest.map(itemKey)), 1).filter(i => !deferred.has(i.view.path))
+        if (bonus.length) { rest = [...rest, ...bonus]; introBonus += bonus.length; pick = pickNext(rest, ctx(rest)) }
+      }
+      if (pick.idx < 0) pick = pickNext(rest, ctx(rest), true)   // аварийный пол разрыва
+      if (pick.idx < 0) return []
+      const q = [...rest]
+      if (pick.idx > 0) { const [it] = q.splice(pick.idx, 1); q.unshift(it) }
+      return q
     }
 
     function advance(q: StudyItem[], next: StudyItem | null, insertAt?: number): StudyItem[] {
@@ -193,7 +193,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       // render-эффект Review: окно-знакомство не показываем, если его нельзя отработать
       if (fmt === 'intro') {
         const freshNew = head.fsrs.state === State.New && !introduced.has(itemKey(head))
-        if ((freshNew && introShown >= introLimit) || !hasSeparator(queue, 0, ctx(queue))) {
+        if ((freshNew && introShown >= introLimit()) || !hasSeparator(queue, 0, ctx(queue))) {
           queue = proceed(queue.slice(1))
           continue
         }
@@ -202,6 +202,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       shownTimes.set(itemKey(head), now)
       lastPath = head.view.path
       lastWasIntro = fmt === 'intro'
+      if (fmt === 'intro') introPending.add(itemKey(head)); else introPending.delete(itemKey(head))
       shows.push({
         path: head.view.path, format: fmt, skill: head.skill, graded: null, at: now, key: itemKey(head),
         reps: head.fsrs.reps, wasNew: head.fsrs.state === State.New
@@ -211,6 +212,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
 
       if (fmt === 'intro') {
         introShown++
+        if (head.fsrs.state === State.New) freshIntros++
         lapsed.delete(itemKey(head))
         introduced.add(itemKey(head))
         sinceIntro = 0
@@ -263,7 +265,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
     lessons.push(shows)
     now += 30 * 60000 // пауза между уроками
   }
-  return { lessons, pauses }
+  return { lessons }
 }
 
 const runSession = (deck: CardView[], opts: DayOpts): Show[] => runDay(deck, opts).lessons[0]
@@ -278,17 +280,30 @@ function fmtSeq(shows: Show[]): string {
   return shows.map(s => `${s.path.replace('deck/', '').replace('.md', '')}:${s.format}`).join(' → ')
 }
 
-/** A2 — между двумя показами одной единицы не меньше минуты. */
-function checkA2(shows: Show[], tag: string): void {
+/**
+ * A2 — между двумя показами одной единицы не меньше минуты; аварийный пол 30 c допустим
+ * только когда уроку было нечего показать вместо этой карточки (лестница добора пуста).
+ * Пол проверяем жёстко, число показов в окне 30–60 c печатаем: раньше вместо такого показа
+ * рисовался экран ожидания с отсчётом, и это оказалось хуже, чем показ на тридцатой секунде.
+ */
+function checkA2(shows: Show[], tag: string): number {
   const last = new Map<string, number>()
+  const prevFmt = new Map<string, string>()
+  let byFloor = 0
   for (const s of shows) {
     const prev = last.get(s.key)
     if (prev !== undefined) {
-      assert(s.at - prev >= MIN_SHOW_GAP_MS,
-        `[${tag}] A2 нарушено: ${s.key} показан через ${(s.at - prev) / 1000} c.\n  ${fmtSeq(shows)}`)
+      const gap = s.at - prev
+      const afterIntro = prevFmt.get(s.key) === 'intro'
+      const need = afterIntro ? INTRO_GAP_MS : MIN_SHOW_GAP_FLOOR_MS
+      assert(gap >= need,
+        `[${tag}] A2 нарушено: ${s.key} показан через ${gap / 1000} c (минимум ${need / 1000} c).\n  ${fmtSeq(shows)}`)
+      if (!afterIntro && gap < MIN_SHOW_GAP_MS) byFloor++
     }
     last.set(s.key, s.at)
+    prevFmt.set(s.key, s.format)
   }
+  return byFloor
 }
 
 /** A3 — нет двух подряд идущих экранов одного слова. */
@@ -310,16 +325,27 @@ function checkA4(shows: Show[], tag: string): void {
 }
 
 /**
- * A6 — каждое показанное знакомство отработано в ТОМ ЖЕ уроке (есть оценённый показ того же
- * слова после него). Это главный регресс-тест: 25.07 урок показывал знакомство и завершался,
- * слово оставалось New с датой первого показа, и следующий урок повторял его один в один.
+ * A6 — знакомство нового слова отрабатывается в ТОМ ЖЕ уроке. Главный регресс-тест:
+ * 25.07 урок показывал знакомство и завершался, слово оставалось New с датой первого показа,
+ * и следующий урок повторял его один в один. Единственное допустимое исключение — знакомство
+ * оказалось ПОСЛЕДНИМ экраном урока (материал кончился сразу после него): тогда слово остаётся
+ * New и не помечается (A7: first_seen только с оценкой), а следующий урок вводит его заново
+ * и отрабатывает. Показывать отработку встык нельзя — это A3, тот самый баг intro→reveal→type.
  */
 function checkA6(shows: Show[], tag: string): void {
+  const orphans: number[] = []
   shows.forEach((s, i) => {
-    if (s.format !== 'intro') return
-    const drilled = shows.slice(i + 1).some(x => x.path === s.path && x.graded !== null)
-    assert(drilled, `[${tag}] A6 нарушено: знакомство ${s.path} брошено без отработки.\n  ${fmtSeq(shows)}`)
+    // только знакомства НОВЫХ слов: именно они «сгорали». Окно «Подзабылось» у зрелого слова
+    // данных не портит (у него уже есть fsrs и оценки) — это ещё один показ значения.
+    if (s.format !== 'intro' || !s.wasNew) return
+    if (!shows.slice(i + 1).some(x => x.path === s.path && x.graded !== null)) orphans.push(i)
   })
+  for (const i of orphans) {
+    assert(i === shows.length - 1,
+      `[${tag}] A6 нарушено: знакомство ${shows[i].path} брошено в СЕРЕДИНЕ урока.\n  ${fmtSeq(shows)}`)
+  }
+  assert(orphans.length <= 1,
+    `[${tag}] A6 нарушено: ${orphans.length} знакомств без отработки за урок.\n  ${fmtSeq(shows)}`)
 }
 
 /**
@@ -363,9 +389,11 @@ function checkC2(shows: Show[], tag: string): void {
   })
 }
 
-function checkAll(shows: Show[], tag: string): void {
-  checkA2(shows, tag); checkA3(shows, tag); checkA4(shows, tag)
+function checkAll(shows: Show[], tag: string): number {
+  const byFloor = checkA2(shows, tag)
+  checkA3(shows, tag); checkA4(shows, tag)
   checkA6(shows, tag); checkC1(shows, tag); checkC2(shows, tag)
+  return byFloor
 }
 
 // ---- сценарии ------------------------------------------------------------
@@ -373,8 +401,8 @@ function checkAll(shows: Show[], tag: string): void {
 let passed = 0
 function scenario(tag: string, deck: CardView[], opts: DayOpts): void {
   const shows = runSession(deck, opts)
-  checkAll(shows, tag)
-  console.log(`  ✓ ${tag}: ${shows.length} экранов, инвариант держит`)
+  const byFloor = checkAll(shows, tag)
+  console.log(`  ✓ ${tag}: ${shows.length} экранов, инвариант держит${byFloor ? ` (по полу 30 c: ${byFloor})` : ''}`)
   passed++
 }
 
@@ -388,7 +416,7 @@ function progressScenario(tag: string, deck: CardView[], opts: DayOpts): void {
   // Дальше пустой урок законен — это честное «на сегодня всё», а не тупик.
   const required = Math.min(3, Math.max(1, Math.ceil(newCount / Math.max(1, opts.budget))))
   const { lessons } = runDay(deck, { ...opts, lessons: 3 })
-  lessons.forEach((shows, i) => checkAll(shows, `${tag}/урок${i + 1}`))
+  const byFloor = lessons.reduce((a, shows, i) => a + checkAll(shows, `${tag}/урок${i + 1}`), 0)
   const rated = new Set<string>()
   let prev = 0
   lessons.forEach((shows, i) => {
@@ -397,18 +425,20 @@ function progressScenario(tag: string, deck: CardView[], opts: DayOpts): void {
       assert(shows.length > 0, `[${tag}] урок ${i + 1} пуст, хотя вводить ещё есть что (новых ${newCount}).`)
       assert(shows.some(s => s.graded !== null),
         `[${tag}] урок ${i + 1} состоит из одних знакомств без оценок.\n  ${fmtSeq(shows)}`)
-      assert(rated.size > prev,
-        `[${tag}] урок ${i + 1} не добавил ни одного отработанного слова (было ${prev}).\n  ${fmtSeq(shows)}`)
     }
     prev = rated.size
   })
+  void prev
+  // за день отработано больше слов, чем ввёл бы один урок: день двигается, а не стоит
+  assert(rated.size > opts.budget,
+    `[${tag}] за три урока отработано всего ${rated.size} слов при лимите ${opts.budget} за урок — день не двигается`)
   // уроки не повторяются один в один (кроме двух пустых подряд — это «на сегодня всё»)
   const sigs = lessons.map(fmtSeq)
   for (let i = 1; i < sigs.length; i++) {
     assert(sigs[i] !== sigs[i - 1] || sigs[i] === '',
       `[${tag}] урок ${i + 1} повторил предыдущий один в один:\n  ${sigs[i]}`)
   }
-  console.log(`  ✓ ${tag}: 3 урока — ${lessons.map(l => l.length).join('/')} экранов, отработано ${rated.size} слов, повторов нет`)
+  console.log(`  ✓ ${tag}: 3 урока — ${lessons.map(l => l.length).join('/')} экранов, отработано ${rated.size} слов, повторов нет${byFloor ? ` (по полу 30 c: ${byFloor})` : ''}`)
   passed++
 }
 

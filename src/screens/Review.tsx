@@ -5,7 +5,7 @@ import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
   pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP,
-  earlyFillers, MAX_EARLY_FILLERS
+  earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems
 } from '../lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, type OrderCtx } from '../lib/session'
 import Tex from '../components/Tex'
@@ -129,6 +129,7 @@ export default function Review() {
       // режим «только повторение» — ноль новых
       const dayLeft = Math.max(0, app.settings.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
       const budget = app.sessionReviewOnly ? 0 : Math.min(dayLeft, app.settings.newPerLesson || 3)
+      dayNewLeft.current = dayLeft   // граница для добора новых сверх урочного лимита
       // point 3: слова, введённые сегодня в прошлых уроках и ещё не отработанные дважды,
       // принудительно добираются в этот урок (buildQueue дотягивает их из Learning с due на завтра)
       const forced = forcedTodaySlugs(currentJournal(), dayKey())
@@ -158,17 +159,19 @@ export default function Review() {
   // окон-знакомств за урок (новые intro + «Подзабылось»): «Подзабылось» для мозга — та же нагрузка,
   // поэтому входит в общий урочный лимит. Новые приоритетны, переznakomство берёт остаток.
   const introShown = useRef(0)
-  const introLimit = Math.max(1, app.settings.newPerLesson || 3)
+  // урочный лимит окон-знакомств; introBonus поднимает его, когда иначе уроку нечего показать
+  const baseIntroLimit = Math.max(1, app.settings.newPerLesson || 3)
+  const introBonus = useRef(0)
+  const introLimitNow = () => baseIntroLimit + introBonus.current
+  // знакомств НОВЫХ слов за сессию и остаток дневного лимита — граница для добора сверх урочного
+  const freshIntros = useRef(0)
+  const dayNewLeft = useRef(0)
   // сколько отработок прошло с прошлого знакомства (новые слова не идут пачкой)
   const sinceIntro = useRef(NEW_GAP)
   // A4-bis: знакомств подряд без оценённой отработки между ними — батч, когда разбавлять нечем
   const batchIntros = useRef(0)
   // B4: сколько заполнителей (ранних повторов) урок уже подтянул — потолок MAX_EARLY_FILLERS
   const fillersUsed = useRef(0)
-  // A2: следующий экран есть, но 60-секундный разрыв ещё не прошёл — короткая пауза вместо
-  // завершения урока. Раньше «сейчас нельзя» трактовалось как «нечего добирать» → урок кончался
-  const [waiting, setWaiting] = useState<{ until: number; list: StudyItem[] } | null>(null)
-  const [waitTick, setWaitTick] = useState(0) // перерисовка обратного отсчёта на экране паузы
   // point 2: время последнего показа каждой единицы — не показываем одну карту чаще, чем раз в минуту
   const shownTimes = useRef(new Map<string, number>())
   // point 4: сколько раз слово отработано в ЭТОЙ сессии — добор сегодняшних новых имеет предел
@@ -177,6 +180,8 @@ export default function Review() {
   // одного слова встык (A3) и не выдаёт два знакомства подряд без упражнения между ними (A4)
   const lastShownPath = useRef<string | null>(null)
   const lastWasIntro = useRef(false)
+  // itemKey, чей последний показ был окном-знакомством: их отработка допускается раньше (INTRO_GAP_MS)
+  const introPending = useRef(new Set<string>())
   // C2: сколько раз слово провалено за ЭТУ сессию (по path) и множество отложенных до завтра (провал ×2)
   const sessionFails = useRef(new Map<string, number>())
   const deferredToday = useRef(new Set<string>())
@@ -195,7 +200,6 @@ export default function Review() {
   // задание пересобирается при смене головы очереди
   useEffect(() => {
     if (!head) { setTask(null); return }
-    if (waiting) return // пауза A2: экран менять нельзя, следующий выберется после ожидания
     // окно-знакомство выдаём только если урок сможет его отработать. Два запрета:
     // — новое сверх урочного лимита окон (переznakomство уже съело бюджет) ждёт следующего урока;
     // — A6: нечем развести знакомство и первую отработку (A3) → знакомство не показывается вовсе,
@@ -203,19 +207,21 @@ export default function Review() {
     //   числится введённым, не выучено, и следующий урок повторяет его один в один.
     if (screenFormat(head, orderCtx(queue ?? [])) === 'intro') {
       const freshNew = head.fsrs.state === State.New && !introduced.current.has(itemKey(head))
-      const overLimit = freshNew && introShown.current >= introLimit
+      const overLimit = freshNew && introShown.current >= introLimitNow()
       if (overLimit || !hasSeparator(queue ?? [head], 0, orderCtx(queue ?? []))) {
         void proceed((queue ?? []).slice(1))
         return
       }
     }
-    const shown = makeTask(head, deck, introduced.current, lapsed.current, introShown.current < introLimit)
+    const shown = makeTask(head, deck, introduced.current, lapsed.current, introShown.current < introLimitNow())
     setTask(shown)
     // point 2/A2: отметка момента показа этой единицы — pickNextIndex держит 60-секундный разрыв
     shownTimes.current.set(itemKey(head), Date.now())
     // A3/A4: что показано этим экраном — вход для следующего выбора очереди
     lastShownPath.current = head.view.path
     lastWasIntro.current = shown.format === 'intro'
+    if (shown.format === 'intro') introPending.current.add(itemKey(head))
+    else introPending.current.delete(itemKey(head))
     setRevealed(false)
     setPicked(null)
     setTyped('')
@@ -230,30 +236,10 @@ export default function Review() {
 
   useEffect(() => {
     const t = setInterval(() => {
-      // пауза между показами одной карточки в длительность урока не идёт — иначе она
-      // накручивала бы dur_ms и «минуты сегодня» временем, когда ученик ничего не делал
-      if (document.visibilityState === 'visible' && !waiting) setActiveSec(s => s + 1)
+      if (document.visibilityState === 'visible') setActiveSec(s => s + 1)
     }, 1000)
     return () => clearInterval(t)
-  }, [waiting])
-
-  /**
-   * Пауза A2: ждём истечения 60-секундного разрыва и выбираем экран заново. Урок при этом
-   * НЕ завершён — раньше именно здесь он и заканчивался, оставляя новое слово без отработки.
-   * Ожидание конечно: pickNext возвращает минимальный остаток разрыва, после которого
-   * хотя бы одна единица становится допустимой.
-   */
-  useEffect(() => {
-    if (!waiting) return
-    const t = setTimeout(() => {
-      const list = waiting.list
-      setWaiting(null)
-      void proceed(list)
-    }, Math.max(250, waiting.until - Date.now()))
-    const tick = setInterval(() => setWaitTick(x => x + 1), 500)
-    return () => { clearTimeout(t); clearInterval(tick) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [waiting])
+  }, [])
 
   // в «показе» вердикт появляется, только если пользователь сам ввёл слово —
   // тогда сигнал объективный и оценка считается как у ввода.
@@ -278,9 +264,11 @@ export default function Review() {
       deck,
       introduced: introduced.current,
       lapsed: lapsed.current,
-      reintroAllowed: introShown.current < introLimit,
-      introsLeft: introLimit - introShown.current,
+      reintroAllowed: introShown.current < introLimitNow(),
+      introsLeft: introLimitNow() - introShown.current,
       shownTimes: shownTimes.current,
+      drilled: drilled.current,
+      introPending: introPending.current,
       now: Date.now(),
       lastPath: lastShownPath.current,
       lastWasIntro: lastWasIntro.current,
@@ -301,6 +289,19 @@ export default function Review() {
     const used = new Set(exclude.map(itemKey))
     return earlyFillers(deck, new Date(), used, MAX_EARLY_FILLERS - fillersUsed.current)
       .filter(i => !deferredToday.current.has(i.view.path) && !drilled.current.has(itemKey(i)))
+  }
+
+  /**
+   * Последняя ступень лестницы: ещё одно новое слово сверх урочного лимита. Урочный лимит —
+   * про комфортный темп, ДНЕВНОЙ (`newPerDay`) — про нагрузку на память; здесь уступает
+   * только первый, и лишь когда альтернатива — пустой экран.
+   */
+  function bonusNew(exclude: StudyItem[]): StudyItem[] {
+    if (app.sessionReviewOnly) return []              // режим «только повторение» — новых не вводим
+    if (introBonus.current >= MAX_INTRO_BONUS) return []
+    if (freshIntros.current >= dayNewLeft.current) return []
+    const used = new Set(exclude.map(itemKey))
+    return nextNewItems(deck, used, 1).filter(i => !deferredToday.current.has(i.view.path))
   }
 
   /**
@@ -341,16 +342,24 @@ export default function Review() {
     if (pick.idx < 0) {
       const fill = availableFillers(rest)
       if (fill.length) {
-        const grown = [...rest, ...fill]
-        const p = pickNext(grown, orderCtx(grown))
-        if (p.idx >= 0 || p.waitMs > 0) { rest = grown; fillersUsed.current += fill.length; pick = p }
+        rest = [...rest, ...fill]
+        fillersUsed.current += fill.length
+        pick = pickNext(rest, orderCtx(rest))
       }
     }
-    if (pick.idx < 0 && pick.waitMs > 0) {
-      // экран есть, но слишком рано его показывать (A2) — ждём, урок не закончен
-      setWaiting({ until: Date.now() + pick.waitMs, list: rest })
-      return
+    if (pick.idx < 0) {
+      // последняя ступень: лишнее новое слово сверх УРОЧНОГО лимита (дневной не трогаем).
+      // Лучше ввести четвёртое слово, чем оставить ученика без экрана
+      const bonus = bonusNew(rest)
+      if (bonus.length) {
+        rest = [...rest, ...bonus]
+        introBonus.current += bonus.length
+        pick = pickNext(rest, orderCtx(rest))
+      }
     }
+    // лестница пройдена: если и теперь ничего — разрешаем аварийный пол разрыва (30 c),
+    // чтобы вместо простоя или потери введённого слова дать показ на тридцатой секунде
+    if (pick.idx < 0) pick = pickNext(rest, orderCtx(rest), true)
     if (pick.idx < 0) {
       // добирать нечего и всё, что осталось, нарушило бы инвариант — урок закончен (B3)
       setQueue([])
@@ -437,6 +446,8 @@ export default function Review() {
         sinceIntro.current = 0
         // A4-bis: счётчик батча растёт до первой оценённой отработки
         batchIntros.current++
+        // знакомства новых слов считаем отдельно: дневной лимит про них, а не про «Подзабылось»
+        if (task.item.fsrs.state === State.New) freshIntros.current++
         await markIntroduced(task.item)
         await advance(task.item, false, 2)
         return
@@ -530,22 +541,6 @@ export default function Review() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
-  if (waiting) {
-    // A2: следующий экран уже выбран, но между двумя показами одной карточки должна пройти
-    // минута. Честная пауза с отсчётом вместо преждевременного «Очередь пуста».
-    void waitTick
-    const left = Math.max(1, Math.ceil((waiting.until - Date.now()) / 1000))
-    return (
-      <div className={`screen rev-wash wash-${section}`}>
-        <div className="rev-body" style={{ textAlign: 'center', alignItems: 'center', justifyContent: 'center' }}>
-          <FlameBuddy size={72} mood="think" />
-          <h2 className="sum-title">Секунду — {left} с</h2>
-          <div className="sum-sub">Даём слову остыть: между двумя показами одной карточки должна пройти минута, иначе это проверка внимания, а не памяти.</div>
-          <button className="intro-know" onClick={() => { if (!busy.current) void finish(false) }}>Завершить урок</button>
-        </div>
-      </div>
-    )
-  }
   if (!queue || (head && !task)) {
     return (
       <div className="screen">

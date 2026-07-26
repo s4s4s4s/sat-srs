@@ -106,6 +106,28 @@ export const LEARN_AHEAD_MS = 30 * 60000
 export const MIN_SHOW_GAP_MS = 60_000
 
 /**
+ * Аварийный пол разрыва. Основной разрыв — 60 c, и он соблюдается, пока уроку есть что
+ * показать вместо этой карточки (добор: сегодняшние недоработанные → ранний повтор →
+ * ещё одно новое в пределах ДНЕВНОГО лимита). Если альтернатив нет вообще, карточка
+ * показывается по этому полу — но ученик не сидит без дела: экрана-ожидания нет.
+ * Сначала здесь была честная пауза с отсчётом — это оказалось хуже всего остального:
+ * 25 секунд простоя в учебном приложении, которые вдобавок обходились выходом и
+ * повторным входом в урок (счётчики показов живут внутри сессии).
+ */
+export const MIN_SHOW_GAP_FLOOR_MS = 30_000
+
+/**
+ * Разрыв между ЗНАКОМСТВОМ и первой отработкой того же слова. Знакомство — не извлечение
+ * из памяти, а показ: смысл A2 («три верных ответа внутри минуты не проверяют память»)
+ * относится к паре оценка→оценка, а не к паре показ→первая оценка. Требование A3 (между ними
+ * обязательно другая карточка) остаётся, поэтому первая отработка приходит через два-три
+ * чужих экрана — как первый learning-шаг в Anki. Без этого различия урок на тонком пуле
+ * упирался в тупик: слово введено, а показать его снова нельзя ещё минуту, и показывать
+ * больше нечего.
+ */
+export const INTRO_GAP_MS = 20_000
+
+/**
  * Минимум отработок между знакомствами с новыми словами.
  * Новые подряд грузят рабочую память и мешают друг другу (interference):
  * слово должно быть хотя бы раз извлечено, прежде чем в голову зайдёт следующее.
@@ -144,6 +166,38 @@ export function expandItems(cards: CardView[]): StudyItem[] {
 export const itemKey = (i: StudyItem) => `${i.view.path}#${i.skill}`
 
 /**
+ * Новые единицы в порядке ввода: сначала error/grammar (доказанные пробелы), потом math,
+ * потом словарь уровнями (Duolingo-путь): level ASC, внутри уровня added ASC.
+ * Вынесено из buildQueue, потому что тем же порядком урок добирает лишнее новое слово,
+ * когда иначе ему нечего показать (см. Review.tsx::proceed).
+ */
+export function freshItems(items: StudyItem[]): StudyItem[] {
+  return items
+    .filter(i => i.fsrs.state === State.New)
+    .sort((a, b) => {
+      const ka = kindRank(a.view)
+      const kb = kindRank(b.view)
+      if (ka !== kb) return ka - kb
+      if (isLevelled(a.view) && isLevelled(b.view)) {
+        if (a.view.level !== b.view.level) return a.view.level - b.view.level
+        const ad = a.view.added.localeCompare(b.view.added)
+        if (ad !== 0) return ad
+        return a.view.slug.localeCompare(b.view.slug)
+      }
+      const ad = b.view.added.localeCompare(a.view.added)
+      if (ad !== 0) return ad
+      return a.view.slug.localeCompare(b.view.slug)
+    })
+}
+
+/** Следующие новые слова за пределами урочного лимита — последняя ступень добора (B4). */
+export function nextNewItems(cards: CardView[], exclude: Set<string>, limit = 1): StudyItem[] {
+  return freshItems(expandItems(cards))
+    .filter(i => i.skill === 'recall' && !exclude.has(itemKey(i)))
+    .slice(0, Math.max(0, limit))
+}
+
+/**
  * Очередь сессии: Learning/Relearning → Review (due сегодня) → New (лимит).
  * Review и New перемешаны interleaving-ом, learning — впереди по due.
  */
@@ -160,22 +214,7 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
   // выбор новых: сначала error/grammar (закрывают доказанные пробелы), потом math, потом словарь;
   // словарь идёт уровнями (Duolingo-путь): level ASC, внутри уровня — свежедобавленные последними
   // (added ASC, стабильный порядок). error/grammar/math/transition — порядок прежний: added DESC.
-  const fresh = items
-    .filter(i => i.fsrs.state === State.New)
-    .sort((a, b) => {
-      const ka = kindRank(a.view)
-      const kb = kindRank(b.view)
-      if (ka !== kb) return ka - kb
-      if (isLevelled(a.view) && isLevelled(b.view)) {
-        if (a.view.level !== b.view.level) return a.view.level - b.view.level
-        const ad = a.view.added.localeCompare(b.view.added)
-        if (ad !== 0) return ad
-        return a.view.slug.localeCompare(b.view.slug)
-      }
-      const ad = b.view.added.localeCompare(a.view.added)
-      if (ad !== 0) return ad
-      return a.view.slug.localeCompare(b.view.slug)
-    })
+  const fresh = freshItems(items)
   const newItems = shuffle(fresh.slice(0, Math.max(0, newBudget)))
 
   // interleaving с разрядкой: новые распределяем среди review, но не ближе чем через
@@ -206,15 +245,23 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
 
 /**
  * Заполнитель (B4, третья ступень лестницы добора): повтор, срок которого ещё не пришёл,
- * но придёт в пределах суток. Нужен, когда урок обязан развести знакомство и первую отработку
+ * но придёт в ближайшие трое суток. Нужен, когда урок обязан развести знакомство и первую отработку
  * слова (A3), а разбавлять нечем: после большой сессии всё введённое уезжает на следующий день
  * (A1), пул созревших пустеет, и урок вырождался в одно знакомство. Ранний повтор — правка
  * состава очереди, не формул: FSRS штатно обрабатывает досрочный показ (E1 не нарушается).
  * Ступень включается ТОЛЬКО когда без неё урок встанет, и ограничена MAX_EARLY_FILLERS,
  * чтобы не вычерпывать завтрашний день.
  */
-export const FILLER_LOOKAHEAD_MS = 24 * 3600_000
-export const MAX_EARLY_FILLERS = 6
+export const FILLER_LOOKAHEAD_MS = 72 * 3600_000
+export const MAX_EARLY_FILLERS = 12
+
+/**
+ * Насколько урок может превысить свой лимит новых слов, когда иначе ему нечего показать.
+ * Урочный лимит — про комфортный темп, и он уступает пустому экрану, но не безгранично:
+ * без потолка урок на тонком пуле вводил всю дневную норму за один присест.
+ * Дневной лимит (`newPerDay`) не превышается никогда.
+ */
+export const MAX_INTRO_BONUS = 2
 
 export function earlyFillers(cards: CardView[], now: Date, exclude: Set<string>, limit = MAX_EARLY_FILLERS): StudyItem[] {
   const eod = endOfStudyDay(now)
