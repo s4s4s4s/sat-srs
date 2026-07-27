@@ -38,7 +38,7 @@ export default function SettingsScreen() {
     }
     const nl = Number(newPerLessonStr.trim())
     if (!newPerLessonStr.trim() || !Number.isFinite(nl) || nl < 1) {
-      setErr('«Новых за урок» — число от 1 до 10.')
+      setErr('«Новых за урок» — число от 1 до 5.')
       return
     }
     const next = {

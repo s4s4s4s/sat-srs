@@ -4,7 +4,8 @@ import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
-import { makeScheduler, effectiveRetention, homeCounts, DUE_CAP, type Section } from './scheduler'
+import { makeScheduler, effectiveRetention, homeCounts, isLevelled, DUE_CAP, type Section } from './scheduler'
+import { parseMetrics, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
 import { newId, newIntroducedOn, matureRetention, sessionAccuracy } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
@@ -26,6 +27,7 @@ interface AppState {
   tokenExpiresAt: string | null
   session: SessionResult | null
   levelNames: Record<string, string>
+  metricsHistory: MetricSnapshot[]
 }
 
 let state: AppState = {
@@ -41,7 +43,8 @@ let state: AppState = {
   lastSyncAt: null,
   tokenExpiresAt: null,
   session: null,
-  levelNames: {}
+  levelNames: {},
+  metricsHistory: []
 }
 
 const listeners = new Set<() => void>()
@@ -98,6 +101,7 @@ export async function init() {
     state.journal = await db.getAllJournal()
     state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? null
     state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? {}
+    state.metricsHistory = parseMetrics((await db.kvGet<string>('metricsText')) ?? '')
   } catch (e: any) {
     // локальная база не открылась (бывает на холодном старте WebKit) — не виснем на «Загрузка…»
     state.syncStatus = 'error'
@@ -131,6 +135,7 @@ export async function startSync(): Promise<void> {
   state.journal = await db.getAllJournal()
   state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? state.lastSyncAt
   state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? state.levelNames
+  state.metricsHistory = parseMetrics((await db.kvGet<string>('metricsText')) ?? '')
   state.syncStatus = res.status
   state.syncError = res.error ?? res.warning ?? (res.conflicts ? `Конфликт имён с тьютором: ваша карточка сохранена с суффиксом -2 (${res.conflicts})` : '')
   state.tokenExpiresAt = tokenExpiration
@@ -184,7 +189,7 @@ export function unsyncedCount(): number {
 }
 
 /** Оценка учебной единицы (карточка × навык): FSRS → запись в свой fsrs-блок файла (dirty) → строка журнала. */
-export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, correct?: boolean, gaveUp?: boolean): Promise<{ card: FsrsCard; lineId: string }> {
+export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, correct?: boolean, gaveUp?: boolean, typo?: boolean): Promise<{ card: FsrsCard; lineId: string }> {
   const rec = state.cards.find(c => c.path === item.view.path)
   if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${item.view.path}`)
   const fsrsKey = item.skill === 'prep' ? 'fsrs_prep' : 'fsrs'
@@ -229,15 +234,21 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     skill: item.skill,
     format,
     ...(correct === undefined ? {} : { correct }),
+    // опечатка (Левенштейн) при вводе — не незнание: помечаем, чтобы исключить из retention
+    ...(typo ? { typo: true } : {}),
     // C3/C4: «не помню» / пустой ввод — честное признание незнания, семантически ≠ неверный ответ
     ...(gaveUp ? { gave_up: true } : {}),
     ...(item.view.kind !== 'vocab' ? { kind: item.view.kind } : {}),
     ...(item.view.domain ? { domain: item.view.domain } : {}),
+    // ступень слова на момент показа — чтобы retention по ступеням не врал после переразметки
+    ...(isLevelled(item.view) && item.view.level < 999 ? { level: item.view.level } : {}),
     rating: grade,
     prev_state: prev.state,
     new_state: next.state,
     due: next.due.toISOString(),
     stability: Math.round(next.stability * 100) / 100,
+    // плановый интервал FSRS — точный бакет интервала в retentionByInterval без реконструкции из ts
+    scheduled_days: next.scheduled_days,
     elapsed_ms: elapsedMs,
     synced: 0
   }

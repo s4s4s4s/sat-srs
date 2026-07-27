@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useApp, views, setScreen, startSync, startLesson, creditEmptyDay, unsyncedCount } from '../lib/store'
 import { homeCounts, sectionOf, levelStats, activeLevel, EXAM_DATE, type Section } from '../lib/scheduler'
 import { streak, newIntroducedOn, minutesToday, MIN_MINUTES, type PauseRange } from '../lib/journal'
+import { examReady, pace, PRIMARY_DATE, TARGET_WORDS } from '../lib/metrics'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt } from '../components/Icon'
 import FlameBuddy from '../components/FlameBuddy'
@@ -70,6 +71,13 @@ export default function Home() {
   const minsDone = mins >= MIN_MINUTES || st.todayDone
   const daysToExam = Math.max(0, Math.ceil((EXAM_DATE.getTime() - Date.now()) / 86400_000))
 
+  // главное число: «слов готово к экзамену» на реальный якорь 03.10 + дефицит и темп
+  const er = examReady(all, PRIMARY_DATE)
+  const pc = pace(all, app.journal, PRIMARY_DATE)
+  const paceVerdict = pc.verdict === 'ahead'
+    ? 'идёшь с опережением'
+    : pc.daysBehind === null ? 'темпа нет — начни ввод' : `отстаёшь на ${pc.daysBehind} дн`
+
   // идеальный день: всё повторено вовремя — зачитывается сам, серия не страдает
   const cAll = homeCounts(all, budget)
   const dueNow = cAll.learnDue + cAll.revDue + cAll.newAvail
@@ -114,6 +122,17 @@ export default function Home() {
 
       <div className="fjord-gap">
         <div className="home-buddy"><FlameBuddy size={82} mood={st.todayDone ? 'happy' : 'idle'} /></div>
+      </div>
+
+      <div className="card hero hero-slim">
+        <div className="hero-head" style={{ marginBottom: 6 }}>
+          <span className="hero-title">Готово к 03.10</span>
+          <span className="hero-sub"><b>{er.ready}</b> из {TARGET_WORDS}</span>
+        </div>
+        <div className="minbar-row" style={{ marginTop: 0, marginBottom: 4 }}>
+          <div className="minbar"><div style={{ width: `${Math.min(100, (er.ready / TARGET_WORDS) * 100)}%` }} /></div>
+          <span className="minbar-label">нужно +{pc.neededPerDay}/день · {paceVerdict}</span>
+        </div>
       </div>
 
       <div className="card hero hero-slim">

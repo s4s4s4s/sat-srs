@@ -5,6 +5,16 @@ import { addDaysKey, dayKey } from './daytime'
 export const MIN_MINUTES = 15          // защищённый минимум
 export const CARD_TIME_CAP_MS = 60_000 // AFK-защита: на карточку в зачёт минут — максимум 60 c
 
+/**
+ * Порог «опечатка, а не незнание» при вводе (checkTyped): <= TYPO_MAX_EDITS правок Левенштейна
+ * при длине искомого слова >= TYPO_MIN_LEN. Мотив из данных: bolster ×9, scrutinize ×8,
+ * corroborate ×7, ambivalent ×6 за 14 дней — это орфография, но засчитывалась как провал памяти
+ * и рушила и расписание, и метрику. Опечатка помечается typo:true, исключается из retention и
+ * не обрушает интервал FSRS (см. suggestedGrade → Good, Review.tsx — переспрос в этом же уроке).
+ */
+export const TYPO_MIN_LEN = 6
+export const TYPO_MAX_EDITS = 2
+
 export function newId(): string {
   // crypto.randomUUID есть только в secure context и Safari ≥ 15.4 — фолбэк на getRandomValues
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
@@ -176,7 +186,7 @@ export function retentionByFormat(lines: JournalLine[], today: string = dayKey()
   const acc: Record<string, { pass: number; total: number }> = {}
   for (const l of lines) {
     if (l.type !== 'review' || !l.day || l.day < from) continue
-    if (l.prev_state !== State.Review) continue
+    if (l.prev_state !== State.Review || l.typo) continue
     const f = l.format ?? 'reveal'
     if (f === 'intro') continue
     acc[f] ??= { pass: 0, total: 0 }
@@ -193,7 +203,7 @@ export function trueRetention30(lines: JournalLine[], today: string = dayKey()):
   let pass = 0
   let total = 0
   for (const l of lines) {
-    if (l.type !== 'review' || l.prev_state !== State.Review) continue
+    if (l.type !== 'review' || l.prev_state !== State.Review || l.typo) continue
     if (l.day < from || l.day > today) continue
     total++
     if ((l.rating ?? 0) > 1) pass++

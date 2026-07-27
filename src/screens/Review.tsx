@@ -454,9 +454,10 @@ export default function Review() {
       }
 
       const prevState = task.item.fsrs.state
+      const isTypo = verdict === 'typo'
       let rated
       try {
-        rated = await rateItem(task.item, g, elapsed, task.format, verdict === null ? undefined : verdict !== 'wrong', gaveUp)
+        rated = await rateItem(task.item, g, elapsed, task.format, verdict === null ? undefined : verdict !== 'wrong', gaveUp, isTypo)
       } catch {
         // карточка исчезла (синк удалил/тьютор переименовал) — пропускаем, не блокируя сессию
         await advance(null)
@@ -504,6 +505,10 @@ export default function Review() {
       if (wrong && prevState === State.Review && !gaveUp) {
         pendingAdvance.current = { next: { ...task.item, fsrs: rated.card }, atFront: false }
         setCauseFor(rated.lineId)
+      } else if (isTypo) {
+        // опечатка: интервал FSRS не рушим (оценка Good), но слово переспрашивается в этом же
+        // уроке — вернём его в очередь через несколько экранов (A2-разрыв соблюдёт pickNext)
+        await advance({ ...task.item, fsrs: rated.card }, false, 3)
       } else {
         await advance({ ...task.item, fsrs: rated.card })
       }

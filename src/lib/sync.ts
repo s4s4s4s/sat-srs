@@ -1,10 +1,12 @@
 import { GitHubClient, GhError, type TreeEntry } from './github'
-import { parseMd, serializeMd, mergeCard } from './yamlfm'
+import { parseMd, serializeMd, mergeCard, cardView } from './yamlfm'
 import { parseNdjson, toNdjson } from './journal'
 import { buildReport } from './report'
+import { buildMetricsSnapshot, appendDailySnapshot } from './metrics'
+import { EXAM_DATE } from './scheduler'
 import * as db from './db'
 import type { JournalRec, Settings } from './types'
-import { monthOfDay } from './daytime'
+import { monthOfDay, dayKey } from './daytime'
 
 export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'error' | 'ok'
 
@@ -22,8 +24,12 @@ const JOURNAL_DIR = '_журнал'
 const isCardPath = (p: string, base: string) =>
   p.startsWith(base + '/') && p.endsWith('.md') && !p.includes(`/${JOURNAL_DIR}/`) && !p.split('/').pop()!.startsWith('_')
 
+// месячные журналы (2026-07.ndjson) — но НЕ служебные `_`-файлы (_метрики.ndjson): у последних
+// нет id/ts/day, они сломали бы parseNdjson и уехали бы в rawByMonth. Метрики тянутся адресно.
 const isJournalPath = (p: string, base: string) =>
-  p.startsWith(`${base}/${JOURNAL_DIR}/`) && p.endsWith('.ndjson')
+  p.startsWith(`${base}/${JOURNAL_DIR}/`) && p.endsWith('.ndjson') && !p.split('/').pop()!.startsWith('_')
+
+const metricsPathOf = (base: string) => `${base}/${JOURNAL_DIR}/_метрики.ndjson`
 
 let running: Promise<SyncResult> | null = null
 
@@ -71,6 +77,14 @@ async function doSync(settings: Settings): Promise<SyncResult> {
       const pause = settings.pauseFrom && settings.pauseTo ? { from: settings.pauseFrom, to: settings.pauseTo } : null
       files.push({ path: `${settings.basePath}/_отчёт.md`, content: buildReport(cards, journal, new Date(), pause) })
 
+      // история метрик: одна строка в день (граница учебного дня 04:00). Снимок агрегатов слоёв 1–3;
+      // exam-ready и медианная стабильность задним числом не восстановить — состояние карт перезаписывается.
+      const metricsPath = metricsPathOf(settings.basePath)
+      const metricsExisting = (await db.kvGet<string>('metricsText')) ?? ''
+      const snapshot = buildMetricsSnapshot(cards.filter(c => !c.broken).map(cardView), journal, new Date(), EXAM_DATE)
+      const metrics = appendDailySnapshot(metricsExisting, snapshot)
+      if (metrics.appended) files.push({ path: metricsPath, content: metrics.text })
+
       const blobs: { path: string; sha: string }[] = []
       for (const f of files) blobs.push({ path: f.path, sha: await gh.createBlob(f.content) })
 
@@ -109,6 +123,12 @@ async function doSync(settings: Settings): Promise<SyncResult> {
         if (isJournalPath(f.path, settings.basePath)) jShas[f.path] = shaByPath.get(f.path)!
       }
       await db.kvSet('journalShas', jShas)
+      // метрики: кэшируем свежий текст и sha, чтобы следующий pull не тянул только что записанное
+      if (metrics.appended) {
+        await db.kvSet('metricsText', metrics.text)
+        const mSha = shaByPath.get(metricsPath)
+        if (mSha) await db.kvSet('metricsSha', mSha)
+      }
       await db.kvSet('lastRemoteCommit', commitSha)
       await db.kvSet('lastSyncAt', Date.now())
       return { status: 'ok', pulledCards: pulled, pushedFiles: files.length, conflicts, warning }
@@ -213,6 +233,19 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
       }
       await db.kvSet('levelNames', names)
       await db.kvSet('levelsSha', manifestEntry.sha)
+    }
+  }
+
+  // история метрик (_метрики.ndjson) — под isJournalPath не попадает (префикс _), тянем адресно
+  // и кэшируем по sha, чтобы приложение видело ряд, накопленный другими устройствами/днями
+  const metricsPath = metricsPathOf(settings.basePath)
+  const metricsEntry = entries.find(e => e.type === 'blob' && e.path === metricsPath)
+  if (metricsEntry) {
+    const prevSha = await db.kvGet<string>('metricsSha')
+    if (prevSha !== metricsEntry.sha) {
+      const text = await gh.getBlobText(metricsEntry.sha)
+      await db.kvSet('metricsText', text)
+      await db.kvSet('metricsSha', metricsEntry.sha)
     }
   }
 

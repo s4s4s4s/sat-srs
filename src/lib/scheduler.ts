@@ -1,6 +1,7 @@
 import { fsrs, generatorParameters, Rating, State, type Grade, type Card as FsrsCard, type FSRS } from 'ts-fsrs'
 import type { CardView, Format, StudyItem } from './types'
 import { endOfStudyDay, dayKey, addDaysKey } from './daytime'
+import { TYPO_MIN_LEN, TYPO_MAX_EDITS } from './journal'
 
 export function makeScheduler(requestRetention: number): FSRS {
   // fuzz разводит одновременно выученные карточки по разным дням — меньше комков и MC-соседей
@@ -363,7 +364,7 @@ export function prepOptions(answer: string, n = 3): string[] {
   return shuffle([answer, ...distractors])
 }
 
-/** Расстояние Левенштейна — «опечатка» это 1 правка при длине слова ≥ 5 */
+/** Расстояние Левенштейна между строками (число правок). */
 export function levenshtein(a: string, b: string): number {
   const m = a.length, n = b.length
   if (!m) return n
@@ -385,7 +386,8 @@ export function checkTyped(typed: string, word: string): TypeVerdict {
   const t = typed.trim().toLowerCase()
   const w = word.trim().toLowerCase()
   if (t === w) return 'correct'
-  if (w.length >= 5 && levenshtein(t, w) <= 1) return 'typo'
+  // опечатка: <= TYPO_MAX_EDITS правок при длине слова >= TYPO_MIN_LEN (пороги в journal.ts)
+  if (w.length >= TYPO_MIN_LEN && levenshtein(t, w) <= TYPO_MAX_EDITS) return 'typo'
   return 'wrong'
 }
 

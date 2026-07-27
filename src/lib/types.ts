@@ -67,15 +67,18 @@ export interface JournalLine {
   skill?: string       // recall | prep (отсутствует в старых строках = recall)
   format?: string      // intro | reveal | mc | type | prep
   correct?: boolean    // объективный результат (mc/type/prep); у reveal отсутствует
+  typo?: boolean       // ошибка ввода = опечатка (Левенштейн), а не незнание — исключается из retention
   gave_up?: boolean    // C3/C4: пользователь сам признал незнание («не помню» / пустой ввод), не ошибка ввода
   cause?: string       // самоотчёт после ошибки: правило | слово | misread | логика | тайминг
   kind?: string        // тип карточки, если не vocab
   domain?: string      // домен College Board, если задан
+  level?: number       // ступень слова на момент показа (retention по ступеням не врёт после переразметки)
   rating?: number      // 1 Again · 2 Hard · 3 Good · 4 Easy
   prev_state?: number  // 0 New · 1 Learning · 2 Review · 3 Relearning
   new_state?: number
   due?: string
   stability?: number
+  scheduled_days?: number // плановый интервал из FSRS — точный бакет интервала без реконструкции
   elapsed_ms?: number
   // session:
   dur_ms?: number

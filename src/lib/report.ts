@@ -2,8 +2,9 @@ import { State } from 'ts-fsrs'
 import type { CardRec, JournalRec, JournalLine } from './types'
 import { cardView } from './yamlfm'
 import { addDaysKey, dayKey, isoLocal } from './daytime'
-import { byTime, minutesByDay, streak, trueRetention30, type PauseRange } from './journal'
-import { activeLevel, levelStats, isLevelled } from './scheduler'
+import { byTime, minutesByDay, streak, trueRetention30, retentionByFormat, type PauseRange } from './journal'
+import { activeLevel, levelStats, isLevelled, EXAM_DATE } from './scheduler'
+import { examReady, maturity, pace, retentionByInterval, PRIMARY_DATE, TARGET_WORDS } from './metrics'
 
 /**
  * Автогенерируемый отчёт для ИИ-тьютора: `_отчёт.md` рядом с карточками.
@@ -21,22 +22,6 @@ const dueDay = (iso: string) => {
 
 function pct(part: number, total: number): string {
   return total ? `${Math.round((part / total) * 100)}% (n=${total})` : '—'
-}
-
-/** Ретеншн по формату за 30 дней: у объективных — по correct, у reveal — rating>1 */
-function retentionByFormat(lines: JournalLine[], today: string): Record<string, { pass: number; total: number }> {
-  const from = addDaysKey(today, -29)
-  const acc: Record<string, { pass: number; total: number }> = {}
-  for (const l of lines) {
-    if (l.type !== 'review' || !l.day || l.day < from) continue
-    if (l.prev_state !== State.Review) continue
-    const f = l.format ?? 'reveal'
-    acc[f] ??= { pass: 0, total: 0 }
-    acc[f].total++
-    const ok = l.correct !== undefined ? l.correct : (l.rating ?? 0) > 1
-    if (ok) acc[f].pass++
-  }
-  return acc
 }
 
 /** План vs факт: по каждой паре соседних ревью одного (слово×навык) — планировался день X, случился день Y */
@@ -129,6 +114,26 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   out.push('---', 'type: report', 'report_schema: 1', `updated: "${isoLocal(now)}"`, '---', '')
   out.push('# SRS-отчёт (автогенерация)', '')
   out.push('> Файл пишет приложение SAT SRS при каждой синхронизации — не редактировать. Источник сырых данных: `_журнал/*.ndjson` (каждая оценка: ts, слово, навык, формат, correct, rating, план следующего показа) и frontmatter карточек.', '')
+
+  // «Слов готово к экзамену» — главное число (retrievability >= 0.90 на дату, ts-fsrs). Две даты:
+  // PRIMARY 03.10 (реальный якорь) и EXAM 07.11. Темп — graduation в Review за 7/14 дн из журнала.
+  const erP = examReady(active, PRIMARY_DATE)
+  const erE = examReady(active, EXAM_DATE)
+  const pc = pace(active, lines, PRIMARY_DATE, now)
+  const mat = maturity(active)
+  const verdictStr = pc.verdict === 'ahead'
+    ? 'идёшь с опережением'
+    : pc.daysBehind === null ? 'темпа нет — 0 слов за 14 дн' : `отстаёшь на ${pc.daysBehind} дн`
+  out.push('## Прогресс к экзамену', '')
+  out.push(`- Готово к 03.10 (PRIMARY): **${erP.ready} из ${TARGET_WORDS}** · к 07.11 (EXAM): **${erE.ready} из ${TARGET_WORDS}** · зрелых (стаб.≥21дн): ${mat.matureCount}`)
+  out.push(`- Дефицит к 03.10: **${pc.remaining} слов** · нужно **+${pc.neededPerDay}/день** (осталось ${pc.daysLeft} дн)`)
+  out.push(`- Темп: +${pc.actual7} за 7 дн · +${pc.actual14} за 14 дн · медианная стабильность ${mat.medianStability} дн · **${verdictStr}**`)
+  const byLv = erP.byLevel.filter(l => l.level < 999)
+  if (byLv.length) out.push(`- Готовность по ступеням: ${byLv.map(l => `L${l.level} ${l.ready}/${l.total}`).join(' · ')}`)
+  const ri = retentionByInterval(lines)
+  const riParts = (Object.keys(ri) as (keyof typeof ri)[]).map(k => `${k}дн ${ri[k].pct === null ? '—' : ri[k].pct + '%'}${ri[k].n ? ` (n=${ri[k].n})` : ''}`)
+  out.push(`- Retention по бакетам интервала: ${riParts.join(' · ')}`)
+  out.push('')
 
   out.push('## Сводка', '')
   out.push(`- Слов: **${active.length}** (new ${byState.new} · learning ${byState.learning} · review ${byState.review}) · prep-навыков: ${prepCount}${brokenCount ? ` · битых файлов: ⚠️ ${brokenCount}` : ''}`)
