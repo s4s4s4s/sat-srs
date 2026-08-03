@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useApp, views, setScreen, startSync, startLesson, creditEmptyDay, unsyncedCount } from '../lib/store'
-import { homeCounts, sectionOf, levelStats, activeLevel, EXAM_DATE, type Section } from '../lib/scheduler'
+import { homeCounts, sectionOf, levelStats, activeLevel, type Section } from '../lib/scheduler'
 import { streak, newIntroducedOn, minutesToday, MIN_MINUTES, type PauseRange } from '../lib/journal'
 import { examReady, pace, PRIMARY_DATE, TARGET_WORDS } from '../lib/metrics'
 import { dayKey } from '../lib/daytime'
@@ -69,7 +69,9 @@ export default function Home() {
   const st = streak(app.journal, today, pause)
   const mins = minutesToday(app.journal)
   const minsDone = mins >= MIN_MINUTES || st.todayDone
-  const daysToExam = Math.max(0, Math.ceil((EXAM_DATE.getTime() - Date.now()) / 86400_000))
+  // Считаем до ПЕРВОЙ попытки, а не до суперскорной: показывать 96 дней там,
+  // где на деле 61, — значит каждый день врать себе про запас времени.
+  const daysToExam = Math.max(0, Math.ceil((PRIMARY_DATE.getTime() - Date.now()) / 86400_000))
 
   // главное число: «слов готово к экзамену» на реальный якорь 03.10 + дефицит и темп
   const er = examReady(all, PRIMARY_DATE)

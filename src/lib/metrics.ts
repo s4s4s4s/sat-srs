@@ -11,11 +11,14 @@ import { byTime, minutesByDay } from './journal'
  * Считаем через ts-fsrs (get_retrievability), а не своей формулой, — метрика обязана быть
  * согласована с планировщиком.
  *
- * Две целевые даты: PRIMARY_DATE (03.10 — реальный якорь, регистрация до 18.09) и
- * EXAM_DATE (07.11, в scheduler.ts — на ней завязаны DUE_CAP/effectiveRetention, её не трогаем).
+ * Обе целевые даты живут в scheduler.ts и переэкспортируются отсюда для тех,
+ * кто и так берёт метрики. Держать две копии `PRIMARY_DATE` в разных файлах
+ * уже пробовали: метрика считала по 03.10, планировщик по 07.11, и колода
+ * готовилась на месяц позже, чем нужно.
  */
 
-export const PRIMARY_DATE = new Date(2026, 9, 3)   // 03.10.2026, локально
+export { PRIMARY_DATE, EXAM_DATE } from './scheduler'
+import { PRIMARY_DATE } from './scheduler'
 export const TARGET_WORDS = 400                    // цель: вся колода
 export const READY_R = 0.90                        // порог готовности
 export const MATURE_STABILITY_DAYS = 21            // «зрелое» слово — человеческая версия готовности
