@@ -388,7 +388,10 @@ export default function Review() {
       } else if (atFront) {
         rest.splice(0, 0, next)
       } else if (shouldRequeue(next.fsrs, new Date())) {
-        rest.splice(requeuePosition(rest.length, next.fsrs, new Date()), 0, next)
+        // null означает «очередь короче, чем нужно ждать»: возвращать раньше
+        // срока нельзя — так модель и решила, что слова забываются за часы.
+        const pos = requeuePosition(rest.length, next.fsrs, new Date())
+        if (pos !== null) rest.splice(pos, 0, next)
       }
     }
     await proceed(rest)

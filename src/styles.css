@@ -365,6 +365,17 @@ body::before {
 .minbar-label { font-size: 13px; font-weight: 800; color: var(--text2); white-space: nowrap; }
 .minbar-label.done { color: var(--green-text); }
 
+/* Отметка чтения: цель — одно касание. Половина защищённого минимума не
+   трекалась семь недель подряд, и любой лишний шаг здесь означает, что она
+   не будет трекаться и дальше. */
+.read-add {
+  flex: none; width: 30px; height: 30px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--card2, transparent);
+  color: var(--text2); font-size: 19px; font-weight: 700; line-height: 1;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+}
+.read-add:active { transform: scale(0.94); }
+
 /* блок действий гравитирует к низу — большая CTA в зоне большого пальца */
 .home-actions { display: flex; flex-direction: column; gap: 12px; margin-top: auto; padding-top: 16px; }
 

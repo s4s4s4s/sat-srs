@@ -58,7 +58,13 @@ export interface StudyItem {
 export interface JournalLine {
   id: string
   v?: number // версия схемы строки
-  type: 'review' | 'session'
+  /* `read` — засчитанное чтение.
+
+     Защищённый минимум состоит из двух половин: SRS 15 минут и чтение 30. Для
+     второй половины инструмента не существовало вовсе — в «Метриках» семь
+     недель подряд стоит «0/7 (не трекается)». Мерить нечем, значит и делать
+     нечего: невидимая половина дисциплины отмирает первой. */
+  type: 'review' | 'session' | 'read'
   ts: string   // ISO с локальным смещением
   ms?: number  // миллисекунды внутри секунды ts — тайбрейк хронологии (D1); в старых строках нет = 0
   day: string  // локальный день с rollover 04:00, YYYY-MM-DD — фиксируется при записи
@@ -88,6 +94,9 @@ export interface JournalLine {
   acc_all?: number | null  // точность за урок по ВСЕМ оценкам — то, что видит ученик на итогах
   again?: number           // сколько раз за урок нажато «Заново» (включая честное «не помню»)
   queue_empty?: boolean
+  // read:
+  read_min?: number        // засчитанные минуты чтения
+  what?: string            // что читал, свободной строкой — по нему потом видно, что работает
 }
 
 export interface JournalRec extends JournalLine {

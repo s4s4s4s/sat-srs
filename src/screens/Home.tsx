@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
-import { useApp, views, setScreen, startSync, startLesson, creditEmptyDay, unsyncedCount } from '../lib/store'
+import { useApp, views, setScreen, startSync, startLesson, creditEmptyDay, logReading, unsyncedCount } from '../lib/store'
 import { homeCounts, sectionOf, levelStats, activeLevel, type Section } from '../lib/scheduler'
-import { streak, newIntroducedOn, minutesToday, MIN_MINUTES, type PauseRange } from '../lib/journal'
+import { streak, newIntroducedOn, minutesToday, readMinutesToday, MIN_MINUTES, READ_MIN_MINUTES, type PauseRange } from '../lib/journal'
 import { examReady, pace, PRIMARY_DATE, TARGET_WORDS } from '../lib/metrics'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt } from '../components/Icon'
@@ -69,6 +69,10 @@ export default function Home() {
   const st = streak(app.journal, today, pause)
   const mins = minutesToday(app.journal)
   const minsDone = mins >= MIN_MINUTES || st.todayDone
+  // Вторая половина защищённого минимума. До сих пор её не было видно нигде,
+  // и в «Метриках» семь недель подряд стоит «0/7 (не трекается)».
+  const readMins = readMinutesToday(app.journal)
+  const readDone = readMins >= READ_MIN_MINUTES
   // Считаем до ПЕРВОЙ попытки, а не до суперскорной: показывать 96 дней там,
   // где на деле 61, — значит каждый день врать себе про запас времени.
   const daysToExam = Math.max(0, Math.ceil((PRIMARY_DATE.getTime() - Date.now()) / 86400_000))
@@ -147,6 +151,27 @@ export default function Home() {
           <span className={`minbar-label${minsDone ? ' done' : ''}`}>
             {st.pausedToday ? `пауза до ${app.settings.pauseTo.slice(5).split('-').reverse().join('.')}` : st.todayDone ? 'день зачтён' : `${Math.floor(mins)}/${MIN_MINUTES} мин`}
           </span>
+        </div>
+        {/* Чтение — вторая половина минимума. Отдельной полосой, а не в общем
+            зачёте: подменять тридцать минут чтения пятнадцатью минутами
+            карточек нельзя, это разные навыки. */}
+        <div className="minbar-row">
+          <div className="minbar"><div style={{ width: `${Math.min(100, (readMins / READ_MIN_MINUTES) * 100)}%` }} /></div>
+          <span className={`minbar-label${readDone ? ' done' : ''}`}>
+            чтение {Math.floor(readMins)}/{READ_MIN_MINUTES} мин
+          </span>
+          <button
+            className="read-add"
+            onClick={() => {
+              const ответ = window.prompt('Сколько минут читал?', '30')
+              if (!ответ) return
+              const n = Number(ответ.replace(',', '.'))
+              if (!Number.isFinite(n) || n <= 0) return
+              const что = window.prompt('Что читал? (можно пропустить)', '') ?? ''
+              void logReading(n, что)
+            }}
+            aria-label="Отметить чтение"
+          >+</button>
         </div>
         {st.freezeSpentYesterday && <div className="freeze-note">❄ Заморозка спасла серию — осталось {st.freezes}</div>}
       </div>

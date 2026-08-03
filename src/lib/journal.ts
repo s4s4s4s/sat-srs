@@ -2,8 +2,10 @@ import { State } from 'ts-fsrs'
 import type { JournalLine, JournalRec } from './types'
 import { addDaysKey, dayKey } from './daytime'
 
-export const MIN_MINUTES = 15          // защищённый минимум
+export const MIN_MINUTES = 15          // защищённый минимум SRS
+export const READ_MIN_MINUTES = 30     // вторая половина минимума — чтение
 export const CARD_TIME_CAP_MS = 60_000 // AFK-защита: на карточку в зачёт минут — максимум 60 c
+export const READ_CAP_MINUTES = 180    // разумный потолок одной отметки чтения
 
 /**
  * Порог «опечатка, а не незнание» при вводе (checkTyped): <= TYPO_MAX_EDITS правок Левенштейна
@@ -108,6 +110,23 @@ export function minutesByDay(lines: JournalLine[]): Map<string, number> {
     m.set(l.day, (m.get(l.day) ?? 0) + ms / 60000)
   }
   return m
+}
+
+/** Минуты ЧТЕНИЯ по дням — вторая половина защищённого минимума.
+ *  Считается отдельно от SRS намеренно: это разные навыки, и подменять
+ *  тридцать минут чтения пятнадцатью минутами карточек нельзя. */
+export function readMinutesByDay(lines: JournalLine[]): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const l of lines) {
+    if (l.type !== 'read') continue
+    const min = Math.min(Math.max(l.read_min ?? 0, 0), READ_CAP_MINUTES)
+    m.set(l.day, (m.get(l.day) ?? 0) + min)
+  }
+  return m
+}
+
+export function readMinutesToday(lines: JournalLine[], today: string = dayKey()): number {
+  return readMinutesByDay(lines).get(today) ?? 0
 }
 
 /** Дни, где очередь была добита до конца */

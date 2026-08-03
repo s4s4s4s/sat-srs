@@ -7,7 +7,7 @@ import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
 import { makeScheduler, effectiveRetention, homeCounts, isLevelled, DUE_CAP, type Section } from './scheduler'
 import { parseMetrics, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
-import { newId, newIntroducedOn, matureRetention, sessionAccuracy } from './journal'
+import { newId, newIntroducedOn, matureRetention, sessionAccuracy, READ_CAP_MINUTES } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS } from './types'
 
@@ -321,6 +321,29 @@ export async function deferItemToNextDay(item: StudyItem): Promise<void> {
 }
 
 /** Идеальный день: всё повторено вовремя, очередь пуста — день зачитывается сам, без сессии */
+/** Отметить чтение: вторая половина защищённого минимума.
+ *
+ *  Инструмента для неё не было вовсе, и в «Метриках» семь недель подряд стоит
+ *  «0/7 (не трекается)». Мерить нечем — значит и делать нечего: невидимая
+ *  половина дисциплины отмирает первой, что и произошло.
+ *
+ *  Строка пишется в тот же журнал, что и повторы, поэтому попадает в вальт
+ *  обычной синхронизацией и оказывается видна разбору наравне с SRS. */
+export async function logReading(minutes: number, what = ''): Promise<void> {
+  const min = Math.round(Math.min(Math.max(minutes, 1), READ_CAP_MINUTES))
+  const now = new Date()
+  const line: JournalRec = {
+    id: newId(),
+    v: 1, type: 'read', ts: isoLocal(now), ms: now.getMilliseconds(), day: dayKey(),
+    read_min: min, what: what.trim().slice(0, 120), synced: 0
+  }
+  await db.putJournal([line])
+  state.journal = [...state.journal, line]
+  emit()
+  updateBadge()
+  void startSync()
+}
+
 export async function creditEmptyDay(): Promise<void> {
   const today = dayKey()
   if (state.journal.some(l => l.day === today && l.type === 'session' && l.queue_empty)) return
