@@ -10,6 +10,7 @@ import {
 import { pickNext, hasSeparator, screenFormat, isGiveUp, type OrderCtx } from '../lib/session'
 import Tex from '../components/Tex'
 import { newIntroducedOn, minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs } from '../lib/journal'
+import { speedStats } from '../lib/metrics'
 import { dayKey } from '../lib/daytime'
 import type { Format, SessionResult, StudyItem } from '../lib/types'
 import { Close, Sprout, Timer, Speaker, Flame } from '../components/Icon'
@@ -243,13 +244,18 @@ export default function Review() {
     return () => clearInterval(t)
   }, [])
 
+  /* Личная медиана времени ответа — база для порога «медленно».
+     Считается один раз за урок: внутри урока она не меняется, а пересчёт на
+     каждый экран гонял бы весь журнал. */
+  const personalMedianMs = useMemo(() => speedStats(app.journal).medianMs, [])
+
   // в «показе» вердикт появляется, только если пользователь сам ввёл слово —
   // тогда сигнал объективный и оценка считается как у ввода.
   // C3: «не помню» — рейтинг фиксирован Again, выбора оценки нет (одна кнопка «Дальше»).
   const suggested = task && gaveUp
     ? Rating.Again
     : task && verdict !== null
-    ? suggestedGrade(task.format === 'reveal' ? 'type' : task.format, verdict === 'correct', verdict === 'typo', answeredMs.current, task.item.view.kind)
+    ? suggestedGrade(task.format === 'reveal' ? 'type' : task.format, verdict === 'correct', verdict === 'typo', answeredMs.current, task.item.view.kind, personalMedianMs)
     : null
 
   async function finish(queueEmpty: boolean) {

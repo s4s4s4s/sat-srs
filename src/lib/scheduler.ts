@@ -539,11 +539,33 @@ export function checkNumeric(typed: string, answer: string): TypeVerdict {
  * Латентность учитывается: SAT — тест на скорость, верный-но-медленный ответ = Hard.
  * Опечатка предлагает Good: орфография на рецептивном экзамене не проверяется.
  */
-export function suggestedGrade(format: Format, correct: boolean, typo: boolean, elapsedMs = 0, kind = 'vocab'): Grade | null {
+/** Во сколько раз медленнее личной медианы ответ считается «трудным». */
+export const SLOW_FACTOR = 2.5
+/** Пол порога: ниже него «медленно» начнёт срабатывать на здоровых ответах. */
+const SLOW_FLOOR_MS = 12_000
+
+/**
+ * Порог «медленно» — доля от ЛИЧНОЙ медианы, а не константа.
+ *
+ * Стоял 25 000 мс при измеренной медиане ответа 7 412 мс и p90 17 827 мс, то
+ * есть не достигался почти никогда. Результат виден в распределении оценок за
+ * всю историю: Again 121, Hard 6, Good 271, Easy 3 — 98% в двух крайних
+ * категориях. «Трудно» существовало на кнопке и не существовало в данных, а
+ * FSRS различает Hard и Good именно затем, чтобы не гонять полузнание по тем же
+ * интервалам, что и уверенное знание.
+ *
+ * Медиана берётся из журнала снаружи; без неё поведение остаётся прежним.
+ */
+export function slowThresholdMs(kind = 'vocab', medianMs?: number): number {
+  if (kind === 'math') return 90_000
+  if (!medianMs || !Number.isFinite(medianMs) || medianMs <= 0) return 25_000
+  return Math.max(SLOW_FLOOR_MS, Math.round(medianMs * SLOW_FACTOR))
+}
+
+export function suggestedGrade(format: Format, correct: boolean, typo: boolean, elapsedMs = 0, kind = 'vocab', medianMs?: number): Grade | null {
   if (format === 'reveal' || format === 'intro') return null
   if (!correct && !typo) return Rating.Again
-  const slowMs = kind === 'math' ? 90_000 : 25_000
-  if (elapsedMs > slowMs) return Rating.Hard
+  if (elapsedMs > slowThresholdMs(kind, medianMs)) return Rating.Hard
   return Rating.Good
 }
 

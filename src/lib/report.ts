@@ -1,5 +1,5 @@
 import { State } from 'ts-fsrs'
-import type { CardRec, JournalRec, JournalLine } from './types'
+import type { CardRec, CardView, JournalRec, JournalLine } from './types'
 import { cardView } from './yamlfm'
 import { addDaysKey, dayKey, isoLocal } from './daytime'
 import { byTime, minutesByDay, streak, trueRetention30, retentionByFormat, type PauseRange } from './journal'
@@ -88,10 +88,25 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
 
   const pvf = planVsFact(lines, today)
 
-  // проблемные слова
+  /* Проблемные слова ищутся по РАБОТЕ, а не по провалам.
+     Порог `lapses >= 3` не сработал ни разу за всю историю, и не мог: `lapses`
+     растёт только при провале карточки, УЖЕ находящейся в Review, а до Review
+     в этой колоде не дошёл почти никто — максимум lapses в живой колоде равен
+     двум. При этом настоящие пиявки были и жрали урок: bolster — 24 показа при
+     стабильности 0,21 дня; scrutinize — 20 при 1,5; corroborate — 19 при 2,7.
+     Три слова съели 63 показа из 472, то есть 13% всей работы системы, и ни
+     одно не попало в список.
+     Признак пиявки — много повторов при неподросшей стабильности. Повторение
+     интерференцию не лечит: такое слово надо переформулировать (новый контекст,
+     другая мнемоника, confusables), а не показывать ещё раз. */
+  const LEECH_REPS = 8
+  const LEECH_STABILITY_DAYS = 2
+  const пиявка = (f: { reps: number; stability: number } | null | undefined) =>
+    !!f && f.reps >= LEECH_REPS && f.stability < LEECH_STABILITY_DAYS
+  const затраты = (v: CardView) => v.fsrs.reps + (v.fsrsPrep?.reps ?? 0)
   const leeches = active
-    .filter(v => v.fsrs.lapses >= 3 || (v.fsrsPrep?.lapses ?? 0) >= 3)
-    .sort((a, b) => (b.fsrs.lapses + (b.fsrsPrep?.lapses ?? 0)) - (a.fsrs.lapses + (a.fsrsPrep?.lapses ?? 0)))
+    .filter(v => пиявка(v.fsrs) || пиявка(v.fsrsPrep))
+    .sort((a, b) => затраты(b) - затраты(a))
   const errFrom = addDaysKey(today, -13)
   const errByFormat = new Map<string, Map<string, number>>()
   for (const l of lines) {
@@ -165,7 +180,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   out.push('')
 
   out.push('## Проблемные слова', '')
-  out.push(`- Пиявки (lapses ≥ 3): ${leeches.length ? leeches.map(v => `${v.word} (${v.fsrs.lapses}${v.fsrsPrep?.lapses ? '+' + v.fsrsPrep.lapses + 'prep' : ''})`).join(', ') : '—'}`)
+  out.push(`- Пиявки (повторов ≥ 8 при стабильности < 2 дн — ПЕРЕФОРМУЛИРОВАТЬ, а не повторять): ${leeches.length ? leeches.map(v => `${v.word} (${v.fsrs.reps} показов, s=${v.fsrs.stability.toFixed(2)})`).join(', ') : '—'}`)
   out.push(`- Помечены leech-флагом (переформулировать карточку!): ${active.filter(v => v.leech).map(v => v.word).join(', ') || '—'}`)
   out.push(`- Ошибки написания (ввод, 14 дн): ${errList('type')}`)
   out.push(`- Ошибки предлогов (14 дн): ${errList('prep')}`)

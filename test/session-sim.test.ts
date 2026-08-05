@@ -18,7 +18,7 @@ import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
-  pickFormat, mcDistractors, suggestedGrade, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS,
+  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
@@ -517,7 +517,26 @@ function dontKnowChecks(): void {
   const emptyRating = isGiveUp('') ? giveUpRating : suggestedGrade('type', false, false)
   assert(emptyRating === giveUpRating, 'C4: пустой ввод даёт тот же рейтинг, что кнопка «не помню»')
 
+  /* Порог «медленно» — доля от личной медианы, а не константа.
+     Стоял 25 000 мс при измеренной медиане 7 412 мс и p90 17 827 мс, то есть не
+     достигался почти никогда: за всю историю Again 121, Hard 6, Good 271,
+     Easy 3 — 98% оценок в двух крайних категориях. */
+  assert(slowThresholdMs('vocab', 7412) === Math.round(7412 * SLOW_FACTOR),
+    'порог: считается от личной медианы')
+  assert(slowThresholdMs('vocab', 7412) < 25_000,
+    'порог: личный ниже прежней константы — иначе «Трудно» так и не появится в данных')
+  assert(slowThresholdMs('vocab', 1000) >= 12_000,
+    'порог: пол держит — на быстрой медиане «медленно» не должно срабатывать на здоровых ответах')
+  assert(slowThresholdMs('vocab') === 25_000, 'порог: без медианы поведение прежнее')
+  assert(slowThresholdMs('math', 7412) === 90_000, 'порог: математика считается отдельно')
+  assert(suggestedGrade('mc', true, false, 20_000, 'vocab', 7412) === Rating.Hard,
+    '20 c при медиане 7,4 c — это Hard')
+  assert(suggestedGrade('mc', true, false, 20_000, 'vocab') === Rating.Good,
+    'та же скорость на прежней константе давала Good — репро дефекта')
+
   console.log('  ✓ dont-know (C3/C4/C5): «не помню»=Again, пустой ввод=«не помню», type только со значением')
+  console.log('  ✓ порог «медленно»: доля от личной медианы, пол 12 c, математика отдельно')
+  passed++
   passed++
 }
 
