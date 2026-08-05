@@ -41,17 +41,6 @@ jobs:
       - id: srs
         run: node tools/watchdog/check.mjs 'Учёба/Карточки/_журнал'
 
-      # Отсутствие — это данные. До сих пор журнал фиксировал только действия,
-      # поэтому восьмидневный простой не был виден нигде, включая отчёт.
-      - name: Commit absence line
-        if: steps.srs.outputs.missed == 'true'
-        run: |
-          git config user.name 'srs-watchdog'
-          git config user.email 'srs-watchdog@users.noreply.github.com'
-          git add 'Учёба/Карточки/_журнал/_отсутствие.ndjson'
-          git diff --cached --quiet || git commit -m "SRS: день без занятий ${{ steps.srs.outputs.day }}"
-          git push
-
       - name: Open or update the rolling issue
         if: steps.srs.outputs.missed == 'true'
         env:
@@ -62,11 +51,14 @@ jobs:
           LEFT: ${{ steps.srs.outputs.daysToExam }}
         run: |
           set -euo pipefail
+          # Ярлык обязан существовать: `gh issue create --label` падает на
+          # отсутствующем, а не создаёт его. `--force` делает шаг идемпотентным.
+          gh label create srs-floor --color EDD400 --description "SRS: пол учебного дня не закрыт" --force
           BODY="Пол дня не закрыт: ${REVIEWS} из ${FLOOR} упражнений.
 
           До SAT ${LEFT} дн.
 
-          Два минуты закрывают день: https://s4s4s4s.github.io/sat-srs/?go=1
+          Две минуты закрывают день: https://s4s4s4s.github.io/sat-srs/?go=1
 
           Заявка одна и обновляется — новых не будет."
           NUM=$(gh issue list --label srs-floor --state open --limit 1 --json number --jq '.[0].number // empty')
@@ -90,3 +82,26 @@ jobs:
           if [ -n "$NUM" ]; then
             gh issue close "$NUM" --comment "Пол закрыт: ${REVIEWS} упражнений."
           fi
+
+      # Отсутствие — это данные. До сих пор журнал фиксировал только действия,
+      # поэтому простой не был виден нигде, включая отчёт.
+      #
+      # Шаг идёт ПОСЛЕ заявки и не роняет прогон. В вальт пишет ещё и фоновый
+      # auto-sync — раз в 30–60 секунд, — поэтому пуш отсюда регулярно проигрывает
+      # гонку за ref (первый же прогон на этом и упал). Строка идемпотентна по
+      # дню: проигранная гонка означает лишь, что она уедет следующим прогоном.
+      # Уведомление важнее бухгалтерии и не должно от неё зависеть.
+      - name: Commit absence line
+        if: steps.srs.outputs.missed == 'true'
+        continue-on-error: true
+        run: |
+          git config user.name 'srs-watchdog'
+          git config user.email 'srs-watchdog@users.noreply.github.com'
+          git add 'Учёба/Карточки/_журнал/_отсутствие.ndjson'
+          git diff --cached --quiet && exit 0
+          git commit -m "SRS: день без занятий ${{ steps.srs.outputs.day }}"
+          for i in 1 2 3; do
+            git push && exit 0
+            git pull --rebase --autostash origin master || exit 0
+          done
+          echo "Пуш проиграл гонку с автосинком — строка уедет следующим прогоном."
