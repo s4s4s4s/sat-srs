@@ -14,6 +14,7 @@ export interface OrderCtx {
   introduced: Set<string>          // itemKey слов, которым уже показано знакомство в этой сессии
   lapsed: Set<string>              // itemKey «подзабытых» в этой сессии (следующий показ — окно)
   reintroAllowed: boolean          // остался ли лимит окон-знакомств за урок (== introsLeft > 0)
+  typing?: boolean                 // ввод по буквам разрешён настройкой (по умолчанию нет)
   introsLeft: number               // сколько окон-знакомств урок ещё может выдать
   shownTimes: Map<string, number>  // itemKey → мс последнего показа (A2)
   drilled: Map<string, number>     // itemKey → сколько раз слово ОЦЕНЕНО в этой сессии
@@ -48,7 +49,7 @@ export function isGiveUp(value: string): boolean {
 
 /** Формат, которым единица отрисуется прямо сейчас — тот же расчёт, что и в UI (makeTask). */
 export function screenFormat(item: StudyItem, ctx: OrderCtx): Format {
-  return pickFormat(item, ctx.deck, ctx.introduced, ctx.lapsed, ctx.reintroAllowed)
+  return pickFormat(item, ctx.deck, ctx.introduced, ctx.lapsed, ctx.reintroAllowed, ctx.typing ?? false)
 }
 
 /** True, если показ единицы будет окном-знакомством: новое слово (intro) или «Подзабылось». */

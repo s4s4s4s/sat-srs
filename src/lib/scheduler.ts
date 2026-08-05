@@ -372,7 +372,21 @@ export function shouldRequeue(next: FsrsCard, now: Date): boolean {
  * - recall в Review → чередование по reps: MC (формат Words in Context цифрового SAT,
  *   дистракторы из колоды) и ввод с клавиатуры (production + написание).
  */
-export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true): Format {
+/**
+ * Формат показа.
+ *
+ * Словарь узнаётся, а не пишется по буквам. Замер по журналу: `type` — 271
+ * показ из 472 (57%), `mc` — 36 (7,6%); на `type` 52 неверных плюс 22 «не
+ * помню», порог опечатки сработал ровно 1 раз на 271 ввод. При этом SAT
+ * проверяет словарь рецептивно (Words in Context — выбор из четырёх), а
+ * написание по буквам не проверяется нигде. Плюс с 26.07 у Александра сломана
+ * левая рука: основной формат приложения стал физически неудобным ровно тогда,
+ * когда практика должна была держаться.
+ *
+ * Поэтому основной формат словаря — MC, а ввод остаётся для числового ответа
+ * (математика) и как явная настройка (`typing`).
+ */
+export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false): Format {
   if (item.skill === 'prep') return 'prep'
   // авторские варианты (error/grammar/math) — всегда MC, включая первый показ
   if (item.view.choices.length >= 2) return 'mc'
@@ -382,9 +396,10 @@ export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<s
   // C5: ввод по буквам допустим только при однозначном ответе — слово из одного токена И есть
   // подсказка значения. Без значения задание по контексту неоднозначно (синонимы) — тогда reveal/mc.
   const canProduce = typable && hasMeaningHint(item.view)
+  const mcReady = () => mcDistractors(item.view, deck).length >= 3
   if (item.fsrs.state === State.New) {
-    // знакомство один раз за сессию; после него первая отработка — reveal (первый настоящий FSRS-рейтинг)
-    return introduced?.has(itemKey(item)) ? 'reveal' : 'intro'
+    // знакомство один раз за сессию; после него первая отработка — узнавание
+    return introduced?.has(itemKey(item)) ? (mcReady() ? 'mc' : 'reveal') : 'intro'
   }
   // слово, которое не смогли вспомнить («Заново» в этой сессии — на ЛЮБОЙ стадии, не только Review;
   // либо пришедшее в Relearning из прошлой сессии) — один раз переznakomим окном-знакомством
@@ -399,12 +414,12 @@ export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<s
     // по буквам через минуту после первого показа — гарантированный провал (scrutinize/bolster/
     // corroborate 17.07 застряли на type со stability 0.01). Выпускной шаг — объективный формат:
     // самооценка склонна к «показалось знакомым». C5: type — только если ответ однозначен (canProduce).
-    return item.fsrs.reps >= 2 && canProduce ? 'type' : 'reveal'
+    if (mcReady()) return 'mc'
+    return typing && item.fsrs.reps >= 2 && canProduce ? 'type' : 'reveal'
   }
-  const wantMc = item.fsrs.reps % 2 === 0
-  if (wantMc && mcDistractors(item.view, deck).length >= 3) return 'mc'
-  // C5: без подсказки значения ввод неоднозначен — предпочитаем mc, иначе reveal (показ), но не type
-  return canProduce ? 'type' : (mcDistractors(item.view, deck).length >= 3 ? 'mc' : 'reveal')
+  if (mcReady()) return 'mc'
+  // C5: без подсказки значения ввод неоднозначен — тогда reveal (показ), но не type
+  return typing && canProduce ? 'type' : 'reveal'
 }
 
 /**
@@ -419,12 +434,47 @@ export function hasMeaningHint(v: CardView): boolean {
 
 /** Дистракторы для MC: авторские confusables тьютора приоритетнее случайной выборки той же части речи */
 export function mcDistractors(card: CardView, deck: CardView[], n = 3): string[] {
-  const authored = card.confusables.filter(c => c && c.toLowerCase() !== card.word.toLowerCase())
-  if (authored.length >= n) return shuffle(authored).slice(0, n)
-  const pool = deck.filter(c => !c.suspended && c.word !== card.word && !authored.includes(c.word))
+  const authored = shuffle(card.confusables.filter(c => c && c.toLowerCase() !== card.word.toLowerCase()))
+  /* Раньше здесь стояло `if (authored.length >= n) return authored` — и это
+     вырождало упражнение.
+     Замер на живой колоде: confusables ровно по три у 415 карточек из 450.
+     Значит четвёрка вариантов у почти каждого слова была зафиксирована
+     НАВСЕГДА, менялся только порядок, а ветка выбора по части речи была
+     достижима у 35 карточек. Хуже: из 1245 авторских дистракторов лишь 358
+     (29%) сами есть в колоде — остальные не встречаются больше нигде, и через
+     два показа задание вырождается в «выбери знакомое слово среди трёх
+     незнакомых». Узнавание по новизне, а не по значению.
+
+     Теперь пул пересобирается на каждом показе: один авторский дистрактор
+     (самая острая ловушка тьютора — их и проверяет SAT) плюс живые слова той же
+     части речи из того же раздела. Тьюторская разметка не выбрасывается, но
+     перестаёт быть единственным источником. */
+  const AUTHORED_KEEP = 1
+  const sec = sectionOf(card)
+  const taken = new Set([card.word.toLowerCase()])
+  const out: string[] = []
+  for (const a of authored.slice(0, AUTHORED_KEEP)) {
+    out.push(a)
+    taken.add(a.toLowerCase())
+  }
+  const pool = deck.filter(c =>
+    !c.suspended && !taken.has(c.word.toLowerCase()) && sectionOf(c) === sec)
   const samePos = pool.filter(c => c.pos === card.pos)
-  const src = samePos.length >= n - authored.length ? samePos : pool
-  return [...authored, ...shuffle(src.map(c => c.word)).slice(0, n - authored.length)]
+  const src = samePos.length >= n - out.length ? samePos : pool
+  for (const w of shuffle(src.map(c => c.word))) {
+    if (out.length >= n) break
+    if (taken.has(w.toLowerCase())) continue
+    out.push(w)
+    taken.add(w.toLowerCase())
+  }
+  // колода мала или раздел почти пуст — добираем оставшимися авторскими
+  for (const a of authored.slice(AUTHORED_KEEP)) {
+    if (out.length >= n) break
+    if (taken.has(a.toLowerCase())) continue
+    out.push(a)
+    taken.add(a.toLowerCase())
+  }
+  return out.slice(0, n)
 }
 
 const COMMON_PREPS = ['about', 'against', 'at', 'by', 'for', 'from', 'in', 'of', 'on', 'to', 'toward', 'with']

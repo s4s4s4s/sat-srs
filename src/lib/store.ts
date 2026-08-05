@@ -9,7 +9,7 @@ import { parseMetrics, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
 import { newId, newIntroducedOn, matureRetention, sessionAccuracy, READ_CAP_MINUTES } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
-import { DEFAULT_SETTINGS } from './types'
+import { DEFAULT_SETTINGS, SETTINGS_VERSION } from './types'
 
 const SETTINGS_KEY = 'sat-srs-settings'
 
@@ -61,10 +61,42 @@ export function useApp(): AppState {
   )
 }
 
+/* Миграции настроек.
+   Ключ — версия, ДО которой мигрируем. Каждая получает уже слитый с дефолтами
+   объект и возвращает исправленный. Правка дефолта сама по себе до устройства
+   не доедет (сохранённое перекрывает дефолты), поэтому всё, что обязано
+   примениться принудительно, живёт здесь. */
+const SETTINGS_MIGRATIONS: Record<number, (s: Settings) => Settings> = {
+  /* → v2 (05.08.2026). Два поля, которые пользователь не мог починить руками,
+     потому что не знал о них: окно паузы до 16.08 (приложение разрешало не
+     заниматься при 59 днях до экзамена) и московский пояс после переезда в
+     Ереван (граница учебного дня 04:00 съезжала на час). */
+  2: s => ({
+    ...s,
+    pauseFrom: DEFAULT_SETTINGS.pauseFrom,
+    pauseTo: DEFAULT_SETTINGS.pauseTo,
+    homeOffset: DEFAULT_SETTINGS.homeOffset
+  })
+}
+
+export function migrateSettings(saved: Partial<Settings>): Settings {
+  let s: Settings = { ...DEFAULT_SETTINGS, ...saved }
+  const from = Number.isFinite(saved.v as number) ? Number(saved.v) : 1
+  for (let v = from + 1; v <= SETTINGS_VERSION; v++) {
+    const m = SETTINGS_MIGRATIONS[v]
+    if (m) s = m(s)
+  }
+  return { ...s, v: SETTINGS_VERSION }
+}
+
 function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
-    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }
+    if (raw) {
+      const s = migrateSettings(JSON.parse(raw))
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(s))
+      return s
+    }
   } catch { /* ignore */ }
   return { ...DEFAULT_SETTINGS }
 }
@@ -181,6 +213,11 @@ export function views(): CardView[] {
 /** Актуальный журнал (для чтения после await, минуя снапшот useApp) */
 export function currentJournal() {
   return state.journal
+}
+
+/** Настройки вне React — нужны на старте, до монтирования дерева (заход `?go=1`). */
+export function currentSettings(): Settings {
+  return state.settings
 }
 
 /** Несинхронизированные изменения: строки журнала + dirty-карточки */
@@ -344,21 +381,12 @@ export async function logReading(minutes: number, what = ''): Promise<void> {
   void startSync()
 }
 
-export async function creditEmptyDay(): Promise<void> {
-  const today = dayKey()
-  if (state.journal.some(l => l.day === today && l.type === 'session' && l.queue_empty)) return
-  const now = new Date()
-  const line: JournalRec = {
-    id: newId(),
-    v: 1, type: 'session', ts: isoLocal(now), ms: now.getMilliseconds(), day: today,
-    dur_ms: 0, reviews: 0, new_seen: 0, acc: null, queue_empty: true, synced: 0
-  }
-  await db.putJournal([line])
-  state.journal = [...state.journal, line]
-  emit()
-  updateBadge()
-  void startSync()
-}
+/* `creditEmptyDay` удалена 05.08.2026.
+   Она писала в журнал строку session с `reviews: 0, dur_ms: 0, queue_empty: true`
+   и вызывалась из рендера главного экрана. Девятнадцать дней серии из сорока
+   одного закрыты именно ей — то есть открытием приложения. Добитая очередь
+   по-прежнему засчитывает день, но только настоящей строкой session из
+   законченного урока (см. `journal.emptyDays`, где стоит `reviews > 0`). */
 
 /** Самоотчёт о причине ошибки — дописывается в уже созданную строку журнала */
 export async function setCause(lineId: string, cause: string): Promise<void> {

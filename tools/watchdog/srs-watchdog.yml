@@ -1,0 +1,92 @@
+# Сторож занятий SAT SRS.
+#
+# УСТАНОВКА: этот файл кладётся в .github/workflows/ ТОГО репозитория, где лежит
+# журнал ревью (сейчас second-brain, после этапа 3 — sat-corpus), вместе с
+# tools/watchdog/check.mjs. Здесь, в репозитории кода, он лежит как исходник:
+# в sat-srs журнала нет, и запускать его тут не на чем.
+#
+# Секретов не требует: GITHUB_TOKEN своего репозитория умеет и читать журнал, и
+# заводить заявку. Уведомление приходит письмом и пушем приложения GitHub на
+# телефоне — без Web Push, которого iOS не даёт установленному через «Домой» PWA.
+#
+# Заявка ровно ОДНА и переиспользуется. Разводить по заявке на день уже пробовали
+# в соседнем контуре: 33 дубля одного падения за сутки, канал перестали читать.
+
+name: SRS watchdog
+
+on:
+  schedule:
+    # 15:00 UTC = 19:00 по Еревану. Учебный день кончается в 04:00, так что
+    # вечерняя проверка ещё оставляет несколько часов на то, чтобы закрыть пол.
+    - cron: '0 15 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: srs-watchdog
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - id: srs
+        run: node tools/watchdog/check.mjs 'Учёба/Карточки/_журнал'
+
+      # Отсутствие — это данные. До сих пор журнал фиксировал только действия,
+      # поэтому восьмидневный простой не был виден нигде, включая отчёт.
+      - name: Commit absence line
+        if: steps.srs.outputs.missed == 'true'
+        run: |
+          git config user.name 'srs-watchdog'
+          git config user.email 'srs-watchdog@users.noreply.github.com'
+          git add 'Учёба/Карточки/_журнал/_отсутствие.ndjson'
+          git diff --cached --quiet || git commit -m "SRS: день без занятий ${{ steps.srs.outputs.day }}"
+          git push
+
+      - name: Open or update the rolling issue
+        if: steps.srs.outputs.missed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ steps.srs.outputs.day }}
+          REVIEWS: ${{ steps.srs.outputs.reviews }}
+          FLOOR: ${{ steps.srs.outputs.floor }}
+          LEFT: ${{ steps.srs.outputs.daysToExam }}
+        run: |
+          set -euo pipefail
+          BODY="Пол дня не закрыт: ${REVIEWS} из ${FLOOR} упражнений.
+
+          До SAT ${LEFT} дн.
+
+          Два минуты закрывают день: https://s4s4s4s.github.io/sat-srs/?go=1
+
+          Заявка одна и обновляется — новых не будет."
+          NUM=$(gh issue list --label srs-floor --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -z "$NUM" ]; then
+            gh issue create --title "SRS: пол дня не закрыт" --label srs-floor --body "$BODY"
+          else
+            gh issue edit "$NUM" --body "$BODY"
+            gh issue comment "$NUM" --body "${DAY} — ${REVIEWS}/${FLOOR}, до SAT ${LEFT} дн."
+          fi
+
+      # Закрыт пол — заявка закрывается сама. Открытая заявка про вчера при
+      # закрытом сегодня — ровно тот шум, из-за которого канал перестают читать.
+      - name: Close the issue when the floor is met
+        if: steps.srs.outputs.missed == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEWS: ${{ steps.srs.outputs.reviews }}
+        run: |
+          set -euo pipefail
+          NUM=$(gh issue list --label srs-floor --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$NUM" ]; then
+            gh issue close "$NUM" --comment "Пол закрыт: ${REVIEWS} упражнений."
+          fi

@@ -129,15 +129,75 @@ export function readMinutesToday(lines: JournalLine[], today: string = dayKey())
   return readMinutesByDay(lines).get(today) ?? 0
 }
 
-/** Дни, где очередь была добита до конца */
+/** Оценок (упражнений) по дням — основа нижнего порога дня. */
+export function reviewsByDay(lines: JournalLine[]): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const l of lines) {
+    if (l.type !== 'review') continue
+    m.set(l.day, (m.get(l.day) ?? 0) + 1)
+  }
+  return m
+}
+
+/** Дни, где очередь была добита до конца.
+ *
+ *  Требование `reviews > 0` — не придирка. Пустая очередь засчитывалась
+ *  автоматически при РЕНДЕРЕ главного экрана, без единого упражнения: из 41
+ *  сессии 19 несли `queue_empty`, а порог в 15 минут не был взят ни разу за всю
+ *  историю. То есть серия три недели держалась на открытии приложения.
+ *  Добитая очередь остаётся законным зачётом — но только когда её добивали. */
 export function emptyDays(lines: JournalLine[]): Set<string> {
   const s = new Set<string>()
-  for (const l of lines) if (l.type === 'session' && l.queue_empty) s.add(l.day)
+  for (const l of lines) if (l.type === 'session' && l.queue_empty && (l.reviews ?? 0) > 0) s.add(l.day)
   return s
 }
 
-export function isDayDone(day: string, minutes: Map<string, number>, empty: Set<string>): boolean {
+/** Пол дня: держит серию. Один «заход» — столько упражнений, сколько влезает
+ *  в две минуты по замеренной скорости (медиана ответа 7,4 с). */
+export const RUN_MIN_REVIEWS = 12
+
+/**
+ * Порогов у дня два, и это осознанно.
+ *
+ * Был один — 15 минут — и за 41 сессию он не был взят НИ РАЗУ: медиана урока
+ * 0,78 минуты, максимум 12,2. Порог, который не берут никогда, не дисциплинирует,
+ * а обесценивает: 31.07 человек вернулся после трёх дней тишины, сделал 30
+ * упражнений за 4,4 минуты и получил «день не зачтён» и серию 0. После этого не
+ * открывал приложение пять дней.
+ *
+ * Нижний порог (заход) держит серию, верхний (15 минут) остаётся нормой дня и
+ * показывается отдельной строкой. Норма не размывается — она перестаёт быть
+ * условием того, чтобы день вообще засчитался.
+ */
+export function isDayDone(day: string, minutes: Map<string, number>, empty: Set<string>, reviews?: Map<string, number>): boolean {
+  return (minutes.get(day) ?? 0) >= MIN_MINUTES
+    || (reviews?.get(day) ?? 0) >= RUN_MIN_REVIEWS
+    || empty.has(day)
+}
+
+/** Норма дня (верхний порог) — отдельно от пола, для строки прогресса. */
+export function isDayFull(day: string, minutes: Map<string, number>, empty: Set<string>): boolean {
   return (minutes.get(day) ?? 0) >= MIN_MINUTES || empty.has(day)
+}
+
+/**
+ * Сколько из последних `window` дней закрыты полом (сегодня включительно).
+ *
+ * Это второе число главного экрана и единственное, которое зависит только от
+ * поведения. Первое («сколько слов готово») по построению не может двигаться
+ * ежедневно: стабильность растёт скачками и с задержкой. Число, которое человек
+ * может изменить сегодня, обязано быть на экране — иначе экран сообщает только
+ * то, что всё плохо, и делать с этим нечего.
+ */
+export function floorDays(lines: JournalLine[], today: string = dayKey(), window = 14): { done: number; window: number } {
+  const minutes = minutesByDay(lines)
+  const empty = emptyDays(lines)
+  const reviews = reviewsByDay(lines)
+  let done = 0
+  for (let i = 0; i < window; i++) {
+    if (isDayDone(addDaysKey(today, -i), minutes, empty, reviews)) done++
+  }
+  return { done, window }
 }
 
 export interface StreakInfo {
@@ -160,7 +220,8 @@ export interface PauseRange { from: string; to: string }
 export function streak(lines: JournalLine[], today: string = dayKey(), pause?: PauseRange | null): StreakInfo {
   const minutes = minutesByDay(lines)
   const empty = emptyDays(lines)
-  const done = (d: string) => isDayDone(d, minutes, empty)
+  const reviews = reviewsByDay(lines)
+  const done = (d: string) => isDayDone(d, minutes, empty, reviews)
   const inPause = (d: string) => !!(pause && pause.from && pause.to && d >= pause.from && d <= pause.to)
   const activeDays = [...new Set(lines.map(l => l.day))].filter(Boolean).sort()
   if (!activeDays.length) return { days: 0, todayDone: false, freezes: 0, toFreeze: 7, pausedToday: inPause(today), freezeSpentYesterday: false }

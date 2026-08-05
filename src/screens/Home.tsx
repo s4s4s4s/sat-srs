@@ -1,8 +1,8 @@
-import { useEffect } from 'react'
-import { useApp, views, setScreen, startSync, startLesson, creditEmptyDay, logReading, unsyncedCount } from '../lib/store'
-import { homeCounts, sectionOf, levelStats, activeLevel, type Section } from '../lib/scheduler'
-import { streak, newIntroducedOn, minutesToday, readMinutesToday, MIN_MINUTES, READ_MIN_MINUTES, type PauseRange } from '../lib/journal'
-import { examReady, pace, PRIMARY_DATE, TARGET_WORDS } from '../lib/metrics'
+import { useApp, views, setScreen, startSync, startLesson, logReading, unsyncedCount } from '../lib/store'
+import { homeCounts, sectionOf, levelStats, activeLevel, isLevelled, type Section } from '../lib/scheduler'
+import { streak, newIntroducedOn, minutesToday, readMinutesToday, floorDays, MIN_MINUTES, READ_MIN_MINUTES, RUN_MIN_REVIEWS, type PauseRange } from '../lib/journal'
+import { examReady, maturity, PRIMARY_DATE } from '../lib/metrics'
+import { State } from 'ts-fsrs'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt } from '../components/Icon'
 import FlameBuddy from '../components/FlameBuddy'
@@ -77,22 +77,21 @@ export default function Home() {
   // где на деле 61, — значит каждый день врать себе про запас времени.
   const daysToExam = Math.max(0, Math.ceil((PRIMARY_DATE.getTime() - Date.now()) / 86400_000))
 
-  // главное число: «слов готово к экзамену» на реальный якорь 03.10 + дефицит и темп
+  /* Числа главного экрана. `examReady` остаётся — но за ним теперь ходят в
+     «Статистику»: здесь от него берётся только `total` (размер словарной
+     колоды). На витрине — введено, закрепилось и дни с закрытым полом. */
   const er = examReady(all, PRIMARY_DATE)
-  const pc = pace(all, app.journal, PRIMARY_DATE)
-  const paceVerdict = pc.verdict === 'ahead'
-    ? 'идёшь с опережением'
-    : pc.daysBehind === null ? 'темпа нет — начни ввод' : `отстаёшь на ${pc.daysBehind} дн`
+  const mat = maturity(all)
+  const introduced = all.filter(v => isLevelled(v) && !v.suspended && v.fsrs.state !== State.New).length
+  const fd = floorDays(app.journal, today)
 
-  // идеальный день: всё повторено вовремя — зачитывается сам, серия не страдает
+  /* Автозачёт пустого дня удалён 05.08.2026.
+     Здесь стоял useEffect, который вызывал `creditEmptyDay()` при РЕНДЕРЕ этого
+     экрана, если очередь пуста. Он закрыл 19 дней из 41 — серия держалась на
+     открытии приложения, а не на занятии. Добитая очередь по-прежнему
+     засчитывает день, но только через строку session с reviews > 0
+     (см. `journal.emptyDays`). */
   const cAll = homeCounts(all, budget)
-  const dueNow = cAll.learnDue + cAll.revDue + cAll.newAvail
-  useEffect(() => {
-    if (app.ready && app.settings.pat && cAll.total > 0 && dueNow === 0 && !st.todayDone && !st.pausedToday) {
-      void creditEmptyDay()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [app.ready, dueNow, st.todayDone])
 
   const syncText =
     app.syncStatus === 'syncing' ? 'Синхронизация…'
@@ -130,14 +129,38 @@ export default function Home() {
         <div className="home-buddy"><FlameBuddy size={82} mood={st.todayDone ? 'happy' : 'idle'} /></div>
       </div>
 
+      {/* Главный экран больше не печатает «Готово к 03.10: 0 из 400 · отстаёшь
+          на 175 дн».
+          Оба числа были бесполезны и одно из них — неверно. «Готово» считает
+          retrievability на 03.10 БЕЗ будущих повторов: при медианной
+          стабильности колоды 1,4 дня и 59 днях до экзамена оно равно нулю по
+          построению и останется нулём ещё недели — то есть не даёт обратной
+          связи вообще. «Отстаёшь на 175 дн» при 59 оставшихся смешивало
+          единицы: темп мерился выпусками в Review, а дефицит — «готовыми
+          словами». Обе метрики живут в «Статистике», где к ним есть разрезы и
+          подписи; на главном экране остаются два числа, которые двигаются от
+          сегодняшнего действия. */}
       <div className="card hero hero-slim">
         <div className="hero-head" style={{ marginBottom: 6 }}>
-          <span className="hero-title">Готово к 03.10</span>
-          <span className="hero-sub"><b>{er.ready}</b> из {TARGET_WORDS}</span>
+          <span className="hero-title">Слова</span>
+          <span className="hero-sub"><b>{introduced}</b> из {er.total} введено</span>
         </div>
         <div className="minbar-row" style={{ marginTop: 0, marginBottom: 4 }}>
-          <div className="minbar"><div style={{ width: `${Math.min(100, (er.ready / TARGET_WORDS) * 100)}%` }} /></div>
-          <span className="minbar-label">нужно +{pc.neededPerDay}/день · {paceVerdict}</span>
+          <div className="minbar"><div style={{ width: `${er.total ? Math.min(100, (introduced / er.total) * 100) : 0}%` }} /></div>
+          <span className="minbar-label">
+            {mat.matureCount > 0 ? `${mat.matureCount} закрепилось` : 'закрепившихся пока нет'}
+          </span>
+        </div>
+      </div>
+
+      <div className="card hero hero-slim">
+        <div className="hero-head" style={{ marginBottom: 6 }}>
+          <span className="hero-title">Дней с закрытым полом</span>
+          <span className="hero-sub"><b>{fd.done}</b> из {fd.window}</span>
+        </div>
+        <div className="minbar-row" style={{ marginTop: 0, marginBottom: 4 }}>
+          <div className="minbar"><div style={{ width: `${Math.min(100, (fd.done / fd.window) * 100)}%` }} /></div>
+          <span className="minbar-label">пол дня — {RUN_MIN_REVIEWS} упражнений</span>
         </div>
       </div>
 

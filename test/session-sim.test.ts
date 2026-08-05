@@ -18,7 +18,7 @@ import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
-  pickFormat, suggestedGrade, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS,
+  pickFormat, mcDistractors, suggestedGrade, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
@@ -460,21 +460,46 @@ function dontKnowChecks(): void {
   const withMeaning = reviewCard('lucid')                            // meaning_ru задан в baseView
   const withoutMeaning: CardView = { ...withMeaning, meaning_ru: '', meaning_en: '' }
   assert(hasMeaningHint(withMeaning) && !hasMeaningHint(withoutMeaning), 'C5 setup: наличие/отсутствие значения')
-  // одиночная колода → дистракторов < 3 → выбор type/reveal определяется только подсказкой значения
-  assert(pickFormat(item(withoutMeaning), [withoutMeaning]) !== 'type',
+  // typing = 6-й аргумент. Одиночная колода → дистракторов < 3 → при typing выбор
+  // type/reveal определяется только подсказкой значения.
+  const fmt = (v: CardView, fsrs?: typeof withMeaning.fsrs, typing = false) =>
+    pickFormat(item(v, fsrs), [v], undefined, undefined, true, typing)
+  assert(fmt(withoutMeaning, undefined, true) !== 'type',
     'C5: type выдан Review-карточке без подсказки значения')
-  assert(pickFormat(item(withMeaning), [withMeaning]) === 'type',
-    'C5: Review-карточка со значением должна допускать type')
+  assert(fmt(withMeaning, undefined, true) === 'type',
+    'C5: при включённом вводе Review-карточка со значением допускает type')
+
+  /* Словарь по умолчанию НЕ пишется по буквам.
+     Формат `type` был основным — 271 показ из 472 в живом журнале — и не
+     проверяется на SAT нигде: там словарь всегда выбор из четырёх. Теперь он
+     выключен и включается настройкой; это часть контракта, а не косметика,
+     поэтому проверяется в обе стороны. */
+  assert(fmt(withMeaning) !== 'type', 'словарь: при выключенном вводе type не выдаётся даже со значением')
+  assert(fmt(withoutMeaning) !== 'type', 'словарь: при выключенном вводе type не выдаётся и без значения')
 
   // Learning reps>=2 (C1 выпускает в производство) — без значения всё равно не type (C5)
   const lnNo = { ...withoutMeaning.fsrs, state: State.Learning, reps: 2 }
   const lnYes = { ...withMeaning.fsrs, state: State.Learning, reps: 2 }
-  assert(pickFormat(item(withoutMeaning, lnNo), [withoutMeaning]) !== 'type', 'C5: Learning без значения — не type')
-  assert(pickFormat(item(withMeaning, lnYes), [withMeaning]) === 'type', 'C5: Learning reps>=2 со значением — type')
+  assert(fmt(withoutMeaning, lnNo, true) !== 'type', 'C5: Learning без значения — не type')
+  assert(fmt(withMeaning, lnYes, true) === 'type', 'C5: Learning reps>=2 со значением и включённым вводом — type')
+  assert(fmt(withMeaning, lnYes) !== 'type', 'словарь: Learning при выключенном вводе — не type')
 
-  // числовой ответ (math) однозначен сам по себе — остаётся type даже без meaning
+  // числовой ответ (math) однозначен сам по себе — остаётся type даже без meaning и без настройки
   const numCard: CardView = { ...withoutMeaning, answerNum: '15', kind: 'math' }
-  assert(pickFormat(item(numCard), [numCard]) === 'type', 'C5: числовой ответ остаётся type без meaning')
+  assert(fmt(numCard) === 'type', 'C5: числовой ответ остаётся type без meaning и без настройки ввода')
+
+  /* Дистракторы пересобираются: авторские confusables больше не занимают всю
+     четвёрку. На живой колоде confusables ровно по три у 415 карточек из 450 —
+     значит варианты были зафиксированы навсегда, а 71% из них не встречаются в
+     колоде больше нигде. */
+  const deck5 = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'].map(w => ({ ...reviewCard(w), word: w, pos: 'verb' }))
+  const target = { ...deck5[0], confusables: ['zzz1', 'zzz2', 'zzz3'] }
+  const d = mcDistractors(target, [target, ...deck5.slice(1)])
+  assert(d.length === 3, `дистракторы: ожидалось 3, получено ${d.length}`)
+  assert(d.filter(w => w.startsWith('zzz')).length <= 1, 'дистракторы: авторских не больше одного')
+  assert(d.some(w => !w.startsWith('zzz')), 'дистракторы: есть хотя бы одно живое слово колоды')
+  assert(new Set(d.map(w => w.toLowerCase())).size === d.length, 'дистракторы: без повторов')
+  assert(!d.some(w => w.toLowerCase() === target.word.toLowerCase()), 'дистракторы: само слово не попадает в варианты')
 
   // ---- C3: «не помню» = Again, оценка не поднимается выше ----
   const giveUpRating = Rating.Again // именно это фиксирует giveUp() в UI

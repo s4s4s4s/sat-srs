@@ -38,7 +38,7 @@ export default function SettingsScreen() {
     }
     const nl = Number(newPerLessonStr.trim())
     if (!newPerLessonStr.trim() || !Number.isFinite(nl) || nl < 1) {
-      setErr('«Новых за урок» — число от 1 до 5.')
+      setErr('«Новых за урок» — число от 1 до 20.')
       return
     }
     const next = {
@@ -49,7 +49,11 @@ export default function SettingsScreen() {
       branch: s.branch.trim(),
       basePath,
       newPerDay: Math.min(100, Math.round(n)),
-      newPerLesson: Math.min(5, Math.round(nl)),
+      /* Потолок был 5, и он молча срезал введённое: поле принимало любое
+         число, показывало его сохранённым, а на деле в урок уходило пять.
+         Дневная норма 15 при потолке 5 означала три обязательных запуска
+         приложения — ритуал вместо занятия. */
+      newPerLesson: Math.min(20, Math.round(nl)),
       requestRetention: s.requestRetention || DEFAULT_SETTINGS.requestRetention
     }
     if (!next.pat) {
@@ -163,6 +167,21 @@ export default function SettingsScreen() {
           <label>Новых за урок</label>
           <input inputMode="numeric" value={newPerLessonStr} onChange={e => setNewPerLessonStr(e.target.value)} />
         </div>
+      </div>
+      {/* Ввод по буквам выключен по умолчанию: SAT проверяет словарь выбором из
+          четырёх, а не написанием. Настройка оставлена — но как выбор, а не как
+          режим по умолчанию. */}
+      <div className="field">
+        <label>
+          <input
+            type="checkbox"
+            checked={s.typing}
+            onChange={e => setS({ ...s, typing: e.target.checked })}
+            style={{ width: 'auto', marginRight: 8, verticalAlign: 'middle' }}
+          />
+          Писать слова по буквам
+        </label>
+        <div className="hint">Выключено — словарь спрашивается выбором из четырёх, как на SAT.</div>
       </div>
       <div className="row">
         <div className="field">

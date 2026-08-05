@@ -73,14 +73,16 @@ function pickContext(view: CardView): string {
   return pool[idx]
 }
 
-function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true): Task {
-  const format = pickFormat(item, deck.map(r => r), introduced, lapsed, reintroAllowed)
+function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false): Task {
+  const format = pickFormat(item, deck.map(r => r), introduced, lapsed, reintroAllowed, typing)
   const ctx = format === 'prep' ? item.view.prepContext : pickContext(item.view)
-  // если у слова один пример и он уже показан на знакомстве, спрашивать по нему нельзя:
-  // это проверка памяти на предложение, а не на слово. Тогда цель — значение.
+  /* Если у слова один пример и он уже показан на знакомстве, спрашивать по нему
+     нельзя: это проверка памяти на предложение, а не на слово. Тогда цель —
+     значение. Это же ветка mc-meaning для 137 карточек, у которых контекст один
+     вместо трёх, требуемых контрактом. */
   const exampleSpent = introduced?.has(itemKey(item)) && item.view.contexts.length < 2
   const cue: Task['cue'] =
-    (format === 'reveal' || format === 'type') && exampleSpent && !item.view.answerNum && !!item.view.meaning_ru
+    (format === 'reveal' || format === 'type' || format === 'mc') && exampleSpent && !item.view.answerNum && !!item.view.meaning_ru
       ? 'meaning' : 'sentence'
   const base = { item, format, ctx, cue }
   if (format === 'mc') {
@@ -115,27 +117,27 @@ export default function Review() {
   const section = app.sessionSection
   const deck = views().filter(v => sectionOf(v) === section)
 
-  // очередь строится ПОСЛЕ синка на старте урока (свежие карточки тьютора попадают
-  // в эту же сессию); офлайн или медленная сеть не блокируют — таймаут 3.5 c
+  /* Очередь строится СРАЗУ из локальной колоды, синк уходит в фон.
+     Раньше здесь стоял `await Promise.race([startSync(), 3500])`: урок не
+     начинался, пока не ответит сеть, — до трёх с половиной секунд ожидания
+     перед первым вопросом, каждый раз. При медианной длине сессии 0,78 минуты
+     это пятая часть занятия, потраченная на пустой экран, и ровно та цена
+     входа, из-за которой приложение не открывают.
+     Свежие карточки тьютора теперь попадают не в этот урок, а в следующий —
+     цена, которую стоит платить: карточки заливаются пачками раз в несколько
+     дней, а уроков в день должно быть несколько. */
   const [queue, setQueue] = useState<StudyItem[] | null>(null)
   useEffect(() => {
-    let alive = true
-    void (async () => {
-      if (app.settings.pat && navigator.onLine) {
-        await Promise.race([startSync(), new Promise(r => setTimeout(r, 3500))])
-      }
-      if (!alive) return
-      // новых за урок — не больше newPerLesson (и не больше остатка дневного лимита);
-      // режим «только повторение» — ноль новых
-      const dayLeft = Math.max(0, app.settings.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
-      const budget = app.sessionReviewOnly ? 0 : Math.min(dayLeft, app.settings.newPerLesson || 3)
-      dayNewLeft.current = dayLeft   // граница для добора новых сверх урочного лимита
-      // point 3: слова, введённые сегодня в прошлых уроках и ещё не отработанные дважды,
-      // принудительно добираются в этот урок (buildQueue дотягивает их из Learning с due на завтра)
-      const forced = forcedTodaySlugs(currentJournal(), dayKey())
-      setQueue(buildQueue(views().filter(v => sectionOf(v) === section), budget, new Date(), forced))
-    })()
-    return () => { alive = false }
+    // новых за урок — не больше newPerLesson (и не больше остатка дневного лимита);
+    // режим «только повторение» — ноль новых
+    const dayLeft = Math.max(0, app.settings.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
+    const budget = app.sessionReviewOnly ? 0 : Math.min(dayLeft, app.settings.newPerLesson || 3)
+    dayNewLeft.current = dayLeft   // граница для добора новых сверх урочного лимита
+    // point 3: слова, введённые сегодня в прошлых уроках и ещё не отработанные дважды,
+    // принудительно добираются в этот урок (buildQueue дотягивает их из Learning с due на завтра)
+    const forced = forcedTodaySlugs(currentJournal(), dayKey())
+    setQueue(buildQueue(views().filter(v => sectionOf(v) === section), budget, new Date(), forced))
+    if (app.settings.pat && navigator.onLine) void startSync()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const [task, setTask] = useState<Task | null>(() => null)
@@ -213,7 +215,7 @@ export default function Review() {
         return
       }
     }
-    const shown = makeTask(head, deck, introduced.current, lapsed.current, introShown.current < introLimitNow())
+    const shown = makeTask(head, deck, introduced.current, lapsed.current, introShown.current < introLimitNow(), app.settings.typing)
     setTask(shown)
     // point 2/A2: отметка момента показа этой единицы — pickNextIndex держит 60-секундный разрыв
     shownTimes.current.set(itemKey(head), Date.now())
@@ -265,6 +267,7 @@ export default function Review() {
       introduced: introduced.current,
       lapsed: lapsed.current,
       reintroAllowed: introShown.current < introLimitNow(),
+      typing: app.settings.typing,
       introsLeft: introLimitNow() - introShown.current,
       shownTimes: shownTimes.current,
       drilled: drilled.current,
