@@ -19,7 +19,7 @@ import type { CardView, StudyItem } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
   pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS,
-  MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems
+  MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
 import { endOfStudyDay } from '../src/lib/daytime'
@@ -500,6 +500,51 @@ function dontKnowChecks(): void {
   assert(d.some(w => !w.startsWith('zzz')), 'дистракторы: есть хотя бы одно живое слово колоды')
   assert(new Set(d.map(w => w.toLowerCase())).size === d.length, 'дистракторы: без повторов')
   assert(!d.some(w => w.toLowerCase() === target.word.toLowerCase()), 'дистракторы: само слово не попадает в варианты')
+
+  /* C6: варианты — из уже виденных слов.
+     Репро жалобы 06.08.2026 «при выборе слов я просто выбираю знакомое»: в живой
+     колоде 450 карточек, оценку получили 49, и три случайных дистрактора почти
+     всегда были словами, которых ученик не видел ни разу. Правильный ответ
+     вычислялся по новизне, не читая предложение. */
+  const seenPool = ['seen1', 'seen2', 'seen3', 'seen4'].map(w => ({ ...reviewCard(w), word: w, pos: 'verb' }))
+  const unseenPool = Array.from({ length: 40 }, (_, i) => {
+    const w = `fresh${i}`
+    return { ...newCard(w), word: w, pos: 'verb' }
+  })
+  // A7: знакомство без оценки словом «виденным» не делает — reps растёт только с оценкой
+  assert(isSeenWord(seenPool[1]) && !isSeenWord(unseenPool[0]), 'C6: виденное отличается от невиденного по оценке, а не по показу')
+  const seenTarget = { ...seenPool[0], confusables: ['zzz1', 'zzz2', 'zzz3'] }
+  for (let i = 0; i < 30; i++) {
+    const dd = mcDistractors(seenTarget, [seenTarget, ...seenPool.slice(1), ...unseenPool])
+    assert(dd.length === 3, `C6: ожидалось 3 дистрактора, получено ${dd.length}`)
+    assert(!dd.some(w => w.startsWith('fresh')), `C6: в вариантах слово, которого ученик не видел: ${dd.join(', ')}`)
+    assert(!dd.some(w => w.startsWith('zzz')), `C6: незнакомая авторская ловушка выдаёт ответ так же, как незнакомый сосед: ${dd.join(', ')}`)
+  }
+  // знакомая авторская ловушка, наоборот, приоритетна — её и проверяет SAT
+  const authoredSeen = { ...seenPool[0], confusables: ['seen4'] }
+  const withAuthored = mcDistractors(authoredSeen, [authoredSeen, ...seenPool.slice(1), ...unseenPool])
+  assert(withAuthored.includes('seen4'), 'C6: знакомый авторский дистрактор обязан попасть в варианты')
+  // первые недели: виденных слов меньше четырёх — упражнение всё равно собирается
+  const early = mcDistractors(seenTarget, [seenTarget, seenPool[1], ...unseenPool])
+  assert(early.length === 3, `C6: при пустом пуле виденных MC всё равно собирается, получено ${early.length}`)
+
+  /* C7: ротация примеров переживает перезапуск приложения.
+     Индекс жил в Map внутри модуля экрана, PWA открывается заново на каждый урок,
+     карточка внутри урока показывается один раз в 140 случаях из 262 — значит
+     ученик видел почти исключительно contexts[0] и заучивал одно предложение. */
+  assert(nextCtxIndex(null, 0, 3) === 0, 'C7: первый в жизни показ — первый пример')
+  assert(nextCtxIndex(0, 0, 3) === 1, 'C7: следующий показ в том же уроке — следующий пример')
+  assert(nextCtxIndex(null, 4, 3) === 1, 'C7: приложение перезапустили — счётчиком служит число оценок, не ноль')
+  assert(nextCtxIndex(null, 5, 3) === 2, 'C7: reps продолжает круг, а не начинает его заново')
+  assert(nextCtxIndex(null, 3, 3) === 0 && nextCtxIndex(null, 4, 3) !== nextCtxIndex(null, 5, 3),
+    'C7: соседние по числу оценок показы дают разные примеры')
+  assert(nextCtxIndex(2, 0, 3) === 0, 'C7: круг замыкается на первом примере')
+  assert(nextCtxIndex(0, 0, 1) === 0 && nextCtxIndex(null, 7, 1) === 0, 'C7: один пример — индекс всегда 0, без деления по модулю на мусор')
+  // полный цикл: три показа подряд дают три разных примера
+  const seenIdx = new Set<number>()
+  let idx: number | null = null
+  for (let i = 0; i < 3; i++) { idx = nextCtxIndex(idx, 0, 3); seenIdx.add(idx) }
+  assert(seenIdx.size === 3, 'C7: три показа подряд обязаны дать три разных примера')
 
   // ---- C3: «не помню» = Again, оценка не поднимается выше ----
   const giveUpRating = Rating.Again // именно это фиксирует giveUp() в UI

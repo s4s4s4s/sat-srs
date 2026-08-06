@@ -432,9 +432,22 @@ export function hasMeaningHint(v: CardView): boolean {
   return !!(v.meaning_ru || v.meaning_en)
 }
 
-/** Дистракторы для MC: авторские confusables тьютора приоритетнее случайной выборки той же части речи */
+/** Слово уже показывали и оценивали: reps растёт только с оценкой (A7 — intro знакомством не считается) */
+export function isSeenWord(v: CardView): boolean {
+  return v.fsrs.reps > 0 || v.fsrs.state !== State.New
+}
+
+/**
+ * Дистракторы для MC.
+ *
+ * C6: варианты берутся из слов, которые ученик уже видел. Иначе задание решается
+ * узнаванием новизны, а не значением: 06.08.2026 Александр сформулировал это сам —
+ * «при выборе слов я просто выбираю знакомое». Замер того же дня: оценку хоть раз
+ * получили 49 слов из 450, то есть случайный дистрактор из колоды с вероятностью
+ * ~89% ученику вообще не показывался, и правильный ответ отличим не читая
+ * предложение. Точность mc 42/47 при этом не измеряла ничего.
+ */
 export function mcDistractors(card: CardView, deck: CardView[], n = 3): string[] {
-  const authored = shuffle(card.confusables.filter(c => c && c.toLowerCase() !== card.word.toLowerCase()))
   /* Раньше здесь стояло `if (authored.length >= n) return authored` — и это
      вырождало упражнение.
      Замер на живой колоде: confusables ровно по три у 415 карточек из 450.
@@ -452,29 +465,67 @@ export function mcDistractors(card: CardView, deck: CardView[], n = 3): string[]
   const AUTHORED_KEEP = 1
   const sec = sectionOf(card)
   const taken = new Set([card.word.toLowerCase()])
+  const pool = deck.filter(c =>
+    !c.suspended && c.word.toLowerCase() !== card.word.toLowerCase() && sectionOf(c) === sec)
+  const seenWords = new Set(pool.filter(isSeenWord).map(c => c.word.toLowerCase()))
+  /* Авторский дистрактор тоже проверяется на знакомость: 71% confusables не
+     встречаются в колоде больше нигде, и незнакомая ловушка выдаёт ответ ровно так же,
+     как незнакомый случайный сосед. Знакомые авторские идут первыми, незнакомые
+     остаются в хвосте — как запас, когда живых слов не хватает. */
+  const authored = shuffle(card.confusables.filter(c => c && c.toLowerCase() !== card.word.toLowerCase()))
+    .sort((a, b) => Number(seenWords.has(b.toLowerCase())) - Number(seenWords.has(a.toLowerCase())))
   const out: string[] = []
   for (const a of authored.slice(0, AUTHORED_KEEP)) {
+    if (!seenWords.has(a.toLowerCase())) break // незнакомую ловушку берём только в добор, ниже
     out.push(a)
     taken.add(a.toLowerCase())
   }
-  const pool = deck.filter(c =>
-    !c.suspended && !taken.has(c.word.toLowerCase()) && sectionOf(c) === sec)
-  const samePos = pool.filter(c => c.pos === card.pos)
-  const src = samePos.length >= n - out.length ? samePos : pool
-  for (const w of shuffle(src.map(c => c.word))) {
+  /* Лестница источников: знакомое той же части речи → любое знакомое раздела →
+     незнакомое той же части речи → любое слово раздела. Незнакомые ступени —
+     страховка для первых недель, пока видённых слов меньше четырёх на раздел;
+     как только пул набирается, они недостижимы. */
+  const samePos = (c: CardView) => c.pos === card.pos
+  const ladder: CardView[][] = [
+    pool.filter(c => isSeenWord(c) && samePos(c)),
+    pool.filter(isSeenWord),
+    pool.filter(samePos),
+    pool
+  ]
+  for (const step of ladder) {
     if (out.length >= n) break
-    if (taken.has(w.toLowerCase())) continue
-    out.push(w)
-    taken.add(w.toLowerCase())
+    for (const w of shuffle(step.map(c => c.word))) {
+      if (out.length >= n) break
+      if (taken.has(w.toLowerCase())) continue
+      out.push(w)
+      taken.add(w.toLowerCase())
+    }
   }
   // колода мала или раздел почти пуст — добираем оставшимися авторскими
-  for (const a of authored.slice(AUTHORED_KEEP)) {
+  for (const a of authored) {
     if (out.length >= n) break
     if (taken.has(a.toLowerCase())) continue
     out.push(a)
     taken.add(a.toLowerCase())
   }
   return out.slice(0, n)
+}
+
+/**
+ * C7: следующий пример карточки. Ротация обязана переживать перезапуск приложения.
+ *
+ * Раньше индекс жил в Map внутри модуля экрана и обнулялся при каждом открытии PWA,
+ * а карточка внутри урока показывается один раз в 140 случаях из 262 (журнал на
+ * 06.08.2026) — то есть почти каждый показ приходился на contexts[0], и слово
+ * заучивалось вместе с единственным предложением.
+ *
+ * `last` — сохранённый индекс прошлого показа (null, если приложение только открыли);
+ * тогда счётчиком служит число оценок карточки: оно переживает не только перезапуск,
+ * но и переустановку — reps приходит из frontmatter карточки в репозитории.
+ */
+export function nextCtxIndex(last: number | null | undefined, reps: number, len: number): number {
+  if (len <= 1) return 0
+  const base = last == null ? reps - 1 : last
+  return ((base + 1) % len + len) % len
 }
 
 const COMMON_PREPS = ['about', 'against', 'at', 'by', 'for', 'from', 'in', 'of', 'on', 'to', 'toward', 'with']

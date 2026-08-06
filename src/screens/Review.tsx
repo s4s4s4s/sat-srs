@@ -5,7 +5,7 @@ import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
   pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP,
-  earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems
+  earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex
 } from '../lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, type OrderCtx } from '../lib/session'
 import Tex from '../components/Tex'
@@ -64,24 +64,51 @@ interface Task {
 /** Сколько раз добирать одно сегодняшнее новое слово за сессию (point 4), прежде чем счесть урок исчерпанным */
 const DRILL_PER_SESSION = 2
 
-const lastCtxIdx = new Map<string, number>()
+/* Индекс последнего показанного примера. Живёт в localStorage, а не в памяти модуля:
+   PWA открывается заново на каждый урок, и Map обнулялась вместе с ним — ротация
+   всегда начиналась с contexts[0]. При 1–2 показах карточки за урок это значило, что
+   второй и третий примеры ученик практически не видел (C7). */
+const CTX_IDX_KEY = 'srs.ctxIdx'
+
+function readCtxIdx(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(CTX_IDX_KEY)
+    const val = raw ? JSON.parse(raw) : null
+    return val && typeof val === 'object' ? val as Record<string, number> : {}
+  } catch { return {} }
+}
+
+function writeCtxIdx(map: Record<string, number>) {
+  try { localStorage.setItem(CTX_IDX_KEY, JSON.stringify(map)) } catch { /* приватный режим/квота — ротация просто пойдёт от reps */ }
+}
 
 /** Ротация контекстов round-robin: каждый показ — следующее предложение, полный цикл до повтора */
-function pickContext(view: CardView): string {
+function pickContext(view: CardView, reps: number): string {
   const pool = view.contexts.length ? view.contexts : [view.context]
-  const idx = ((lastCtxIdx.get(view.path) ?? -1) + 1) % pool.length
-  lastCtxIdx.set(view.path, idx)
+  const map = readCtxIdx()
+  const idx = nextCtxIndex(map[view.path], reps, pool.length)
+  map[view.path] = idx
+  writeCtxIdx(map)
   return pool[idx]
 }
 
 function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false): Task {
   const format = pickFormat(item, deck.map(r => r), introduced, lapsed, reintroAllowed, typing)
-  const ctx = format === 'prep' ? item.view.prepContext : pickContext(item.view)
-  /* Если у слова один пример и он уже показан на знакомстве, спрашивать по нему
-     нельзя: это проверка памяти на предложение, а не на слово. Тогда цель —
-     значение. Это же ветка mc-meaning для 137 карточек, у которых контекст один
-     вместо трёх, требуемых контрактом. */
-  const exampleSpent = introduced?.has(itemKey(item)) && item.view.contexts.length < 2
+  const ctx = format === 'prep' ? item.view.prepContext : pickContext(item.view, item.fsrs.reps)
+  /* Если у слова один пример и он уже показан, спрашивать по нему нельзя: это
+     проверка памяти на предложение, а не на слово. Тогда цель — значение. Это же
+     ветка mc-meaning для 105 словарных карточек, у которых контекст один вместо
+     трёх, требуемых контрактом (замер 06.08.2026: 313 карточек с тремя примерами,
+     105 с одним, ещё 32 — с авторскими вариантами, им контексты не положены).
+
+     Пример «сгорает» не только внутри урока: у карточки с единственным контекстом
+     следующие уроки показывают ДОСЛОВНО то же предложение, и заучивается связка
+     предложение→слово — вторая жалоба Александра 06.08.2026. Поэтому потраченным
+     пример считается с первой оценки (reps > 0), а не только в пределах сессии.
+     Карточек с авторскими вариантами (error/grammar/math) это не касается: у них
+     «контекст» — формулировка вопроса, и значения слова нет. */
+  const exampleSpent = item.view.contexts.length < 2 && !item.view.choices.length &&
+    (introduced?.has(itemKey(item)) || item.fsrs.reps > 0)
   const cue: Task['cue'] =
     (format === 'reveal' || format === 'type' || format === 'mc') && exampleSpent && !item.view.answerNum && !!item.view.meaning_ru
       ? 'meaning' : 'sentence'
