@@ -20,11 +20,12 @@ import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
   pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
-  pickTask, meaningDistractors, REVIEW_CYCLE
+  pickTask, meaningDistractors, REVIEW_CYCLE, NEW_STOP_DATE, kindRank, expandItems, freshItems
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
 import { endOfStudyDay } from '../src/lib/daytime'
 import { sessionAccuracy, matureRetention } from '../src/lib/journal'
+import { isLeech, LEECH_REPS, LEECH_STABILITY_DAYS } from '../src/lib/metrics'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
 const RETENTION = 0.9
@@ -672,6 +673,125 @@ function fillerChecks(): void {
   passed++
 }
 
+/**
+ * Задача 1 (17.08.2026) — стоп ввода новых слов. Слову нужно ~21 день стабильности до
+ * PRIMARY (03.10), введённое позже не успевает: с NEW_STOP_DATE бюджет новых обязан
+ * стать нулевым И в основной очереди (buildQueue), И в доборе сверх урочного лимита
+ * (bonusNew в Review.tsx → nextNewItems) — недобитый путь означает, что правило не
+ * работает. Раньше это держалось на памяти владельца (зайти в настройки, обнулить
+ * newPerDay) — запрещённый класс решения.
+ */
+function newStopChecks(): void {
+  // граница — последняя миллисекунда до NEW_STOP_DATE и сама точка отсчёта, не календарная
+  // арифметика: так тест ловит регресс и в дате константы, и в операторе сравнения (>= vs >)
+  const dayBefore = new Date(NEW_STOP_DATE.getTime() - 1)
+  const atStop = new Date(NEW_STOP_DATE.getTime())
+  const longAfter = new Date(NEW_STOP_DATE.getTime() + 60 * 86400_000) // 20.11 — с запасом
+
+  const deck = [reviewCard('legacy1'), reviewCard('legacy2'), newCard('alpha'), newCard('beta'), newCard('gamma')]
+
+  const qBefore = buildQueue(deck, 3, dayBefore)
+  assert(qBefore.some(i => i.fsrs.state === State.New),
+    `NEW_STOP_DATE: до границы новые обязаны попадать в очередь, получили 0 из ${qBefore.length}`)
+
+  for (const now of [atStop, longAfter]) {
+    const q = buildQueue(deck, 3, now)
+    const newInQueue = q.filter(i => i.fsrs.state === State.New).length
+    assert(newInQueue === 0,
+      `NEW_STOP_DATE: buildQueue(${now.toISOString()}) обязан дать 0 новых при бюджете 3, получили ${newInQueue}`)
+    // колода не встаёт: то, что уже дозревает (legacy1/legacy2 — Review), в очередь идёт как обычно
+    assert(q.some(i => i.view.slug.startsWith('legacy')),
+      `NEW_STOP_DATE: после стопа повторы уже введённых слов обязаны продолжаться, очередь: ${q.map(i => i.view.slug).join(',')}`)
+  }
+
+  // доборный путь (последняя ступень лестницы Review.tsx::proceed, bonusNew → nextNewItems)
+  // обязан закрываться тем же правилом — иначе «стоп» держится только наполовину
+  assert(nextNewItems(deck, new Set(), 1, dayBefore).length === 1,
+    'NEW_STOP_DATE: добор нового слова (nextNewItems) обязан работать до границы')
+  assert(nextNewItems(deck, new Set(), 1, atStop).length === 0,
+    'NEW_STOP_DATE: добор нового слова (nextNewItems) обязан быть нулевым на границе и после')
+
+  console.log('  ✓ NEW_STOP_DATE (Задача 1): бюджет новых — 0 и в buildQueue, и в доборе (nextNewItems) с 19.09.2026, дозревание продолжается')
+  passed++
+}
+
+/**
+ * Задача 2 (17.08.2026) — слова из разборов пробников вперёд очереди. `freshItems` вводил
+ * словарь строго по возрастанию уровня, поэтому провал на настоящем пробнике (source:
+ * pt4/pt4-m2qNN/pt1-qNN…, см. _КОНТРАКТ.md), размеченный обычной высокой ступенью, не
+ * вводился НИКОГДА: до NEW_STOP_DATE влезает порядка 264 слов, а такое стоит за сотнями
+ * рутинных низкоступенчатых. Живой пример из колоды — paucity/surmise/buttress, все
+ * source: pt4, level 6.
+ */
+function ptPriorityChecks(): void {
+  const errorCard: CardView = { ...newCard('rule-dash-vs-colon'), kind: 'error' }
+  const grammarCard: CardView = { ...newCard('comma-rule'), kind: 'grammar' }
+  const mathCard: CardView = { ...newCard('quad-setup'), kind: 'math' }
+  const routineWord = newCard('adhere', 1) // рутинный словарь, низкая ступень — введётся раньше по старому правилу
+  // реальные карточки колоды: source pt4, level 6 (Учёба/Карточки/{paucity,surmise,buttress}.md)
+  const ptWords = ['paucity', 'surmise', 'buttress'].map(w => ({ ...newCard(w, 6), source: 'pt4' }))
+
+  assert(kindRank(errorCard) < kindRank(grammarCard), 'kindRank: error по-прежнему раньше grammar')
+  assert(kindRank(grammarCard) < kindRank(ptWords[0]), 'kindRank: pt-слово идёт ПОСЛЕ grammar')
+  assert(kindRank(ptWords[0]) < kindRank(mathCard), 'kindRank: pt-слово идёт ДО math')
+  assert(kindRank(ptWords[0]) < kindRank(routineWord), 'kindRank: pt-слово опережает рутинный словарь независимо от уровня')
+
+  const deck = [errorCard, grammarCard, mathCard, routineWord, ...ptWords]
+  const order = freshItems(expandItems(deck)).map(i => i.view.slug)
+  assert(order.indexOf('rule-dash-vs-colon') < order.indexOf('comma-rule'), 'freshItems: error раньше grammar')
+  for (const w of ['paucity', 'surmise', 'buttress']) {
+    assert(order.indexOf('comma-rule') < order.indexOf(w), `freshItems: ${w} (pt4) обязан идти после grammar`)
+    assert(order.indexOf(w) < order.indexOf('quad-setup'), `freshItems: ${w} (pt4) обязан идти до math`)
+    // ключевая регрессия задачи 2: 6-я ступень pt-слова обгоняет 1-ю ступень рутинного словаря
+    assert(order.indexOf(w) < order.indexOf('adhere'),
+      `freshItems: ${w} (pt4, level 6) обязан опередить рутинный словарь level 1 (adhere) — иначе слово не введётся никогда`)
+  }
+  // level — честная оценка трудности для «Пути»/статистики, приоритет её не трогает
+  assert(ptWords.every(v => v.level === 6), 'pt-приоритет не должен менять level карточки')
+
+  console.log('  ✓ pt-приоритет (Задача 2): paucity/surmise/buttress (source pt4, level 6) обгоняют рутинный словарь низкой ступени, level не тронут')
+  passed++
+}
+
+/**
+ * Задача 3 (17.08.2026) — починка флага пиявки. Старое условие в store.rateItem
+ * (`next.lapses >= leech_lapses + 6`) требовало lapses ≥ 6, а lapses растёт только при
+ * провале карточки из состояния Review — по всей колоде максимум был 2. Реальный путь к
+ * пиявке — многократный провал ИЗ Learning/Relearning (reps растёт на каждой оценке,
+ * lapses не растёт вовсе): 8 подряд «Заново» дают reps=8, lapses=0, stability≈0 —
+ * ровно то, что находит отчёт (isLeech из metrics.ts), и ровно то, чего старая формула
+ * не видела никогда. rateItem недоступен из этого файла (пишет в IndexedDB, которого в
+ * node нет — та же причина, по которой весь файл гоняет функции планировщика напрямую,
+ * а store.rateItem зеркалит локально, см. точку A1 в runDay), поэтому проверяем
+ * предикат, которым rateItem теперь помечает карточку (`isLeech(next) && !fm.leech`),
+ * на настоящем прогоне FSRS — том же объекте `next`, который получает rateItem.
+ */
+function leechFlagChecks(): void {
+  const f = makeScheduler(RETENTION)
+  let card = createEmptyCard(new Date(BASE))
+  let now = BASE
+  let flaggedByNewRule = false
+  let wouldFlagByOldRule = false
+  const leechLapsesBase = 0 // старое поле leech_lapses: во всей колоде ни разу не проставлено (leech всегда пуст)
+
+  for (let i = 0; i < LEECH_REPS && !flaggedByNewRule; i++) {
+    card = f.next(card, new Date(now), Rating.Again).card
+    now += 60_000
+    if (card.lapses >= leechLapsesBase + 6) wouldFlagByOldRule = true // условие до починки
+    if (isLeech(card)) flaggedByNewRule = true                        // condition в store.rateItem теперь
+  }
+
+  assert(card.reps >= LEECH_REPS, `сетап: reps обязан дорасти минимум до LEECH_REPS(${LEECH_REPS}), получили ${card.reps}`)
+  assert(card.stability < LEECH_STABILITY_DAYS,
+    `сетап: stability обязан остаться ниже LEECH_STABILITY_DAYS(${LEECH_STABILITY_DAYS}), получили ${card.stability}`)
+  assert(card.lapses < 6, `сетап: lapses обязан остаться ниже 6 (реалистичный случай — провалы из Learning), получили ${card.lapses}`)
+  assert(flaggedByNewRule, 'Пиявка: isLeech обязан сработать на карточке, которую находит отчёт (8 провалов, stability не подросла)')
+  assert(!wouldFlagByOldRule, 'регресс: старая формула (lapses >= leech_lapses+6) на этом же сценарии не сработала бы никогда')
+
+  console.log('  ✓ флаг пиявки (Задача 3): isLeech ставит флаг там, где отчёт видит пиявку; старая формула на том же прогоне молчит')
+  passed++
+}
+
 function main(): void {
   console.log('SRS session simulation — A2/A3/A4-bis/A6/B4/C1/C2')
 
@@ -753,6 +873,9 @@ function main(): void {
   fillerChecks()
   summaryChecks()
   dontKnowChecks()
+  newStopChecks()
+  ptPriorityChecks()
+  leechFlagChecks()
 
   console.log(`\nВсе проверки пройдены (${passed} групп).`)
 }

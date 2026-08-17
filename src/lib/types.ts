@@ -27,7 +27,7 @@ export interface CardView {
   kind: string          // vocab | error | grammar | …
   domain: string        // домен College Board (II/CS/EOI/SEC/ALG/AM/PSDA/GEO)
   confusables: string[] // авторские «путаемые» дистракторы от тьютора — приоритетнее выборки из колоды
-  leech: string         // дата пометки пиявкой (lapses ≥ 6), пусто = не пиявка
+  leech: string         // дата пометки пиявкой (isLeech из metrics.ts: reps ≥ LEECH_REPS и stability < LEECH_STABILITY_DAYS), пусто = не пиявка
   choices: string[]     // авторские MC-варианты (error/grammar/math); пусто = дистракторы из колоды
   answerText: string    // правильный вариант для авторских choices
   answerNum: string     // числовой ответ (math): "15", "0.8", "4/5" — ввод с клавиатуры
@@ -126,7 +126,7 @@ export interface Settings {
    окно паузы и часовой пояс. Версия и миграция в `store.loadSettings` чинят
    именно этот класс: поле, которое пользователь не может починить руками,
    потому что не знает о его существовании. */
-export const SETTINGS_VERSION = 3
+export const SETTINGS_VERSION = 4
 
 export const DEFAULT_SETTINGS: Settings = {
   v: SETTINGS_VERSION,
@@ -135,7 +135,12 @@ export const DEFAULT_SETTINGS: Settings = {
   repo: 'second-brain',
   branch: 'master',
   basePath: 'Учёба/Карточки',
-  newPerDay: 15,
+  /* Дневная норма — 8, а не прежние 15. Ввод пачками уже раз спровоцировал половину
+     нынешних проблем: 27.07 в колоду вошло 187 показов за день, и подрасти
+     стабильность не успела ни у одной просевшей карточки. Прежний дефолт до уже
+     установленного PWA не доедет сам — миграция v4 (store.ts::SETTINGS_MIGRATIONS)
+     принудительно доносит новое число. */
+  newPerDay: 8,
   /* Новых слов за урок.
      Было 3, и это оказалось настоящим потолком, а не подсказкой: чтобы взять
      дневные 15, урок приходилось запускать пять раз — за десять активных дней

@@ -37,6 +37,23 @@ export const EXAM_DATE = new Date(2026, 10, 7)     // 07.11.2026, суперск
    запаса нужна, чтобы последний повтор пришёлся не на канун экзамена. */
 export const DUE_CAP = new Date(2026, 8, 26)       // 26.09.2026
 
+/* Стоп ввода новых слов. Слову нужно порядка 21 дня стабильности, чтобы дозреть к
+   PRIMARY (03.10) — введённое позже этой границы просто не успевает: колода дальше
+   не растёт, только дозревает то, что уже введено.
+
+   Решения этого класса раньше не существовало в коде вовсе — оно держалось на
+   памяти владельца: «не забыть зайти в настройки и обнулить newPerDay». Запрещённый
+   класс — правило, которое человек обязан помнить, а не код. Здесь константа.
+
+   Граница включает саму дату: с 00:00 19.09.2026 бюджет новых уже нулевой, последний
+   день ввода — 18.09.2026. */
+export const NEW_STOP_DATE = new Date(2026, 8, 19)  // 19.09.2026, с этого дня бюджет новых — 0
+
+/** true, пока новые слова ещё разрешено вводить (см. NEW_STOP_DATE). */
+function newIntroAllowed(now: Date): boolean {
+  return now.getTime() < NEW_STOP_DATE.getTime()
+}
+
 /** Последние 2 недели перед КАЖДОЙ из дат — retention поднимается до 0.95 */
 export function effectiveRetention(base: number, now: Date = new Date()): number {
   const близко = (d: Date) => {
@@ -81,10 +98,25 @@ export function sectionOf(v: CardView): Section {
   return 'rw'
 }
 
-/** Приоритет типа при выборе новых: error/grammar (доказанные пробелы) → math → словарь */
+/**
+ * Приоритет типа при выборе новых: error/grammar (доказанные пробелы) → слово из
+ * разбора пробника → math → рутинный словарь.
+ *
+ * Слово из разбора пробника (`source` начинается на «pt»: `pt4`, `pt4-m2q27`,
+ * `pt1-q14`…, см. _КОНТРАКТ.md) — это провал на настоящем экзамене, тот же класс
+ * доказанного пробела, что и error/grammar, просто размеченный обычным vocab с
+ * произвольным `level`. Без этой ветки такое слово не вводится НИКОГДА: `freshItems`
+ * идёт уровнями по возрастанию, третьих ступеней и ниже — сотни, а до NEW_STOP_DATE
+ * влезает около 264 слова. Живой пример — `paucity`/`surmise`/`buttress`, все source:
+ * pt4, level 6: стояли за очередью, которая до них не доедет никогда.
+ *
+ * level НЕ трогаем — он остаётся честной оценкой трудности для «Пути» и статистики
+ * по ступеням, здесь только порядок ВВОДА.
+ */
 export function kindRank(v: CardView): number {
-  const r: Record<string, number> = { error: 0, grammar: 1, math: 2 }
-  return r[v.kind] ?? 3
+  const r: Record<string, number> = { error: 0, grammar: 1, math: 3 }
+  if (v.kind in r) return r[v.kind]
+  return v.source.startsWith('pt') ? 2 : 4
 }
 
 /** Карточка, которой управляет система уровней: словарь без связок. Только у неё осмыслен level. */
@@ -230,8 +262,14 @@ export function freshItems(items: StudyItem[]): StudyItem[] {
     })
 }
 
-/** Следующие новые слова за пределами урочного лимита — последняя ступень добора (B4). */
-export function nextNewItems(cards: CardView[], exclude: Set<string>, limit = 1): StudyItem[] {
+/**
+ * Следующие новые слова за пределами урочного лимита — последняя ступень добора (B4).
+ * После NEW_STOP_DATE добора нет: этот путь (bonusNew в Review.tsx) — второй вход
+ * нового слова в урок, помимо основного бюджета buildQueue, и обязан закрываться тем же
+ * правилом, иначе «стоп ввода» держится наполовину.
+ */
+export function nextNewItems(cards: CardView[], exclude: Set<string>, limit = 1, now: Date = new Date()): StudyItem[] {
+  if (!newIntroAllowed(now)) return []
   return freshItems(expandItems(cards))
     .filter(i => i.skill === 'recall' && !exclude.has(itemKey(i)))
     .slice(0, Math.max(0, limit))
@@ -266,11 +304,15 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
     .sort((a, b) => a.fsrs.due.getTime() - b.fsrs.due.getTime())
   const review = shuffle(overdue.slice(0, MAX_REVIEW_PER_LESSON))
 
-  // выбор новых: сначала error/grammar (закрывают доказанные пробелы), потом math, потом словарь;
-  // словарь идёт уровнями (Duolingo-путь): level ASC, внутри уровня — свежедобавленные последними
-  // (added ASC, стабильный порядок). error/grammar/math/transition — порядок прежний: added DESC.
+  // выбор новых: сначала error/grammar (закрывают доказанные пробелы), потом pt-разбор, потом
+  // math, потом словарь; словарь идёт уровнями (Duolingo-путь): level ASC, внутри уровня —
+  // свежедобавленные последними (added ASC, стабильный порядок). error/grammar/math/transition —
+  // порядок прежний: added DESC.
+  // NEW_STOP_DATE: после стопа бюджет нулевой независимо от того, что передал вызывающий —
+  // правило живёт здесь, а не в каждом месте, которое считает newBudget снаружи.
   const fresh = freshItems(items)
-  const newItems = shuffle(fresh.slice(0, Math.max(0, newBudget)))
+  const effectiveBudget = newIntroAllowed(now) ? newBudget : 0
+  const newItems = shuffle(fresh.slice(0, Math.max(0, effectiveBudget)))
 
   // interleaving с разрядкой: новые распределяем среди review, но не ближе чем через
   // NEW_GAP других карточек; позицию 0 не занимаем — сессия начинается с повтора, если он есть.
@@ -738,13 +780,17 @@ export function loadForecast(cards: CardView[], days = 7, now: Date = new Date()
   return out
 }
 
-/** Счётчики для главного экрана (в учебных единицах: карточка × навык) */
+/**
+ * Счётчики для главного экрана (в учебных единицах: карточка × навык).
+ * newAvail тоже гасится NEW_STOP_DATE — иначе плашка «N новых» на Home обещала бы
+ * ввод, которого buildQueue уже не даст, и расходилась бы с настоящим уроком.
+ */
 export function homeCounts(cards: CardView[], newBudget: number, now: Date = new Date()) {
   const eod = endOfStudyDay(now)
   const items = expandItems(cards)
   const learnDue = items.filter(i => isLearning(i.fsrs.state) && i.fsrs.due.getTime() <= now.getTime() + LEARN_AHEAD_MS).length
   const revDue = items.filter(i => i.fsrs.state === State.Review && i.fsrs.due.getTime() < eod.getTime()).length
-  const newAvail = Math.min(items.filter(i => i.fsrs.state === State.New).length, Math.max(0, newBudget))
+  const newAvail = Math.min(items.filter(i => i.fsrs.state === State.New).length, Math.max(0, newIntroAllowed(now) ? newBudget : 0))
   const revTomorrow = items.filter(i => {
     const t = i.fsrs.due.getTime()
     return i.fsrs.state === State.Review && t >= eod.getTime() && t < eod.getTime() + 86400_000

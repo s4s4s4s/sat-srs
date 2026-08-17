@@ -1,11 +1,11 @@
 import { useSyncExternalStore } from 'react'
-import { State, Rating, type Grade, type Card as FsrsCard } from 'ts-fsrs'
+import { State, type Grade, type Card as FsrsCard } from 'ts-fsrs'
 import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
 import { makeScheduler, effectiveRetention, homeCounts, isLevelled, DUE_CAP, type Section } from './scheduler'
-import { parseMetrics, type MetricSnapshot } from './metrics'
+import { parseMetrics, isLeech, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
 import { newId, newIntroducedOn, matureRetention, sessionAccuracy, READ_CAP_MINUTES } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
@@ -81,7 +81,14 @@ const SETTINGS_MIGRATIONS: Record<number, (s: Settings) => Settings> = {
      выключался 05.08 под сломанную руку, лежит в сохранённых настройках телефона
      и без принудительной миграции остался бы выключенным навсегда — ровно тот
      класс поля, ради которого версия и заведена. */
-  3: s => ({ ...s, typing: DEFAULT_SETTINGS.typing })
+  3: s => ({ ...s, typing: DEFAULT_SETTINGS.typing }),
+  /* → v4 (17.08.2026). Дневная норма новых слов — 8, а не прежние 15. Именно ввод
+     пачками уже спровоцировал половину нынешних проблем: 27.07 в колоду вошло 187
+     показов за один день, стабильность просевших карточек не успела подрасти ни у
+     одной. План требует восьми в день; правки одного DEFAULT_SETTINGS для этого не
+     хватает — сохранённые 15 лежат в телефоне и без миграции перекрывали бы новый
+     дефолт навсегда (тот же класс поля, что и newPerDay/typing выше). */
+  4: s => ({ ...s, newPerDay: DEFAULT_SETTINGS.newPerDay })
 }
 
 export function migrateSettings(saved: Partial<Settings>): Settings {
@@ -300,12 +307,17 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
   if (item.skill === 'recall' && prev.state === State.New && !rec.fm.first_seen) {
     fmPatch.first_seen = dayKey(now)
   }
-  // пиявка: +6 провалов сверх прошлого бюджета — повторение не лечит интерференцию,
-  // нужна переформулировка тьютором; после снятия флага бюджет начинается заново
-  const leechBase = Number(rec.fm.leech_lapses) || 0
-  if (grade === Rating.Again && next.lapses >= leechBase + 6 && !rec.fm.leech) {
+  /* Пиявка: общий предикат isLeech (metrics.ts), тот же, что уже читает report.ts —
+     много повторов при неподросшей стабильности. Прежнее условие здесь было другим
+     и несовместимым с отчётным: `lapses >= leech_lapses + 6`, а lapses растёт только
+     при провале карточки из состояния Review — максимум по всей колоде был 2. Порог
+     +6 был недостижим НИКОГДА: плашка «Пиявка» не показалась ни разу за всю историю,
+     поле leech пусто во всех 450 карточках, тьютор сигнала не получал, а 14 слов,
+     которые отчёт считает пиявками, съели 210 показов из 486 (43% всей работы SRS).
+     Смотрим на next (состояние ПОСЛЕ этой оценки), а не prev — иначе флаг ставился бы
+     на шаг позже настоящего порога. */
+  if (isLeech(next) && !rec.fm.leech) {
     fmPatch.leech = dayKey(now)
-    fmPatch.leech_lapses = next.lapses
   }
   const updated: CardRec = { ...rec, fm: { ...rec.fm, ...fmPatch }, dirty: 1 }
   await db.putCard(updated)
