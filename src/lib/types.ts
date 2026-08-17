@@ -126,14 +126,14 @@ export interface Settings {
    окно паузы и часовой пояс. Версия и миграция в `store.loadSettings` чинят
    именно этот класс: поле, которое пользователь не может починить руками,
    потому что не знает о его существовании. */
-export const SETTINGS_VERSION = 4
+export const SETTINGS_VERSION = 5
 
 export const DEFAULT_SETTINGS: Settings = {
   v: SETTINGS_VERSION,
   pat: '',
   owner: 's4s4s4s',
-  repo: 'second-brain',
-  branch: 'master',
+  repo: 'sat-deck',
+  branch: 'main',
   basePath: 'Учёба/Карточки',
   /* Дневная норма — 8, а не прежние 15. Ввод пачками уже раз спровоцировал половину
      нынешних проблем: 27.07 в колоду вошло 187 показов за день, и подрасти

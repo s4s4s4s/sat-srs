@@ -88,7 +88,16 @@ const SETTINGS_MIGRATIONS: Record<number, (s: Settings) => Settings> = {
      одной. План требует восьми в день; правки одного DEFAULT_SETTINGS для этого не
      хватает — сохранённые 15 лежат в телефоне и без миграции перекрывали бы новый
      дефолт навсегда (тот же класс поля, что и newPerDay/typing выше). */
-  4: s => ({ ...s, newPerDay: DEFAULT_SETTINGS.newPerDay })
+  4: s => ({ ...s, newPerDay: DEFAULT_SETTINGS.newPerDay }),
+  /* → v5 (17.08.2026). Колода переезжает из личного вальта (s4s4s4s/second-brain,
+     master) в отдельный приватный репозиторий s4s4s4s/sat-deck, ветка main — токен
+     на телефоне носил scope на весь вальт, после переезда он выдан только на колоду.
+     Пути внутри репозитория те же (basePath не меняется), меняются только repo и
+     branch. Без принудительной миграции сохранённые в телефоне старые repo/branch
+     перекрывали бы новый дефолт навсегда, и устройство продолжало бы стучаться в
+     репозиторий, где токен уже не действует (тот же класс поля, что и выше). Токен
+     (`pat`) миграция не трогает — его вводят руками. */
+  5: s => ({ ...s, repo: DEFAULT_SETTINGS.repo, branch: DEFAULT_SETTINGS.branch })
 }
 
 export function migrateSettings(saved: Partial<Settings>): Settings {
