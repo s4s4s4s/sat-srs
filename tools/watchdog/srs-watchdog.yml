@@ -86,20 +86,26 @@ jobs:
       # Отсутствие — это данные. До сих пор журнал фиксировал только действия,
       # поэтому простой не был виден нигде, включая отчёт.
       #
+      # Строка пишется за ВЧЕРАШНИЙ, уже закрытый учебный день (prevDay /
+      # prevMissed), а не за сегодняшний (day / missed выше — тот ещё открыт
+      # до 04:00 и используется только заявкой-напоминанием). Судить сегодняшний
+      # день в 19:00 значило приговаривать его раньше срока — это и убирали
+      # руками 16.08.2026, пока не нашли причину.
+      #
       # Шаг идёт ПОСЛЕ заявки и не роняет прогон. В вальт пишет ещё и фоновый
       # auto-sync — раз в 30–60 секунд, — поэтому пуш отсюда регулярно проигрывает
       # гонку за ref (первый же прогон на этом и упал). Строка идемпотентна по
       # дню: проигранная гонка означает лишь, что она уедет следующим прогоном.
       # Уведомление важнее бухгалтерии и не должно от неё зависеть.
       - name: Commit absence line
-        if: steps.srs.outputs.missed == 'true'
+        if: steps.srs.outputs.prevMissed == 'true'
         continue-on-error: true
         run: |
           git config user.name 'srs-watchdog'
           git config user.email 'srs-watchdog@users.noreply.github.com'
           git add 'Учёба/Карточки/_журнал/_отсутствие.ndjson'
           git diff --cached --quiet && exit 0
-          git commit -m "SRS: день без занятий ${{ steps.srs.outputs.day }}"
+          git commit -m "SRS: день без занятий ${{ steps.srs.outputs.prevDay }}"
           for i in 1 2 3; do
             git push && exit 0
             git pull --rebase --autostash origin master || exit 0
