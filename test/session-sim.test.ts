@@ -19,7 +19,8 @@ import type { CardView, StudyItem } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
   pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS,
-  MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord
+  MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
+  pickTask, meaningDistractors, REVIEW_CYCLE
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
 import { endOfStudyDay } from '../src/lib/daytime'
@@ -546,6 +547,61 @@ function dontKnowChecks(): void {
   for (let i = 0; i < 3; i++) { idx = nextCtxIndex(idx, 0, 3); seenIdx.add(idx) }
   assert(seenIdx.size === 3, 'C7: три показа подряд обязаны дать три разных примера')
 
+  /* C8: ротация режимов проверки в Review.
+     Репро жалобы 17.08.2026: «где выбор из 4 слов я просто выбираю знакомое, а в
+     предложениях вижу знакомое предложение и помню, какое слово там было». До
+     ротации Review отдавал ОДИН режим — выбор слова в пропуске, — потому что
+     mcReady() истинно почти всегда, а ввод был выключен тумблером. Три контекста
+     на слово при десяти повторах означали, что каждое предложение возвращается
+     трижды. Проверяем не «есть ли режимы в массиве», а что планировщик реально
+     их выдаёт и что недоступный шаг деградирует, а не пропускается (пропуск
+     сдвинул бы фазу и вернул предложение в каждый показ). */
+  const cycDeck = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'].map(w => ({ ...reviewCard(w), word: w, pos: 'verb' }))
+  const atReps = (reps: number, v: CardView = cycDeck[0], typing = true) => {
+    const fsrs = { ...v.fsrs, state: State.Review, reps }
+    return pickTask({ view: { ...v, fsrs }, skill: 'recall', fsrs }, cycDeck, undefined, undefined, true, typing)
+  }
+  assert(REVIEW_CYCLE.length === 4, `C8: цикл из четырёх шагов, в коде ${REVIEW_CYCLE.length}`)
+  assert(REVIEW_CYCLE[0].format === 'mc' && REVIEW_CYCLE[0].cue === 'sentence',
+    'C8: первым идёт формат реального экзамена — Words in Context')
+  const modes = [0, 1, 2, 3].map(r => atReps(r))
+  const sig = (m: { format: string; cue: string }) => `${m.format}/${m.cue}`
+  assert(new Set(modes.map(sig)).size === 4, `C8: четыре подряд показа обязаны дать четыре разных режима: ${modes.map(sig).join(', ')}`)
+  assert(modes.filter(m => m.cue === 'sentence').length === 1,
+    `C8: предложение показывается ровно на одном шаге из четырёх, иначе оно заучивается: ${modes.map(sig).join(', ')}`)
+  assert(modes.some(m => m.format === 'type'),
+    'C8: производство обязано быть в цикле — это единственный режим, где угадывать не из чего')
+  assert(modes.some(m => m.cue === 'word'),
+    'C8: обратный режим (слово → значение) обязан быть в цикле — в нём узнавание английской формы не помогает')
+  assert(sig(atReps(4)) === sig(atReps(0)) && sig(atReps(7)) === sig(atReps(3)),
+    'C8: цикл замыкается по числу оценок, фаза не плавает')
+
+  // деградация: недоступный шаг заменяется ближайшим возможным, а не пропускается
+  const noMeaning: CardView = { ...cycDeck[0], meaning_ru: '', meaning_en: '' }
+  for (const r of [1, 2, 3]) {
+    assert(atReps(r, noMeaning).cue === 'sentence',
+      `C8: без значения шаг ${r} обязан откатиться к предложению, а не спрашивать пустоту`)
+  }
+  assert(atReps(3, noMeaning).format === 'mc', 'C8: без значения ввод неоднозначен — остаётся выбор')
+  assert(atReps(3, cycDeck[0], false).format === 'mc' && atReps(3, cycDeck[0], false).cue === 'meaning',
+    'C8: при выключенном вводе шаг производства деградирует в выбор с той же целью, а не пропускается')
+
+  /* Дистракторы-значения: узнавание по новизне здесь не работает в принципе, но
+     работает семантическая далёкость — если варианты из разных смысловых зон,
+     ответ виден без знания слова. Поэтому берутся значения слов той же части речи. */
+  const md = meaningDistractors(cycDeck[0], cycDeck)
+  assert(md.length === 3, `C8: ожидалось 3 дистрактора-значения, получено ${md.length}`)
+  assert(!md.includes(cycDeck[0].meaning_ru), 'C8: правильное значение не попадает в собственные дистракторы')
+  assert(new Set(md).size === md.length, 'C8: значения без повторов')
+  assert(atReps(2, cycDeck[0]).cue === 'word', 'C8: на живой колоде обратный режим собирается')
+  // колода, где значений на дистракторы не хватает: обратный режим невозможен → откат к значению
+  const poorDeck: CardView[] = [cycDeck[0], ...cycDeck.slice(1).map(c => ({ ...c, meaning_ru: '' }))]
+  const poorFsrs = { ...cycDeck[0].fsrs, state: State.Review, reps: 2 }
+  assert(meaningDistractors(cycDeck[0], poorDeck).length < 3, 'C8 setup: в бедной колоде значений действительно не хватает')
+  const poorStep = pickTask(
+    { view: { ...cycDeck[0], fsrs: poorFsrs }, skill: 'recall', fsrs: poorFsrs }, poorDeck, undefined, undefined, true, true)
+  assert(poorStep.cue !== 'word', 'C8: без трёх значений обратный режим не собирается — шаг откатывается, а не отдаёт куцый выбор')
+
   // ---- C3: «не помню» = Again, оценка не поднимается выше ----
   const giveUpRating = Rating.Again // именно это фиксирует giveUp() в UI
   for (const f of ['reveal', 'type', 'mc', 'prep'] as const) {
@@ -580,7 +636,9 @@ function dontKnowChecks(): void {
     'та же скорость на прежней константе давала Good — репро дефекта')
 
   console.log('  ✓ dont-know (C3/C4/C5): «не помню»=Again, пустой ввод=«не помню», type только со значением')
+  console.log(`  ✓ ротация Review (C8): ${modes.map(sig).join(' → ')} — предложение на одном шаге из четырёх`)
   console.log('  ✓ порог «медленно»: доля от личной медианы, пол 12 c, математика отдельно')
+  passed++
   passed++
   passed++
 }

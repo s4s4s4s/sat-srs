@@ -76,7 +76,12 @@ const SETTINGS_MIGRATIONS: Record<number, (s: Settings) => Settings> = {
     pauseFrom: DEFAULT_SETTINGS.pauseFrom,
     pauseTo: DEFAULT_SETTINGS.pauseTo,
     homeOffset: DEFAULT_SETTINGS.homeOffset
-  })
+  }),
+  /* → v3 (17.08.2026). Ввод слова становится шагом ротации Review (C8). Тумблер
+     выключался 05.08 под сломанную руку, лежит в сохранённых настройках телефона
+     и без принудительной миграции остался бы выключенным навсегда — ровно тот
+     класс поля, ради которого версия и заведена. */
+  3: s => ({ ...s, typing: DEFAULT_SETTINGS.typing })
 }
 
 export function migrateSettings(saved: Partial<Settings>): Settings {

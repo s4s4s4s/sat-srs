@@ -375,18 +375,121 @@ export function shouldRequeue(next: FsrsCard, now: Date): boolean {
 /**
  * Формат показа.
  *
- * Словарь узнаётся, а не пишется по буквам. Замер по журналу: `type` — 271
- * показ из 472 (57%), `mc` — 36 (7,6%); на `type` 52 неверных плюс 22 «не
- * помню», порог опечатки сработал ровно 1 раз на 271 ввод. При этом SAT
- * проверяет словарь рецептивно (Words in Context — выбор из четырёх), а
- * написание по буквам не проверяется нигде. Плюс с 26.07 у Александра сломана
- * левая рука: основной формат приложения стал физически неудобным ровно тогда,
- * когда практика должна была держаться.
+ * C8 (17.08.2026). До этой даты словарь в Review проверялся ОДНИМ способом —
+ * выбором слова из четырёх в пропуске предложения. Правка 05.08 сделала MC
+ * основным форматом (обоснованно: `type` занимал 271 показ из 472, а SAT
+ * проверяет словарь рецептивно), но `mcReady()` истинно почти всегда, поэтому
+ * «основной» на практике означало «единственный», а ввод остался за выключенным
+ * по умолчанию тумблером.
  *
- * Поэтому основной формат словаря — MC, а ввод остаётся для числового ответа
- * (математика) и как явная настройка (`typing`).
+ * Что из этого вышло, словами самого Александра 17.08.2026: «где выбор из 4 слов
+ * я просто выбираю знакомое, а в предложениях вижу знакомое предложение и помню,
+ * какое слово там было». Обе лазейки — прямое следствие конструкции, а не лени:
+ * у слова три фиксированных контекста, значит на десяти повторах каждое
+ * предложение возвращается трижды, а выбор из четырёх слов вознаграждает
+ * узнавание формы, а не знание значения.
+ *
+ * Поэтому Review идёт по ротации `REVIEW_CYCLE`: два режима из четырёх не
+ * показывают предложение вовсе (заучивать нечего), один спрашивает обратное
+ * направление русскими значениями (знакомость английского слова не помогает), и
+ * один требует произвести слово по памяти (угадывать не из чего).
+ *
+ * Прежний запрет ввода снят сознательно: он держался на двух основаниях, и оба
+ * отпали — рука Александра зажила (подтверждено 17.08.2026), а в ротации `type`
+ * даёт четверть показов вместо прежних 57%. Тумблер `typing` остаётся, но теперь
+ * включён по умолчанию и означает «участвует ли ввод в ротации».
  */
 export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false): Format {
+  return pickTask(item, deck, introduced, lapsed, reintroAllowed, typing).format
+}
+
+/** По чему вспоминаем: пропуск в предложении, значение (ответ — слово) или слово (ответ — значение). */
+export type Cue = 'sentence' | 'meaning' | 'word'
+
+/**
+ * Ротация режимов проверки в Review, по числу оценок карточки.
+ *
+ * Порядок не случаен: первым идёт формат реального экзамена, чтобы он оставался
+ * тренируемым, дальше — режимы, закрывающие лазейки. Шаг, недоступный карточке
+ * (нет значения, мало дистракторов, ввод выключен), деградирует к ближайшему
+ * возможному, а не пропускается: пропуск сдвинул бы фазу и вернул предложение в
+ * каждый показ.
+ */
+export const REVIEW_CYCLE: ReadonlyArray<{ format: Format; cue: Cue }> = [
+  { format: 'mc', cue: 'sentence' },  // Words in Context — целевой формат SAT
+  { format: 'mc', cue: 'meaning' },   // значение → слово, предложения нет
+  { format: 'mc', cue: 'word' },      // слово → значение, варианты по-русски
+  { format: 'type', cue: 'meaning' }, // значение → вписать слово (производство)
+]
+
+/**
+ * Дистракторы-значения для обратного режима (`cue: 'word'`).
+ *
+ * Здесь узнавание по новизне не работает в принципе — все варианты русские, — но
+ * работает семантическая далёкость: если значения из разных смысловых зон, ответ
+ * виден без знания слова. Поэтому лестница ведёт от самых похожих (та же часть
+ * речи и та же ступень) к любым словам раздела.
+ */
+export function meaningDistractors(card: CardView, deck: CardView[], n = 3): string[] {
+  const answer = (card.meaning_ru || '').trim()
+  const taken = new Set([answer.toLowerCase()])
+  const sec = sectionOf(card)
+  const pool = deck.filter(c =>
+    !c.suspended && c.path !== card.path && sectionOf(c) === sec && !!(c.meaning_ru || '').trim())
+  const samePos = (c: CardView) => c.pos === card.pos
+  // 999 — «без уровня» (связки, SEC): такие между собой не роднее, чем любые другие
+  const sameLevel = (c: CardView) => card.level !== 999 && c.level === card.level
+  const ladder: CardView[][] = [
+    pool.filter(c => samePos(c) && sameLevel(c)),
+    pool.filter(samePos),
+    pool
+  ]
+  const out: string[] = []
+  for (const step of ladder) {
+    if (out.length >= n) break
+    for (const c of shuffle(step)) {
+      if (out.length >= n) break
+      const m = (c.meaning_ru || '').trim()
+      if (taken.has(m.toLowerCase())) continue
+      out.push(m)
+      taken.add(m.toLowerCase())
+    }
+  }
+  return out.slice(0, n)
+}
+
+/** Формат и цель показа вместе: Review.tsx рисует по паре, тесты проверяют пару. */
+export function pickTask(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false): { format: Format; cue: Cue } {
+  const format = baseFormat(item, deck, introduced, lapsed, reintroAllowed, typing)
+  if (format !== 'mc' && format !== 'type') return { format, cue: 'sentence' }
+  // авторские варианты (error/grammar) и числовой ответ (math) — своя механика, ротации нет
+  if (item.view.choices.length >= 2 || item.view.answerNum) return { format, cue: 'sentence' }
+  if (item.fsrs.state !== State.Review) return { format, cue: 'sentence' }
+  const step = REVIEW_CYCLE[((item.fsrs.reps % REVIEW_CYCLE.length) + REVIEW_CYCLE.length) % REVIEW_CYCLE.length]
+  return degrade(step, item, deck, typing)
+}
+
+/**
+ * Ближайший исполнимый режим, если выпавший шаг карточке недоступен.
+ * Порядок отката: word → meaning → sentence; type → mc с тем же cue.
+ */
+function degrade(step: { format: Format; cue: Cue }, item: StudyItem, deck: CardView[], typing: boolean): { format: Format; cue: Cue } {
+  const view = item.view
+  const hasMeaning = !!(view.meaning_ru || '').trim()
+  const canProduce = !view.word.includes(' ') && hasMeaningHint(view)
+  let cue = step.cue
+  if ((cue === 'meaning' || cue === 'word') && !hasMeaning) cue = 'sentence'
+  if (cue === 'word' && meaningDistractors(view, deck).length < 3) cue = 'meaning'
+  let format = step.format
+  if (format === 'type' && !(typing && canProduce)) format = 'mc'
+  // выбор слова требует трёх словесных дистракторов; без них остаётся показ
+  if (format === 'mc' && cue !== 'word' && mcDistractors(view, deck).length < 3) {
+    return typing && canProduce ? { format: 'type', cue: hasMeaning ? 'meaning' : 'sentence' } : { format: 'reveal', cue }
+  }
+  return { format, cue }
+}
+
+function baseFormat(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false): Format {
   if (item.skill === 'prep') return 'prep'
   // авторские варианты (error/grammar/math) — всегда MC, включая первый показ
   if (item.view.choices.length >= 2) return 'mc'

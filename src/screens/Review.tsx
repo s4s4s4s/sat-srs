@@ -4,8 +4,8 @@ import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJo
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickFormat, mcDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP,
-  earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex
+  pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP,
+  earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
 } from '../lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, type OrderCtx } from '../lib/session'
 import Tex from '../components/Tex'
@@ -58,7 +58,7 @@ interface Task {
   options: string[] // mc/prep
   answer: string    // слово, предлог или авторский вариант
   ctx: string       // выбранный контекст (ротация)
-  cue: 'sentence' | 'meaning' // по чему вспоминаем: пропуск в предложении или значение
+  cue: Cue          // по чему вспоминаем: пропуск в предложении, значение или само слово
 }
 
 /** Сколько раз добирать одно сегодняшнее новое слово за сессию (point 4), прежде чем счесть урок исчерпанным */
@@ -93,7 +93,7 @@ function pickContext(view: CardView, reps: number): string {
 }
 
 function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false): Task {
-  const format = pickFormat(item, deck.map(r => r), introduced, lapsed, reintroAllowed, typing)
+  const { format, cue: rotated } = pickTask(item, deck.map(r => r), introduced, lapsed, reintroAllowed, typing)
   const ctx = format === 'prep' ? item.view.prepContext : pickContext(item.view, item.fsrs.reps)
   /* Если у слова один пример и он уже показан, спрашивать по нему нельзя: это
      проверка памяти на предложение, а не на слово. Тогда цель — значение. Это же
@@ -109,10 +109,20 @@ function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: 
      «контекст» — формулировка вопроса, и значения слова нет. */
   const exampleSpent = item.view.contexts.length < 2 && !item.view.choices.length &&
     (introduced?.has(itemKey(item)) || item.fsrs.reps > 0)
-  const cue: Task['cue'] =
-    (format === 'reveal' || format === 'type' || format === 'mc') && exampleSpent && !item.view.answerNum && !!item.view.meaning_ru
-      ? 'meaning' : 'sentence'
+  /* Ротация (C8) уже увела две трети показов от предложения, но у карточки с
+     единственным контекстом даже шаг `sentence` покажет ДОСЛОВНО то же, что и в
+     прошлый раз. Поэтому сгоревший пример по-прежнему перебивает шаг ротации на
+     значение — правило старше ротации и остаётся за ней. */
+  const cue: Cue =
+    rotated === 'sentence' && (format === 'reveal' || format === 'type' || format === 'mc') &&
+    exampleSpent && !item.view.answerNum && !!item.view.meaning_ru
+      ? 'meaning' : rotated
   const base = { item, format, ctx, cue }
+  /* Обратный режим: спрашиваем значение, варианты — по-русски. Выбор «знакомого»
+     здесь не даёт ничего: знакомость английского слова не участвует в ответе. */
+  if (cue === 'word') {
+    return { ...base, options: shuffleOnce([item.view.meaning_ru, ...meaningDistractors(item.view, deck)]), answer: item.view.meaning_ru }
+  }
   if (format === 'mc') {
     // авторские варианты (error/grammar) приоритетнее дистракторов из колоды
     if (item.view.choices.length >= 2) {
@@ -624,7 +634,8 @@ export default function Review() {
   const canTypeAnswer = task.format === 'reveal' && !card.word.includes(' ')
   // у ввода слова цель задана значением: иначе «popular» вместо «ubiquitous» — честный ответ носителя, а не ошибка
   const taskHint =
-    task.cue === 'meaning' ? (canTypeAnswer || task.format === 'type' ? 'Какое это слово? Впишите его' : 'Какое это слово?')
+    task.cue === 'word' ? 'Что означает это слово?'
+    : task.cue === 'meaning' ? (canTypeAnswer || task.format === 'type' ? 'Какое это слово? Впишите его' : 'Какое это слово?')
     : task.format === 'mc' ? (isAuthored ? 'Выберите правильный вариант' : 'Какое слово подходит в пропуск?')
     : task.format === 'prep' ? 'Какой предлог здесь правильный?'
     : task.format === 'type' ? (isNumeric ? 'Решите и введите ответ' : `Впишите слово со значением «${card.meaning_ru || card.meaning_en}»`)
@@ -668,11 +679,26 @@ export default function Review() {
         ) : (
           <>
         <span className={`pill ${FORMAT_HINT[task.format].cls}`}>
-          {isAuthored || isNumeric ? (card.domain || 'Задание') : FORMAT_HINT[task.format].text}
+          {isAuthored || isNumeric ? (card.domain || 'Задание')
+            : task.cue === 'word' ? 'Выбери значение'
+            : task.cue === 'meaning' && task.format === 'mc' ? 'Слово по значению'
+            : FORMAT_HINT[task.format].text}
           {isPrep && <> · {card.word}</>}
           {card.desmos && <> · Desmos</>}
         </span>
-        {task.cue === 'meaning' && !revealed ? (
+        {task.cue === 'word' && !revealed ? (
+          /* обратный режим (C8): дано слово, выбрать значение. Предложения на экране нет —
+             заучивать нечего, а узнавание английской формы к ответу не ведёт. */
+          <div className="rev-cue">
+            {card.kind === 'vocab' && canSpeak() ? (
+              <button className="speak-word rev-cue-ru" onClick={() => speak(card.word)} aria-label="Произнести">
+                {card.word}<span className="speak-ic"><Speaker size={19} /></span><span className="pos">{card.pos}</span>
+              </button>
+            ) : (
+              <div className="rev-cue-ru">{card.word}<span className="pos">{card.pos}</span></div>
+            )}
+          </div>
+        ) : task.cue === 'meaning' && !revealed ? (
           /* пример уже показан на знакомстве — вспоминаем слово по значению, а не по нему же */
           <div className="rev-cue">
             <div className="rev-cue-ru">{card.meaning_ru}</div>
