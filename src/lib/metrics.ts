@@ -1,28 +1,91 @@
 import { fsrs, generatorParameters, State, type FSRS } from 'ts-fsrs'
 import type { CardView, JournalLine } from './types'
-import { isLevelled } from './scheduler'
+import { isLevelled, PRIMARY_DATE, NEW_STOP_DATE } from './scheduler'
 import { addDaysKey, dayKey } from './daytime'
-import { byTime, minutesByDay } from './journal'
+import { byTime, minutesByDay, readMinutesByDay } from './journal'
 
 /**
  * Чистые метрики прогресса над (cards, journal, now) — без побочных эффектов.
- * Главное число — «слов готово к экзамену»: карточка готова, если её прогнозируемая
- * retrievability на целевую дату >= 0.90 при текущей stability, БЕЗ будущих повторов.
- * Считаем через ts-fsrs (get_retrievability), а не своей формулой, — метрика обязана быть
- * согласована с планировщиком.
  *
- * Обе целевые даты живут в scheduler.ts и переэкспортируются отсюда для тех,
+ * Главных чисел два: сколько карточек доведено до состояния Review (TARGET_REVIEW)
+ * и сколько из них зрелых (TARGET_MATURE, стабильность >= MATURE_STABILITY_DAYS).
+ * Вспомогательное — «готово к экзамену» по прогнозной retrievability: карточка
+ * готова, если её retrievability на целевую дату >= 0.90 при текущей stability,
+ * БЕЗ будущих повторов. Считаем через ts-fsrs (get_retrievability), а не своей
+ * формулой, — метрика обязана быть согласована с планировщиком.
+ *
+ * Целевые даты живут в scheduler.ts и переэкспортируются отсюда для тех,
  * кто и так берёт метрики. Держать две копии `PRIMARY_DATE` в разных файлах
  * уже пробовали: метрика считала по 03.10, планировщик по 07.11, и колода
  * готовилась на месяц позже, чем нужно.
  */
 
-export { PRIMARY_DATE, EXAM_DATE } from './scheduler'
-import { PRIMARY_DATE } from './scheduler'
-export const TARGET_WORDS = 400                    // цель: вся колода
+/* Три даты — одно место жительства, scheduler.ts. Метрика их только
+   переэкспортирует: копия `PRIMARY_DATE` в двух файлах уже стоила месяца
+   подготовки (метрика считала по 03.10, планировщик по 07.11).
+   `NEW_STOP_DATE` — граница включительно: с 00:00 19.09.2026 бюджет новых
+   нулевой, последний день ввода — 18.09. Планировщик гасит ввод именно так
+   (`newIntroAllowed`), и темп обязан считать по той же границе, иначе экран
+   будет требовать «+7 слов в день» в день, когда урок новых уже не выдаёт. */
+export { PRIMARY_DATE, EXAM_DATE, NEW_STOP_DATE } from './scheduler'
+
+/* Пиявка — одно определение на всё приложение.
+
+   Определений было два, несовместимых. Отчёт считал пиявкой много повторов при
+   неподросшей стабильности и находил 14 слов; приложение ставило пометку
+   `leech` в карточку при `lapses >= leech_lapses + 6` — а lapses растёт только
+   при провале из Review, и максимум по всей колоде был 2. Поэтому плашка
+   «Пиявка — переформулировать» не показалась НИ РАЗУ, тьютор сигнала не
+   получал, и 14 слов съели 210 показов из 486 — 43% всей работы системы.
+   Повторение интерференцию не лечит: такое слово надо переформулировать
+   (новый контекст, другая мнемоника, confusables), а не показывать ещё раз. */
+export const LEECH_REPS = 8
+export const LEECH_STABILITY_DAYS = 2
+
+export function isLeech(f: { reps: number; stability: number } | null | undefined): boolean {
+  return !!f && f.reps >= LEECH_REPS && f.stability < LEECH_STABILITY_DAYS
+}
+
+/** Карточка-пиявка: пиявкой оказалось само слово или его prep-навык.
+ *  Одно определение на отчёт, снимок метрик и экран — списки и счётчик обязаны сходиться. */
+export function isLeechCard(v: CardView): boolean {
+  return isLeech(v.fsrs) || isLeech(v.fsrsPrep)
+}
+/* Цель. 17.08.2026 прежняя — «400 готовых слов к 03.10» — отменена как
+   арифметически недостижимая. Готовность считалась по прогнозной
+   retrievability, слово созревает примерно за 21 день стабильности, значит всё
+   введённое после ~12.09 к первой попытке не успевает, а в колоде на тот момент
+   было 450 карточек и 38 в Review. Цифра, которую нельзя выполнить, не
+   мотивирует, а деморализует: экран до самого экзамена показывал бы «отстаёшь
+   на N дней» от снятой цели.
+
+   Новая цель — две величины, обе достижимые вводом и повторением: довести
+   250–300 карточек до состояния Review (ориентир TARGET_REVIEW = 275) и из них
+   TARGET_MATURE = 150 сделать зрелыми (стабильность >= MATURE_STABILITY_DAYS
+   на целевую дату). Первая набирается вводом до NEW_STOP_DATE, вторая — только
+   повторением, и потому вводом её не подгонишь. */
+export const TARGET_REVIEW = 275                   // карточек доведено до Review (коридор 250–300)
+export const TARGET_MATURE = 150                   // из них зрелых на целевую дату
 export const READY_R = 0.90                        // порог готовности
 export const MATURE_STABILITY_DAYS = 21            // «зрелое» слово — человеческая версия готовности
 export const SLOW_MS = 10_000                      // ответ дольше 10 c — «знаю, но думаю»
+
+/* Процент по горстке показов — не измерение, а шум с видом измерения.
+   17.08.2026 таблица ретеншна показала «50% на 4–10 днях» по ЧЕТЫРЁМ показам,
+   и это подняло тревогу на пустом месте: доверительный интервал такой оценки
+   покрывает почти всю шкалу. Ниже этого n процент не показываем вовсе —
+   показываем «мало данных» и само n. */
+export const MIN_N_FOR_PCT = 20
+
+export function enoughForPct(n: number): boolean {
+  return n >= MIN_N_FOR_PCT
+}
+
+/** Дата в человеческом «дд.мм» — подписи целей на экране и в отчёте берут её отсюда,
+ *  чтобы месяц в тексте не разъезжался с константой при переносе даты. */
+export function ddmm(d: Date): string {
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`
+}
 
 let _f: FSRS | null = null
 /**
@@ -78,9 +141,18 @@ export function examReady(cards: CardView[], date: Date = PRIMARY_DATE): ExamRea
   }
 }
 
-export interface Maturity { medianStability: number; p25: number; p75: number; matureCount: number; n: number }
+export interface Maturity { medianStability: number; p25: number; p75: number; matureCount: number; reviewCount: number; n: number }
 
-/** Зрелость колоды: медианная стабильность и число «зрелых» слов (stability >= 21 дн). */
+/** Числитель первой цели: сколько словарных карточек доведено до состояния Review. */
+export function reviewCount(cards: CardView[]): number {
+  return cards.filter(v => isCandidate(v) && v.fsrs.state === State.Review).length
+}
+
+/**
+ * Зрелость колоды: медианная стабильность, число «зрелых» слов (stability >= 21 дн)
+ * и число доведённых до Review — числители обеих целей.
+ * `n` — все не-New кандидаты (Review + Learning/Relearning), поэтому n >= reviewCount.
+ */
 export function maturity(cards: CardView[]): Maturity {
   const stabs = cards
     .filter(v => isCandidate(v) && v.fsrs.state !== State.New)
@@ -91,41 +163,56 @@ export function maturity(cards: CardView[]): Maturity {
     p25: Math.round(percentile(stabs, 0.25) * 10) / 10,
     p75: Math.round(percentile(stabs, 0.75) * 10) / 10,
     matureCount: stabs.filter(s => s >= MATURE_STABILITY_DAYS).length,
+    reviewCount: reviewCount(cards),
     n: stabs.length
   }
 }
 
 export interface Pace {
+  inReview: number            // уже доведено до Review
+  remaining: number           // сколько ещё довести до TARGET_REVIEW
+  daysLeft: number            // дней до стопа ввода новых (0 = стоп уже прошёл)
   neededPerDay: number
   actual7: number
   actual14: number
-  daysBehind: number | null   // null = темпа нет (0 слов за 14 дн), а дефицит есть
-  verdict: 'ahead' | 'behind'
-  ready: number
-  remaining: number
-  daysLeft: number
+  daysBehind: number | null   // null = темпа нет (0 слов за 14 дн), а дефицит есть; либо ввод закрыт
+  verdict: 'ahead' | 'behind' | 'closed'
 }
 
 /**
- * Дефицит и темп к дате `date`. «Стало готово» восстанавливаем из журнала как graduation
- * в Review (prev_state != Review, new_state == Review) — это единственный сигнал темпа,
- * выводимый из сырого журнала; точный ряд готовности копится в `_метрики.ndjson` (см. шаг 2).
+ * Темп ввода к стопу новых слов (`stopDate`, по умолчанию NEW_STOP_DATE).
+ *
+ * Вопрос, на который отвечает функция, сменился 17.08.2026 вместе с целью: было
+ * «сколько из 400 готово к 03.10», стало «успеваю ли довести TARGET_REVIEW карточек
+ * до Review, пока ввод новых ещё открыт». После стопа темп ввода смысла не имеет —
+ * остаётся дозревание, и функция честно говорит `closed`, а не считает дефицит,
+ * который уже нечем закрыть.
+ *
+ * «Довели до Review» восстанавливаем из журнала как graduation (prev_state != Review,
+ * new_state == Review) — это единственный сигнал темпа, выводимый из сырого журнала;
+ * точный ряд копится в `_метрики.ndjson`.
  */
-export function pace(cards: CardView[], journal: JournalLine[], date: Date = PRIMARY_DATE, now: Date = new Date()): Pace {
-  const { ready } = examReady(cards, date)
-  const remaining = Math.max(0, TARGET_WORDS - ready)
-  const daysLeft = Math.max(1, Math.ceil((date.getTime() - now.getTime()) / 86400_000))
-  const neededPerDay = Math.round((remaining / daysLeft) * 10) / 10
+export function pace(cards: CardView[], journal: JournalLine[], stopDate: Date = NEW_STOP_DATE, now: Date = new Date()): Pace {
+  const inReview = reviewCount(cards)
+  const remaining = Math.max(0, TARGET_REVIEW - inReview)
+  // Граница включительно, как в планировщике (`newIntroAllowed`): в сам день стопа
+  // бюджет новых уже нулевой. Считать на день дольше — значит требовать ввода в день,
+  // когда урок новых физически не выдаст.
+  const daysLeft = Math.max(0, Math.ceil((stopDate.getTime() - now.getTime()) / 86400_000))
   const today = dayKey(now)
   const actual7 = graduatedInWindow(journal, addDaysKey(today, -6), today)
   const actual14 = graduatedInWindow(journal, addDaysKey(today, -13), today)
+  if (daysLeft === 0) {
+    return { inReview, remaining, daysLeft, neededPerDay: 0, actual7, actual14, daysBehind: null, verdict: 'closed' }
+  }
+  const neededPerDay = Math.round((remaining / daysLeft) * 10) / 10
   const rate = actual14 / 14
-  const shortfall = TARGET_WORDS - (ready + rate * daysLeft)
+  const shortfall = TARGET_REVIEW - (inReview + rate * daysLeft)
   const verdict: Pace['verdict'] = shortfall <= 0 ? 'ahead' : 'behind'
   const daysBehind = shortfall <= 0
     ? Math.round(shortfall / (rate || 1))               // <= 0: опережение
     : (rate > 0 ? Math.ceil(shortfall / rate) : null)   // темпа нет — дней не посчитать
-  return { neededPerDay, actual7, actual14, daysBehind, verdict, ready, remaining, daysLeft }
+  return { inReview, remaining, daysLeft, neededPerDay, actual7, actual14, daysBehind, verdict }
 }
 
 /** Слова, вышедшие в Review (graduation) в окне [from, to] — прокси темпа по журналу. */
@@ -149,13 +236,24 @@ function isMatureShow(l: JournalLine): boolean {
   return l.type === 'review' && l.prev_state === State.Review && !l.typo
 }
 
-export type IntervalBucket = '1-3' | '4-10' | '11-30' | '30+'
+export type IntervalBucket = '<1' | '1-3' | '4-10' | '11-30' | '30+'
 
-function intervalBucketOf(days: number): IntervalBucket {
+/* Бакет «меньше суток» заведён 17.08.2026 отдельно, и это не косметика.
+   Внутридневные повторы (learning-шаги, переспрос после опечатки) попадали в
+   «1–3 дн»: из 70 показов того бакета 49 были внутридневными. То есть бакет
+   мерил смесь двух разных вещей — узнавания через пару минут и настоящего
+   межднёвного удержания — и его процент нельзя было толковать никак. */
+export function intervalBucketOf(days: number): IntervalBucket {
+  if (days < 1) return '<1'
   if (days <= 3) return '1-3'
   if (days <= 10) return '4-10'
   if (days <= 30) return '11-30'
   return '30+'
+}
+
+/** Человеческие подписи бакетов — одни на экран и отчёт, чтобы «<1» нигде не вылезло как есть. */
+export const INTERVAL_LABELS: Record<IntervalBucket, string> = {
+  '<1': 'меньше суток', '1-3': '1–3 дн', '4-10': '4–10 дн', '11-30': '11–30 дн', '30+': '30+ дн'
 }
 
 /**
@@ -165,7 +263,7 @@ function intervalBucketOf(days: number): IntervalBucket {
  */
 export function retentionByInterval(journal: JournalLine[]): Record<IntervalBucket, Bucketed> {
   const out: Record<IntervalBucket, Bucketed> = {
-    '1-3': emptyBucket(), '4-10': emptyBucket(), '11-30': emptyBucket(), '30+': emptyBucket()
+    '<1': emptyBucket(), '1-3': emptyBucket(), '4-10': emptyBucket(), '11-30': emptyBucket(), '30+': emptyBucket()
   }
   const prevTs = new Map<string, number>()
   const lines = journal.filter(l => l.type === 'review' && l.slug).sort(byTime)
@@ -270,6 +368,21 @@ export function typoSplit(journal: JournalLine[]): { typos: number; realMisses: 
   return { typos, realMisses }
 }
 
+export interface GaveUp { share: number; gaveUp: number; n: number }
+
+/**
+ * Доля «не помню» — показы, где человек сам признал незнание (`gave_up`, кнопка «Не помню»
+ * или пустой ввод), а не ошибся написанием. Это единственный сигнал, отделяющий «не знаю»
+ * от «знаю, но промахнулся», и до 17.08.2026 он не попадал никуда, кроме сырого журнала.
+ * Знакомство (`intro`) вне знаменателя: там нечего вспоминать.
+ * `day` задан — считаем за этот учебный день (атом дневного снимка), иначе за всю историю.
+ */
+export function gaveUpShare(journal: JournalLine[], day?: string): GaveUp {
+  const rev = journal.filter(l => l.type === 'review' && l.format !== 'intro' && (day === undefined || l.day === day))
+  const g = rev.filter(l => l.gave_up === true).length
+  return { share: rev.length ? Math.round((g / rev.length) * 100) / 100 : 0, gaveUp: g, n: rev.length }
+}
+
 // ---- снимок истории ------------------------------------------------------
 
 export interface MetricSnapshot {
@@ -277,6 +390,7 @@ export interface MetricSnapshot {
   ready: number
   readyTotal: number
   readyExam: number          // готовность к EXAM_DATE (07.11) — вторая дата
+  inReview: number           // числитель первой цели (TARGET_REVIEW)
   neededPerDay: number
   actual7: number
   actual14: number
@@ -285,6 +399,15 @@ export interface MetricSnapshot {
   medianStability: number
   matureCount: number
   minutes: number
+  /* Три поля ниже добавлены 17.08.2026: без них ряд снимков не мог ответить,
+     стало ли лучше. Чтение — вторая половина защищённого минимума, семь недель
+     показывавшая ноль; пиявки — 43% работы системы, съеденные полутора десятками
+     слов; «не помню» — единственный признак настоящего незнания. Схема ndjson
+     расширяется добавлением полей: старые строки читаются без них. */
+  readMinutes: number        // минут чтения за день (type:'read', read_min)
+  leeches: number            // карточек под isLeechCard
+  gaveUpShare: number        // доля показов дня с gave_up (0..1)
+  gaveUpN: number            // знаменатель этой доли — без него share нечем взвесить
   byInterval: Record<string, { pct: number | null; n: number }>
   byLevel: Record<string, { pct: number | null; n: number }>
   byDomain: Record<string, { pct: number | null; n: number }>
@@ -301,10 +424,11 @@ export function buildMetricsSnapshot(cards: CardView[], journal: JournalLine[], 
   const today = dayKey(now)
   const er = examReady(cards, PRIMARY_DATE)
   const erExam = examDate ? examReady(cards, examDate) : er
-  const pc = pace(cards, journal, PRIMARY_DATE, now)
+  const pc = pace(cards, journal, NEW_STOP_DATE, now)
   const mat = maturity(cards)
   const sp = speedStats(journal)
   const ts = typoSplit(journal)
+  const gu = gaveUpShare(journal, today)
   const byInterval: Record<string, { pct: number | null; n: number }> = {}
   for (const [k, v] of Object.entries(retentionByInterval(journal))) byInterval[k] = bucketOut(v)
   const byLevel: Record<string, { pct: number | null; n: number }> = {}
@@ -316,6 +440,7 @@ export function buildMetricsSnapshot(cards: CardView[], journal: JournalLine[], 
     ready: er.ready,
     readyTotal: er.total,
     readyExam: erExam.ready,
+    inReview: pc.inReview,
     neededPerDay: pc.neededPerDay,
     actual7: pc.actual7,
     actual14: pc.actual14,
@@ -324,6 +449,10 @@ export function buildMetricsSnapshot(cards: CardView[], journal: JournalLine[], 
     medianStability: mat.medianStability,
     matureCount: mat.matureCount,
     minutes: Math.round(minutesByDay(journal).get(today) ?? 0),
+    readMinutes: Math.round(readMinutesByDay(journal).get(today) ?? 0),
+    leeches: cards.filter(v => !v.suspended && isLeechCard(v)).length,
+    gaveUpShare: gu.share,
+    gaveUpN: gu.n,
     byInterval,
     byLevel,
     byDomain,

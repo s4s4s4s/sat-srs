@@ -2,9 +2,13 @@ import { State } from 'ts-fsrs'
 import type { CardRec, CardView, JournalRec, JournalLine } from './types'
 import { cardView } from './yamlfm'
 import { addDaysKey, dayKey, isoLocal } from './daytime'
-import { byTime, minutesByDay, streak, trueRetention30, retentionByFormat, type PauseRange } from './journal'
+import { byTime, minutesByDay, readMinutesByDay, streak, trueRetention30, retentionByFormat, READ_MIN_MINUTES, type PauseRange } from './journal'
 import { activeLevel, levelStats, isLevelled, EXAM_DATE } from './scheduler'
-import { examReady, maturity, pace, retentionByInterval, PRIMARY_DATE, TARGET_WORDS } from './metrics'
+import {
+  examReady, maturity, pace, retentionByInterval, isLeechCard, ddmm,
+  PRIMARY_DATE, NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS,
+  INTERVAL_LABELS, type IntervalBucket
+} from './metrics'
 
 /**
  * Автогенерируемый отчёт для ИИ-тьютора: `_отчёт.md` рядом с карточками.
@@ -99,13 +103,9 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
      Признак пиявки — много повторов при неподросшей стабильности. Повторение
      интерференцию не лечит: такое слово надо переформулировать (новый контекст,
      другая мнемоника, confusables), а не показывать ещё раз. */
-  const LEECH_REPS = 8
-  const LEECH_STABILITY_DAYS = 2
-  const пиявка = (f: { reps: number; stability: number } | null | undefined) =>
-    !!f && f.reps >= LEECH_REPS && f.stability < LEECH_STABILITY_DAYS
   const затраты = (v: CardView) => v.fsrs.reps + (v.fsrsPrep?.reps ?? 0)
   const leeches = active
-    .filter(v => пиявка(v.fsrs) || пиявка(v.fsrsPrep))
+    .filter(isLeechCard)
     .sort((a, b) => затраты(b) - затраты(a))
   const errFrom = addDaysKey(today, -13)
   const errByFormat = new Map<string, Map<string, number>>()
@@ -124,29 +124,41 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
 
   const week = Array.from({ length: 7 }, (_, i) => addDaysKey(today, -6 + i))
   const min7 = week.reduce((a, d) => a + (minutes.get(d) ?? 0), 0)
+  // Чтение — вторая половина защищённого минимума и половина работы над SAT, но в отчёт
+  // не попадало ни разу, и «0/7 (не трекается)» семь недель никто не видел глазами.
+  const readMin = readMinutesByDay(lines)
+  const read7 = week.reduce((a, d) => a + (readMin.get(d) ?? 0), 0)
 
   const out: string[] = []
   out.push('---', 'type: report', 'report_schema: 1', `updated: "${isoLocal(now)}"`, '---', '')
   out.push('# SRS-отчёт (автогенерация)', '')
   out.push('> Файл пишет приложение SAT SRS при каждой синхронизации — не редактировать. Источник сырых данных: `_журнал/*.ndjson` (каждая оценка: ts, слово, навык, формат, correct, rating, план следующего показа) и frontmatter карточек.', '')
 
-  // «Слов готово к экзамену» — главное число (retrievability >= 0.90 на дату, ts-fsrs). Две даты:
-  // PRIMARY 03.10 (реальный якорь) и EXAM 07.11. Темп — graduation в Review за 7/14 дн из журнала.
+  /* Цель сменилась 17.08.2026. Было «400 готовых слов к 03.10» по прогнозной
+     retrievability — снято как арифметически недостижимое (слово созревает за 21 день
+     стабильности, значит введённое после ~12.09 к первой попытке не успевает).
+     Стало: довести 250–300 карточек до review и сделать 150+ из них зрелыми.
+     Готовность по retrievability осталась справочной строкой — тьютору она полезна,
+     но планом больше не является и ни с какой целевой цифрой не сравнивается. */
   const erP = examReady(active, PRIMARY_DATE)
   const erE = examReady(active, EXAM_DATE)
-  const pc = pace(active, lines, PRIMARY_DATE, now)
+  const pc = pace(active, lines, NEW_STOP_DATE, now)
   const mat = maturity(active)
   const verdictStr = pc.verdict === 'ahead'
     ? 'идёшь с опережением'
     : pc.daysBehind === null ? 'темпа нет — 0 слов за 14 дн' : `отстаёшь на ${pc.daysBehind} дн`
   out.push('## Прогресс к экзамену', '')
-  out.push(`- Готово к 03.10 (PRIMARY): **${erP.ready} из ${TARGET_WORDS}** · к 07.11 (EXAM): **${erE.ready} из ${TARGET_WORDS}** · зрелых (стаб.≥21дн): ${mat.matureCount}`)
-  out.push(`- Дефицит к 03.10: **${pc.remaining} слов** · нужно **+${pc.neededPerDay}/день** (осталось ${pc.daysLeft} дн)`)
-  out.push(`- Темп: +${pc.actual7} за 7 дн · +${pc.actual14} за 14 дн · медианная стабильность ${mat.medianStability} дн · **${verdictStr}**`)
+  out.push(`> Цель (с 17.08.2026): довести **${TARGET_REVIEW}** карточек до состояния review — коридор 250–300 — и сделать **${TARGET_MATURE}+** из них зрелыми (стабильность ≥ ${MATURE_STABILITY_DAYS} дн) к ${ddmm(PRIMARY_DATE)}. Ввод новых слов прекращается ${ddmm(NEW_STOP_DATE)} (последний рабочий день ввода — накануне), дальше только дозревание введённого.`, '')
+  out.push(`- В review: **${mat.reviewCount} из ${TARGET_REVIEW}** · зрелых (стаб.≥${MATURE_STABILITY_DAYS}дн): **${mat.matureCount} из ${TARGET_MATURE}** · медианная стабильность ${mat.medianStability} дн`)
+  out.push(pc.verdict === 'closed'
+    ? `- Ввод новых закрыт с ${ddmm(NEW_STOP_DATE)}: добор объёма окончен, темп ввода больше не считается`
+    : `- Ввод новых закрывается ${ddmm(NEW_STOP_DATE)}: довести ещё **${pc.remaining}** · нужно **+${pc.neededPerDay}/день** (осталось ${pc.daysLeft} дн ввода) · **${verdictStr}**`)
+  out.push(`- Темп: +${pc.actual7} за 7 дн · +${pc.actual14} за 14 дн (выход в review по журналу)`)
+  out.push(`- Справочно, готовность по прогнозной retrievability (R ≥ 0.90, без будущих повторов): к ${ddmm(PRIMARY_DATE)} ${erP.ready} · к ${ddmm(EXAM_DATE)} ${erE.ready} · всего словарных карточек ${erP.total}`)
   const byLv = erP.byLevel.filter(l => l.level < 999)
   if (byLv.length) out.push(`- Готовность по ступеням: ${byLv.map(l => `L${l.level} ${l.ready}/${l.total}`).join(' · ')}`)
   const ri = retentionByInterval(lines)
-  const riParts = (Object.keys(ri) as (keyof typeof ri)[]).map(k => `${k}дн ${ri[k].pct === null ? '—' : ri[k].pct + '%'}${ri[k].n ? ` (n=${ri[k].n})` : ''}`)
+  const riParts = (Object.keys(ri) as IntervalBucket[]).map(k => `${INTERVAL_LABELS[k]} ${ri[k].pct === null ? '—' : ri[k].pct + '%'}${ri[k].n ? ` (n=${ri[k].n})` : ''}`)
   out.push(`- Retention по бакетам интервала: ${riParts.join(' · ')}`)
   out.push('')
 
@@ -157,6 +169,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   const curLv = lvStats.find(s => s.level === actLv)
   if (curLv) out.push(`- Активный уровень: **${actLv}** (введено ${curLv.introduced}/${curLv.total} · в review ${curLv.review}) · всего уровней: ${lvStats.length}`)
   out.push(`- Серия: **${st.days} дн** (${st.todayDone ? 'сегодня зачтён' : 'сегодня НЕ зачтён'}) · минут сегодня: ${Math.round(minutes.get(today) ?? 0)} · за 7 дн: ${Math.round(min7)}`)
+  out.push(`- Чтение (вторая половина минимума, норма ${READ_MIN_MINUTES} мин/день): минут сегодня: ${Math.round(readMin.get(today) ?? 0)} · **за 7 дн: ${Math.round(read7)}** из ${READ_MIN_MINUTES * 7}`)
   out.push(`- True retention 30 дн (review-показы): **${ret.pct === null ? '—' : ret.pct + '%'}**${ret.n ? ` (n=${ret.n})` : ''}`)
   const fmtNames: Record<string, string> = { mc: 'MC', type: 'ввод', prep: 'предлоги', reveal: 'показ' }
   const retParts = Object.entries(retF).map(([f, v]) => `${fmtNames[f] ?? f} ${pct(v.pass, v.total)}`)

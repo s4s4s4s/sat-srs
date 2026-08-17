@@ -2,8 +2,10 @@ import { useApp, views, setScreen } from '../lib/store'
 import { homeCounts, loadForecast, sectionOf } from '../lib/scheduler'
 import { streak, trueRetention30, minutesToday, newIntroducedOn, retentionByFormat, minutesByDay, emptyDays, isDayDone } from '../lib/journal'
 import {
-  examReady, pace, maturity, retentionByInterval, retentionByLevel, retentionByDomain,
-  speedStats, PRIMARY_DATE, TARGET_WORDS, type Bucketed, type MetricSnapshot
+  pace, maturity, retentionByInterval, retentionByLevel, retentionByDomain,
+  speedStats, enoughForPct, ddmm, PRIMARY_DATE, NEW_STOP_DATE,
+  TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS, INTERVAL_LABELS,
+  type Bucketed, type IntervalBucket, type MetricSnapshot
 } from '../lib/metrics'
 import { dayKey, addDaysKey } from '../lib/daytime'
 import { ChevronLeft, Flame } from '../components/Icon'
@@ -35,24 +37,42 @@ function Spark({ values, label }: { values: (number | null)[]; label: string }) 
   )
 }
 
-/** Таблица разбивки retention: строки «метка · бар · pct (n)». */
+/**
+ * Таблица разбивки retention: строки «метка · бар · pct (n)».
+ *
+ * Процент прячется, пока n < MIN_N_FOR_PCT (enoughForPct). 17.08.2026 строка
+ * «4–10 дн — 50%» была посчитана по ЧЕТЫРЁМ показам и подняла тревогу на пустом
+ * месте: при таком n оценка не отличима от любой другой. Само n показываем
+ * всегда — и рядом с процентом тоже, чтобы вес цифры был виден без раскопок.
+ */
 function RetTable({ rows }: { rows: { label: string; b: Bucketed }[] }) {
   const shown = rows.filter(r => r.b.n > 0)
   if (!shown.length) return <div className="syncline">пока нет данных</div>
   return (
     <>
       {shown.map(r => {
+        const ok = enoughForPct(r.b.n) && r.b.pct !== null
         const pct = r.b.pct ?? 0
         return (
           <div key={r.label} className="fmt-row">
             <span className="fmt-name">{r.label}</span>
-            <div className="fmt-track"><div className={`fmt-fill${pct < 70 ? ' low' : ''}`} style={{ width: `${pct}%` }} /></div>
-            <span className="fmt-pct">{r.b.pct === null ? '—' : `${pct}%`} <span className="fmt-n">n={r.b.n}</span></span>
+            <div className="fmt-track"><div className={`fmt-fill${ok && pct < 70 ? ' low' : ''}`} style={{ width: ok ? `${pct}%` : 0 }} /></div>
+            <span className="fmt-pct">{ok ? `${pct}%` : 'мало данных,'} <span className="fmt-n">n={r.b.n}</span></span>
           </div>
         )
       })}
     </>
   )
+}
+
+/** Ряд значений из истории снимков. Поля, добавленные позже (inReview, readMinutes),
+ *  в старых строках отсутствуют — там разрыв графика, а не ноль: нуля в тот день не было,
+ *  его просто не измеряли. */
+function series(hist: MetricSnapshot[], pick: (s: MetricSnapshot) => number | undefined): (number | null)[] {
+  return hist.map(s => {
+    const v = pick(s)
+    return typeof v === 'number' && Number.isFinite(v) ? v : null
+  })
 }
 
 export default function Stats() {
@@ -78,9 +98,11 @@ export default function Stats() {
   const days28 = Array.from({ length: 28 }, (_, i) => addDaysKey(today, i - 27))
   const firstDay = [...minutes.keys(), ...empty].sort()[0] ?? today
 
-  // прогресс к экзамену: главное число + слои 2–3
-  const er = examReady(all, PRIMARY_DATE)
-  const pc = pace(all, app.journal, PRIMARY_DATE)
+  /* Прогресс к экзамену. Цель с 17.08.2026 — не «400 готовых слов» (снята как
+     недостижимая: слово созревает за 21 день стабильности, и введённое после ~12.09
+     к 03.10 не успевает), а две величины: сколько карточек доведено до повторов и
+     сколько из них зрелых. Темп считается к стопу ввода новых, а не к экзамену. */
+  const pc = pace(all, app.journal, NEW_STOP_DATE)
   const mat = maturity(all)
   const ri = retentionByInterval(app.journal)
   const rl = retentionByLevel(all, app.journal)
@@ -90,7 +112,7 @@ export default function Stats() {
   const paceVerdict = pc.verdict === 'ahead'
     ? 'идёшь с опережением'
     : pc.daysBehind === null ? 'темпа нет' : `отстаёшь на ${pc.daysBehind} дн`
-  const intervalRows = (Object.keys(ri) as (keyof typeof ri)[]).map(k => ({ label: `${k} дн`, b: ri[k] }))
+  const intervalRows = (Object.keys(ri) as IntervalBucket[]).map(k => ({ label: INTERVAL_LABELS[k], b: ri[k] }))
   const levelRows = [...rl.entries()].sort((a, b) => a[0] - b[0]).map(([lv, b]) => ({ label: app.levelNames[String(lv)] ?? `Уровень ${lv}`, b }))
   const domainRows = [...rd.entries()].sort((a, b) => b[1].n - a[1].n).map(([d, b]) => ({ label: d, b }))
 
@@ -103,24 +125,34 @@ export default function Stats() {
 
       <div className="card" style={{ marginBottom: 14 }}>
         <h2 className="sec">Прогресс к экзамену</h2>
-        <div className="minbar-row" style={{ marginTop: 2, marginBottom: 6 }}>
-          <div className="minbar"><div style={{ width: `${Math.min(100, (er.ready / TARGET_WORDS) * 100)}%` }} /></div>
-          <span className="minbar-label"><b>{er.ready}</b> / {TARGET_WORDS}</span>
+        <div className="minbar-row" style={{ marginTop: 2 }}>
+          <div className="minbar"><div style={{ width: `${Math.min(100, (mat.reviewCount / TARGET_REVIEW) * 100)}%` }} /></div>
+          <span className="minbar-label"><b>{mat.reviewCount}</b> / {TARGET_REVIEW}</span>
+        </div>
+        <div className="syncline" style={{ marginBottom: 6 }}>доведено до повторов — цель 250–300 слов к {ddmm(PRIMARY_DATE)}</div>
+        <div className="minbar-row">
+          <div className="minbar"><div style={{ width: `${Math.min(100, (mat.matureCount / TARGET_MATURE) * 100)}%` }} /></div>
+          <span className="minbar-label"><b>{mat.matureCount}</b> / {TARGET_MATURE}</span>
+        </div>
+        <div className="syncline" style={{ marginBottom: 6 }}>из них зрелых — стабильность ≥ {MATURE_STABILITY_DAYS} дн, держатся без повторов</div>
+        <div className="syncline">
+          {pc.verdict === 'closed'
+            ? <>ввод новых закрыт с {ddmm(NEW_STOP_DATE)} — дальше только дозревание</>
+            : <>ввод новых закрывается {ddmm(NEW_STOP_DATE)}: довести ещё {pc.remaining} · нужно +{pc.neededPerDay}/день (осталось {pc.daysLeft} дн) · <b>{paceVerdict}</b></>}
         </div>
         <div className="syncline">
-          готово к 03.10 · нужно +{pc.neededPerDay}/день (осталось {pc.daysLeft} дн) · <b>{paceVerdict}</b>
-        </div>
-        <div className="syncline">
-          темп: +{pc.actual7} за 7 дн · +{pc.actual14} за 14 дн · зрелых {mat.matureCount} · медиана стаб. {mat.medianStability} дн
+          темп: +{pc.actual7} за 7 дн · +{pc.actual14} за 14 дн · медиана стаб. {mat.medianStability} дн
         </div>
       </div>
 
       {hist.length >= 2 && (
         <div className="card" style={{ marginBottom: 14 }}>
           <h2 className="sec">Тренды (по дням)</h2>
-          <Spark values={hist.map(s => s.ready)} label="готово к экзамену" />
-          <Spark values={hist.map(s => s.medianStability)} label="медиана стабильности" />
-          <Spark values={hist.map(s => s.minutes)} label="минут в день" />
+          <Spark values={series(hist, s => s.inReview)} label="доведено до повторов" />
+          <Spark values={series(hist, s => s.matureCount)} label="зрелых слов" />
+          <Spark values={series(hist, s => s.medianStability)} label="медиана стабильности" />
+          <Spark values={series(hist, s => s.minutes)} label="минут карточек" />
+          <Spark values={series(hist, s => s.readMinutes)} label="минут чтения" />
         </div>
       )}
 
@@ -164,7 +196,10 @@ export default function Stats() {
         <div className="stat-cell"><div className="n">{c.learnDue + c.revDue + c.newAvail}</div><div className="t">due сегодня</div></div>
         <div className="stat-cell"><div className="n">{c.revTomorrow}</div><div className="t">due завтра</div></div>
         <div className="stat-cell"><div className="n">{c.newAvail}</div><div className="t">новых осталось</div></div>
-        <div className="stat-cell"><div className="n">{ret.pct === null ? '—' : `${ret.pct}%`}</div><div className="t">retention 30 дн{ret.n ? ` (n=${ret.n})` : ''}</div></div>
+        <div className="stat-cell">
+          <div className="n">{enoughForPct(ret.n) && ret.pct !== null ? `${ret.pct}%` : '—'}</div>
+          <div className="t">retention 30 дн{enoughForPct(ret.n) ? ` (n=${ret.n})` : ` · мало данных, n=${ret.n}`}</div>
+        </div>
         <div className="stat-cell"><div className="n"><Flame size={22} off={st.days === 0} />{st.days}{st.freezes > 0 ? <span className="freeze">❄{st.freezes}</span> : null}</div><div className="t">серия дней</div></div>
         <div className="stat-cell"><div className="n">{Math.floor(mins)}</div><div className="t">минут сегодня</div></div>
       </div>
@@ -190,16 +225,11 @@ export default function Stats() {
       {Object.keys(retF).length > 0 && (
         <div className="card" style={{ marginBottom: 14 }}>
           <h2 className="sec">Точность по форматам · 30 дн</h2>
-          {Object.entries(retF).map(([f, v]) => {
-            const pct = Math.round((v.pass / v.total) * 100)
-            return (
-              <div key={f} className="fmt-row">
-                <span className="fmt-name">{FMT_NAMES[f] ?? f}</span>
-                <div className="fmt-track"><div className={`fmt-fill${pct < 70 ? ' low' : ''}`} style={{ width: `${pct}%` }} /></div>
-                <span className="fmt-pct">{pct}% <span className="fmt-n">n={v.total}</span></span>
-              </div>
-            )
-          })}
+          {/* через RetTable — правило «процент только при n >= 20» на экране одно на все таблицы */}
+          <RetTable rows={Object.entries(retF).map(([f, v]) => ({
+            label: FMT_NAMES[f] ?? f,
+            b: { pct: v.total ? Math.round((v.pass / v.total) * 100) : null, n: v.total, pass: v.pass }
+          }))} />
         </div>
       )}
 

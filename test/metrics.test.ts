@@ -1,16 +1,22 @@
 /**
  * Тесты чистых функций метрик (src/lib/metrics.ts) — без React/IndexedDB. Гоняют РЕАЛЬНЫЕ
- * функции: examReady (через ts-fsrs get_retrievability), maturity, pace, retentionByInterval,
- * retentionByLevel/Domain, speedStats, typoSplit, appendDailySnapshot/parseMetrics.
+ * функции: examReady (через ts-fsrs get_retrievability), maturity/reviewCount, pace,
+ * retentionByInterval, retentionByLevel/Domain, speedStats, typoSplit, gaveUpShare,
+ * appendDailySnapshot/parseMetrics.
+ *
+ * Отдельно закреплено поведение, введённое 17.08.2026: цель (TARGET_REVIEW/TARGET_MATURE
+ * вместо снятых «400 готовых»), бакет «меньше суток» и запрет показывать процент при малом n.
  *
  * Запуск: `npm run test:metrics` (esbuild бандлит файл и node его исполняет).
  */
 import { fsrs, generatorParameters, State, type Card as FsrsCard } from 'ts-fsrs'
 import type { CardView, JournalLine } from '../src/lib/types'
 import {
-  examReady, maturity, pace, retentionByInterval, retentionByLevel, retentionByDomain,
-  speedStats, typoSplit, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
-  PRIMARY_DATE, TARGET_WORDS, READY_R
+  examReady, maturity, pace, reviewCount, retentionByInterval, retentionByLevel, retentionByDomain,
+  speedStats, typoSplit, gaveUpShare, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
+  intervalBucketOf, enoughForPct, isLeechCard,
+  PRIMARY_DATE, NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MIN_N_FOR_PCT,
+  MATURE_STABILITY_DAYS, READY_R
 } from '../src/lib/metrics'
 import { dayKey, addDaysKey } from '../src/lib/daytime'
 
@@ -53,6 +59,11 @@ function newFsrs(): FsrsCard {
     due: new Date(PRIMARY_DATE), stability: 0, difficulty: 0, elapsed_days: 0, scheduled_days: 0,
     learning_steps: 0, reps: 0, lapses: 0, state: State.New, last_review: undefined
   }
+}
+
+/** Карточка в Learning: не New (входит в maturity.n), но и не Review (в цель не засчитывается). */
+function learningFsrs(stability = 0.5): FsrsCard {
+  return { ...reviewFsrs(stability, 1), state: State.Learning, reps: 2 }
 }
 
 const rev = (o: Partial<JournalLine>): JournalLine => ({
@@ -136,7 +147,23 @@ function intervalChecks(): void {
   ]
   const ri2 = retentionByInterval(j2)
   assert(ri2['1-3'].n === 1, `реконструкция из ts: 1-3 n ожидалось 1, получено ${ri2['1-3'].n}`)
-  group('retentionByInterval: бакеты по scheduled_days, реконструкция из ts, typo/learning вне зачёта')
+
+  /* Внутридневной повтор — отдельный бакет, а не «1–3 дн». До 17.08.2026 они лежали
+     вместе: из 70 показов бакета «1–3» 49 были внутридневными, и процент бакета не
+     значил ничего. Граница ровно на сутках: 0,9 дн — «меньше суток», 1,0 — уже «1–3». */
+  const j3: JournalLine[] = [
+    rev({ slug: 'x', prev_state: State.Review, ts: '2026-09-01T10:00:00+03:00', rating: 3 }),
+    rev({ slug: 'x', prev_state: State.Review, ts: '2026-09-01T10:20:00+03:00', rating: 1 }), // +20 мин
+  ]
+  const ri3 = retentionByInterval(j3)
+  assert(ri3['<1'].n === 1, `внутридневной повтор ожидался в «<1», получено n=${ri3['<1'].n}`)
+  assert(ri3['1-3'].n === 0, `внутридневной повтор не должен попадать в «1-3», получено n=${ri3['1-3'].n}`)
+  assert(ri3['<1'].pct === 0, `«<1»: один провальный показ → 0%, получено ${ri3['<1'].pct}`)
+  assert(intervalBucketOf(0.02) === '<1' && intervalBucketOf(0.9) === '<1',
+    'интервал меньше суток → бакет «<1»')
+  assert(intervalBucketOf(1) === '1-3' && intervalBucketOf(3) === '1-3',
+    'ровно сутки и трое суток → бакет «1-3»')
+  group('retentionByInterval: бакеты по scheduled_days, «меньше суток» отдельно, реконструкция из ts, typo/learning вне зачёта')
 }
 
 // ---- retentionByLevel / Domain -------------------------------------------
@@ -193,11 +220,16 @@ function speedTypoChecks(): void {
 // ---- pace ----------------------------------------------------------------
 
 function paceChecks(): void {
-  const now = new Date(2026, 8, 1, 12, 0, 0)   // 01.09.2026
+  const now = new Date(2026, 8, 1, 12, 0, 0)   // 01.09.2026, ввод новых ещё открыт
   const today = dayKey(now)
   const d3 = addDaysKey(today, -3)
   const d10 = addDaysKey(today, -10)
-  const cards = [vocab('ready', reviewFsrs(300, 4), 1)]  // 1 готово
+  const cards = [
+    vocab('ready', reviewFsrs(300, 4), 1),        // Review — в цель
+    vocab('stale', reviewFsrs(1, 60), 1),         // Review — тоже в цель, зрелость тут не при чём
+    vocab('learn', learningFsrs(), 1),            // Learning — ещё нет
+    vocab('fresh', newFsrs(), 1)                  // New — нет
+  ]
   const grad = (slug: string, day: string): JournalLine =>
     rev({ slug, day, prev_state: State.Learning, new_state: State.Review, rating: 3 })
   const j: JournalLine[] = [
@@ -205,21 +237,103 @@ function paceChecks(): void {
     grad('c', d10),                        // только в окне 14 дн
     grad('a', d3),                         // дубль слова a — считаем один раз
   ]
-  const pc = pace(cards, j, PRIMARY_DATE, now)
-  assert(pc.ready === 1, `pace.ready ожидалось 1, получено ${pc.ready}`)
+  const pc = pace(cards, j, NEW_STOP_DATE, now)
+  assert(pc.inReview === 2, `pace.inReview ожидалось 2 (Learning и New вне цели), получено ${pc.inReview}`)
   assert(pc.actual7 === 2, `actual7 ожидалось 2 (a,b), получено ${pc.actual7}`)
   assert(pc.actual14 === 3, `actual14 ожидалось 3 (a,b,c), получено ${pc.actual14}`)
-  assert(pc.remaining === TARGET_WORDS - 1, `remaining ожидалось ${TARGET_WORDS - 1}, получено ${pc.remaining}`)
-  assert(pc.neededPerDay > 0 && pc.daysLeft > 0, 'neededPerDay/daysLeft положительны')
+  assert(pc.remaining === TARGET_REVIEW - 2, `remaining ожидалось ${TARGET_REVIEW - 2}, получено ${pc.remaining}`)
+  // 01.09 12:00 → 19.09 00:00 = 17,5 суток, вверх = 18. Считаем до СТОПА ВВОДА,
+  // а не до экзамена, и граница включает саму дату (последний день ввода — 18.09).
+  assert(pc.daysLeft === 18, `daysLeft до стопа ввода ожидалось 18, получено ${pc.daysLeft}`)
+  assert(pc.neededPerDay > 0, `neededPerDay ожидался положительным, получено ${pc.neededPerDay}`)
   assert(pc.verdict === 'behind', `при большом дефиците вердикт behind, получено ${pc.verdict}`)
-  group('pace: дефицит, темп (graduation в Review, дубль слова один раз), вердикт')
+
+  // после стопа ввода темп не считается: закрывать дефицит уже нечем
+  const after = new Date(2026, 8, 25, 12, 0, 0)   // 25.09.2026
+  const pcAfter = pace(cards, j, NEW_STOP_DATE, after)
+  assert(pcAfter.verdict === 'closed', `после стопа ожидался вердикт closed, получено ${pcAfter.verdict}`)
+  assert(pcAfter.daysLeft === 0 && pcAfter.neededPerDay === 0 && pcAfter.daysBehind === null,
+    `после стопа ожидалось daysLeft=0, neededPerDay=0, daysBehind=null; получено ${pcAfter.daysLeft}/${pcAfter.neededPerDay}/${pcAfter.daysBehind}`)
+
+  /* Граница ровно там же, где у планировщика (newIntroAllowed): 18.09 — последний
+     рабочий день ввода, 19.09 бюджет новых уже нулевой. Разъедься эти две границы —
+     и экран будет требовать «+N слов в день» в день, когда урок новых не выдаёт. */
+  const lastDay = pace(cards, j, NEW_STOP_DATE, new Date(2026, 8, 18, 12, 0, 0))
+  assert(lastDay.verdict !== 'closed' && lastDay.daysLeft === 1,
+    `18.09 — последний день ввода, ожидался открытый ввод с daysLeft=1, получено ${lastDay.verdict}/${lastDay.daysLeft}`)
+  const onStop = pace(cards, j, NEW_STOP_DATE, new Date(2026, 8, 19, 12, 0, 0))
+  assert(onStop.verdict === 'closed', `в сам день стопа ожидался closed, получено ${onStop.verdict}`)
+  group('pace: темп к стопу ввода новых, Learning/New вне цели, после стопа — closed')
+}
+
+// ---- цель: Review + зрелые ------------------------------------------------
+
+function goalChecks(): void {
+  assert(TARGET_REVIEW >= 250 && TARGET_REVIEW <= 300,
+    `TARGET_REVIEW должен лежать в коридоре 250–300 (решение 17.08.2026), получено ${TARGET_REVIEW}`)
+  assert(TARGET_MATURE === 150, `TARGET_MATURE ожидалось 150, получено ${TARGET_MATURE}`)
+  assert(TARGET_MATURE < TARGET_REVIEW, 'зрелых не может быть больше, чем доведённых до review')
+  assert(NEW_STOP_DATE < PRIMARY_DATE, 'стоп ввода новых обязан быть раньше первой попытки')
+  // введённое в день стопа ещё успевает дойти до review, но НЕ успевает созреть за 21 день —
+  // именно поэтому целей две, а не одна
+  const daysToExam = Math.round((PRIMARY_DATE.getTime() - NEW_STOP_DATE.getTime()) / 86400_000)
+  assert(daysToExam < MATURE_STABILITY_DAYS,
+    `между стопом и экзаменом ${daysToExam} дн — если бы их было >= ${MATURE_STABILITY_DAYS}, стоп стоял бы слишком рано`)
+
+  const cards = [
+    vocab('a', reviewFsrs(30, 1), 1),
+    vocab('b', reviewFsrs(3, 1), 1),
+    vocab('learn', learningFsrs(), 1),
+    vocab('new', newFsrs(), 1),
+    vocab('susp', reviewFsrs(30, 1), 1, { suspended: true }),
+    vocab('math', reviewFsrs(30, 1), 1, { kind: 'math' })
+  ]
+  assert(reviewCount(cards) === 2, `reviewCount ожидалось 2 (без Learning/New/suspended/math), получено ${reviewCount(cards)}`)
+  const m = maturity(cards)
+  assert(m.reviewCount === 2 && m.matureCount === 1 && m.n === 3,
+    `maturity: ожидалось reviewCount=2 matureCount=1 n=3, получено ${m.reviewCount}/${m.matureCount}/${m.n}`)
+  group('цель: TARGET_REVIEW/TARGET_MATURE, стоп ввода раньше экзамена, числители целей')
+}
+
+// ---- малая выборка --------------------------------------------------------
+
+function smallSampleChecks(): void {
+  assert(MIN_N_FOR_PCT >= 20, `порог показа процента не должен опускаться ниже 20, стоит ${MIN_N_FOR_PCT}`)
+  // ровно тот случай, что поднял ложную тревогу 17.08.2026: «retention 50%» по четырём показам
+  assert(!enoughForPct(4), 'процент по n=4 показывать нельзя')
+  assert(!enoughForPct(MIN_N_FOR_PCT - 1), `n=${MIN_N_FOR_PCT - 1} — всё ещё мало данных`)
+  assert(enoughForPct(MIN_N_FOR_PCT), `n=${MIN_N_FOR_PCT} — процент уже показываем`)
+  group('малая выборка: процент прячется, пока n < MIN_N_FOR_PCT')
 }
 
 // ---- snapshot roundtrip --------------------------------------------------
 
 function snapshotChecks(): void {
-  const cards = [vocab('ready', reviewFsrs(300, 4), 1), vocab('stale', reviewFsrs(1, 60), 2)]
-  const snap = buildMetricsSnapshot(cards, [], new Date(2026, 8, 1, 12, 0, 0))
+  const now = new Date(2026, 8, 1, 12, 0, 0)
+  const today = dayKey(now)
+  const leechCard = vocab('leech', { ...reviewFsrs(1, 3), reps: 9 }, 2)   // reps>=8 при stability<2
+  assert(isLeechCard(leechCard), 'setup: карточка обязана считаться пиявкой')
+  const cards = [vocab('ready', reviewFsrs(300, 4), 1), vocab('stale', reviewFsrs(1, 60), 2), leechCard]
+
+  /* Слепой снимок ничего не доказывает: до 17.08.2026 в нём не было ни чтения, ни пиявок,
+     ни «не помню» — то есть ряд не мог ответить, стало ли лучше. */
+  const jSnap: JournalLine[] = [
+    rev({ slug: 'ready', day: today, format: 'mc', rating: 1, gave_up: true }),
+    rev({ slug: 'ready', day: today, format: 'type', rating: 3 }),
+    rev({ slug: 'x', day: today, format: 'intro', rating: 3 }),          // знакомство вне знаменателя
+    rev({ type: 'read', day: today, read_min: 25 }),                      // чтение
+    rev({ slug: 'y', day: addDaysKey(today, -1), format: 'mc', rating: 1, gave_up: true }), // вчера — не в дневной снимок
+  ]
+  const full = buildMetricsSnapshot(cards, jSnap, now)
+  assert(full.readMinutes === 25, `readMinutes ожидалось 25, получено ${full.readMinutes}`)
+  assert(full.leeches === 1, `leeches ожидалось 1, получено ${full.leeches}`)
+  assert(full.gaveUpN === 2 && full.gaveUpShare === 0.5,
+    `«не помню» за день ожидалось 1 из 2 (0.5), получено ${full.gaveUpShare} при n=${full.gaveUpN}`)
+  assert(full.inReview === 3, `inReview ожидалось 3, получено ${full.inReview}`)
+  const gu = gaveUpShare(jSnap)
+  assert(gu.n === 3 && gu.gaveUp === 2, `без дня считаем всю историю: ожидалось 2 из 3, получено ${gu.gaveUp} из ${gu.n}`)
+
+  const snap = buildMetricsSnapshot(cards, [], now)
   assert(typeof snap.day === 'string' && snap.ready === 1, `snapshot day/ready: ${snap.day}/${snap.ready}`)
 
   // одна строка в день: повторный append того же дня ничего не добавляет
@@ -237,9 +351,11 @@ function snapshotChecks(): void {
 }
 
 function main(): void {
-  console.log('SRS metrics — examReady/maturity/pace/retention/speed/typo/snapshot')
+  console.log('SRS metrics — цель/examReady/maturity/pace/retention/speed/typo/snapshot')
   examReadyChecks()
   maturityChecks()
+  goalChecks()
+  smallSampleChecks()
   intervalChecks()
   levelDomainChecks()
   speedTypoChecks()
