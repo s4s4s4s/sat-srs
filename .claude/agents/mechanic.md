@@ -3,6 +3,7 @@ name: mechanic
 description: Механические правки — фронтматтер, переименования, YAML, точечные текстовые изменения без Bash, без изменения тела файла за пределами явно указанного.
 model: sonnet
 effort: low
+maxTurns: 50
 tools: Read, Edit, Write, Glob, Grep
 color: yellow
 ---

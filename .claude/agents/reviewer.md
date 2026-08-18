@@ -3,6 +3,7 @@ name: reviewer
 description: Ревью перед выкаткой — проверяет диф на скрытое сужение задачи и на новые обходы проверок прав, отдаёт список конкретных находок.
 model: opus
 effort: medium
+maxTurns: 50
 tools: Read, Glob, Grep, Bash
 color: purple
 ---

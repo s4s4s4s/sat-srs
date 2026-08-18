@@ -3,6 +3,7 @@ name: deep-diagnostician
 description: Поиск корневой причины — читает, воспроизводит и измеряет всю дорожку целиком; не чинит и не патчит симптом.
 model: opus
 effort: xhigh
+maxTurns: 80
 tools: Read, Glob, Grep, Bash
 color: red
 ---

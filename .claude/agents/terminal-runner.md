@@ -3,6 +3,7 @@ name: terminal-runner
 description: Терминальная работа — git, wrangler, GitHub Actions, прогон тестов и сборок; доказывает результат выводом команд, а не рапортом.
 model: sonnet
 effort: medium
+maxTurns: 40
 tools: Read, Bash, PowerShell, Glob, Grep
 color: green
 ---

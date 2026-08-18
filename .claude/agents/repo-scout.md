@@ -3,6 +3,7 @@ name: repo-scout
 description: Быстрый обход дерева репозитория и поиск файлов, определений, конфигов — только чтение, ничего не запускает и не меняет.
 model: sonnet
 effort: low
+maxTurns: 40
 tools: Read, Glob, Grep
 color: cyan
 ---
