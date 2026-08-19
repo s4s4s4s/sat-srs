@@ -117,7 +117,7 @@ export default function Stats() {
   const domainRows = [...rd.entries()].sort((a, b) => b[1].n - a[1].n).map(([d, b]) => ({ label: d, b }))
 
   return (
-    <div className="screen">
+    <div className="screen s-stats">
       <div className="page-title">
         <button className="iconbtn" onClick={() => setScreen('home')} aria-label="Назад"><ChevronLeft /></button>
         <h2>Статистика</h2>

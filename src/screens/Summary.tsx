@@ -21,7 +21,7 @@ export default function Summary() {
   const ss = Math.floor((r.durMs % 60000) / 1000)
 
   return (
-    <div className="screen">
+    <div className="screen s-summary">
       <FjordScene tall />
       <div className="sum-wrap">
         <div className="sum-art"><FlameBuddy size={104} mood="party" /></div>

@@ -111,7 +111,7 @@ export default function Home() {
   const levelLine = curStat ? `${levelName} · ${curStat.introduced}/${curStat.total}` : undefined
 
   return (
-    <div className="screen">
+    <div className="screen s-home">
       <FjordScene />
       <div className="appbar">
         <h1 className="brand">SAT SRS</h1>

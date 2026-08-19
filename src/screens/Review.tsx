@@ -566,7 +566,7 @@ export default function Review() {
     }
   }
 
-  // клавиатура: Space/Enter — показать/подтвердить, 1–4 — оценка
+  // клавиатура: Space/Enter — показать/подтвердить, 1–4 — вариант ответа либо оценка
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!task) return
@@ -585,6 +585,14 @@ export default function Review() {
         e.preventDefault()
         if (!revealed && task.format === 'reveal') setRevealed(true)
         else if (revealed && suggested) void grade(suggested)
+      } else if (!revealed && !typing && task.format !== 'reveal' && task.format !== 'type'
+                 && ['1', '2', '3', '4'].includes(e.key)) {
+        // варианты выбираются цифрой: на ноутбуке рука не уходит с клавиатуры на мышь
+        const i = Number(e.key) - 1
+        if (i < task.options.length) {
+          e.preventDefault()
+          submitObjective(task.options[i])
+        }
       } else if (revealed && !suggested && !typing && ['1', '2', '3', '4'].includes(e.key)) {
         // ручная оценка 1–4 только у «показа»; в объективных форматах оценка авто
         e.preventDefault()
@@ -597,7 +605,7 @@ export default function Review() {
 
   if (!queue || (head && !task)) {
     return (
-      <div className="screen">
+      <div className="screen s-review">
         <div className="rev-body" style={{ textAlign: 'center', alignItems: 'center', justifyContent: 'center' }}>
           <FlameBuddy size={56} mood="idle" />
           <div className="sync-wait">Синхронизация…</div>
@@ -608,7 +616,7 @@ export default function Review() {
   if (!head || !task) {
     // НЕ .sum-wrap — иначе сработает конфетти из :has(.sum-wrap)
     return (
-      <div className="screen">
+      <div className="screen s-review">
         <div className="rev-body" style={{ textAlign: 'center', alignItems: 'center', justifyContent: 'center' }}>
           <div className="sum-art"><FlameBuddy size={88} mood="happy" /></div>
           <h2 className="sum-title">Очередь пуста</h2>
@@ -649,7 +657,7 @@ export default function Review() {
   const ss = String(minLeft % 60).padStart(2, '0')
 
   return (
-    <div className={`screen rev-wash wash-${section}`}>
+    <div className={`screen s-review rev-wash wash-${section}`}>
       <div className="rev-top" style={{ position: 'relative' }}>
         <button className="rev-close" onClick={() => { if (!busy.current) void finish(false) }} aria-label="Завершить"><Close /></button>
         <div className="progress"><div style={{ width: `${total ? (done / total) * 100 : 0}%` }} /></div>
@@ -805,11 +813,17 @@ export default function Review() {
               <button className="intro-know" onClick={() => giveUp()}>Не помню — показать ответ</button>
             </>
           ) : (
-            <div className="mc-stack">
-              {task.options.map(o => (
-                <button key={o} className="mc-option" onClick={() => submitObjective(o)}><Tex text={o} /></button>
-              ))}
-            </div>
+            <>
+              <div className="mc-stack">
+                {task.options.map((o, i) => (
+                  <button key={o} className="mc-option" onClick={() => submitObjective(o)}>
+                    {i < 4 && <span className="mc-key kb-only">{i + 1}</span>}
+                    <Tex text={o} />
+                  </button>
+                ))}
+              </div>
+              <div className="hint-keys kb-only">Клавиши 1–{Math.min(4, task.options.length)} — выбрать</div>
+            </>
           )
         ) : (
           <>
