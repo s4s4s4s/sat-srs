@@ -534,17 +534,23 @@ body::before {
 /* pre-wrap: модель отвечает сплошным текстом, но абзац, если он всё же придёт,
    не должен склеиться в одну строку */
 .why-text { font-size: 15px; line-height: 1.55; color: var(--text); white-space: pre-wrap; }
-/* курсор потока: показывает, что текст ещё идёт, и заменяет отдельный спиннер */
-.why-caret {
-  display: inline-block; width: 2px; height: 1em; margin-left: 2px;
-  vertical-align: text-bottom; background: var(--blue-text);
-  animation: why-blink 1s steps(2, start) infinite;
+/* Строка ожидания. Разбор пишет машина дома и присылает его целиком, поэтому
+   печатающегося курсора здесь нет — вместо него честная фраза о том, на каком
+   шаге сейчас ожидание, и три точки, чтобы панель не выглядела застывшей. */
+.why-wait { font-size: 15px; line-height: 1.55; color: var(--muted); }
+.why-dots::after {
+  content: '...'; display: inline-block; width: 1.2em; text-align: left;
+  animation: why-dots 1.2s steps(4, end) infinite;
+  clip-path: inset(0 100% 0 0);
 }
-@keyframes why-blink { 50% { opacity: 0; } }
+@keyframes why-dots {
+  0% { clip-path: inset(0 100% 0 0); }
+  100% { clip-path: inset(0 0 0 0); }
+}
 .why-err { font-size: 14px; font-weight: 700; color: var(--red-text); }
 @media (prefers-reduced-motion: reduce) {
   .why-panel { animation: none; }
-  .why-caret { animation: none; opacity: .6; }
+  .why-dots::after { animation: none; clip-path: none; }
 }
 
 /* слово-кнопка с озвучкой */

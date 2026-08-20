@@ -101,7 +101,20 @@ const SETTINGS_MIGRATIONS: Record<number, (s: Settings) => Settings> = {
   5: s => ({ ...s, repo: DEFAULT_SETTINGS.repo, branch: DEFAULT_SETTINGS.branch }),
   /* Звук появился 20.08.2026. Без миграции сохранённый объект настроек перекрыл бы
      дефолт навсегда, и в уже установленном PWA урок остался бы немым. */
-  6: s => ({ ...s, sound: DEFAULT_SETTINGS.sound })
+  6: s => ({ ...s, sound: DEFAULT_SETTINGS.sound }),
+  /* → v7 (20.08.2026). Кнопка «Почему?» перестала ходить в платный API Anthropic:
+     разбор пишет Claude Code на домашней машине под подпиской. Поле `anthropicKey`
+     удаляется, а не просто перестаёт читаться: ключ от платного API, оставшийся
+     лежать в устройстве без применения, — это утечка, которая ждёт своего часа. */
+  7: s => {
+    /* Только удаление: `coachToken` здесь не трогаем. Поля до этой версии не
+       существовало, пустую строку ему уже дал разлив дефолтов, — а насильно
+       сбросить его значило бы стирать токен, который пользователь только что
+       вписал (и который, в отличие от полей выше, приложение не знает само). */
+    const { anthropicKey, ...без } = s as Settings & { anthropicKey?: string }
+    void anthropicKey
+    return без as Settings
+  }
 }
 
 export function migrateSettings(saved: Partial<Settings>): Settings {

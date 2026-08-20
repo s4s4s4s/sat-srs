@@ -17,7 +17,7 @@ import { Close, Sprout, Timer, Speaker, Flame } from '../components/Icon'
 import FlameBuddy from '../components/FlameBuddy'
 import { speak, canSpeak } from '../lib/speech'
 import { play } from '../lib/sound'
-import { askWhy, cacheKey, CoachError, type WhyAsk } from '../lib/coach'
+import { askWhy, cacheKey, CoachError, type WhyAsk, type WhyStage } from '../lib/coach'
 import { kvGet, kvSet } from '../lib/db'
 
 const GRADE_CLASS: Record<number, string> = {
@@ -193,8 +193,12 @@ export default function Review() {
   // не спрашиваем: рейтинг фиксирован Again. Кнопки «Хорошо»/«Легко» в этом случае не рисуются.
   const [gaveUp, setGaveUp] = useState(false)
   /* Разбор «Почему?»: null — панель закрыта. Открытая панель живёт до конца показа,
-     поэтому сбрасывается там же, где revealed и picked. */
-  const [why, setWhy] = useState<{ text: string; busy: boolean; err: string; open: boolean } | null>(null)
+     поэтому сбрасывается там же, где revealed и picked. `stage` — что происходит,
+     пока ждём: разбор пишет машина дома, и молчащая панель на двадцать секунд
+     выглядела бы зависшей. */
+  const [why, setWhy] = useState<
+    { text: string; busy: boolean; err: string; open: boolean; stage: WhyStage } | null
+  >(null)
   const whyRef = useRef<HTMLDivElement>(null)
   const [done, setDone] = useState(0)
   const [activeSec, setActiveSec] = useState(0)
@@ -638,9 +642,8 @@ export default function Review() {
 
   /* Панель раскрывается ниже разбора карточки, а тело урока на телефоне — узкая
      полоса над листом, поэтому её начало надо подвести к глазам. Подводим дважды:
-     при раскрытии (дальше текст идёт вниз от верхней кромки) и когда поток кончился —
-     к этому моменту высота панели устоялась. Во время потока не трогаем: рывок
-     посреди чтения отобрал бы прокрутку у того, кто уже читает.
+     при раскрытии (там пока строка ожидания) и когда разбор приехал — к этому
+     моменту высота панели устоялась.
      Место эффекта — до ранних возвратов ниже: порядок хуков не должен зависеть
      от того, какая ветка экрана отрисовалась. */
   useEffect(() => {
@@ -711,15 +714,16 @@ export default function Review() {
    */
   async function toggleWhy() {
     if (why) { setWhy({ ...why, open: !why.open }); return }
-    setWhy({ text: '', busy: true, err: '', open: true })
+    setWhy({ text: '', busy: true, err: '', open: true, stage: 'заказано' })
 
     const key = cacheKey(whyAsk)
     const сохранённый = await kvGet<string>(key).catch(() => undefined)
-    if (сохранённый) { setWhy({ text: сохранённый, busy: false, err: '', open: true }); return }
+    if (сохранённый) { setWhy({ text: сохранённый, busy: false, err: '', open: true, stage: 'заказано' }); return }
 
     try {
-      const текст = await askWhy(app.settings.anthropicKey, whyAsk,
-        кусок => setWhy(w => (w ? { ...w, text: w.text + кусок } : w)))
+      const текст = await askWhy(app.settings.coachToken, whyAsk, {
+        onStage: stage => setWhy(w => (w ? { ...w, stage } : w))
+      })
       await kvSet(key, текст)
       setWhy(w => (w ? { ...w, text: текст, busy: false } : w))
     } catch (e) {
@@ -868,7 +872,12 @@ export default function Review() {
                 <div className="why-title">Почему так</div>
                 {why.err
                   ? <div className="why-err">{why.err}</div>
-                  : <div className="why-text">{why.text}{why.busy && <span className="why-caret" />}</div>}
+                  : why.busy
+                    ? <div className="why-wait">
+                        {why.stage === 'машина пишет' ? 'Компьютер дома пишет разбор' : 'Спрашиваю компьютер дома'}
+                        <span className="why-dots" />
+                      </div>
+                    : <div className="why-text">{why.text}</div>}
               </div>
             )}
           </div>

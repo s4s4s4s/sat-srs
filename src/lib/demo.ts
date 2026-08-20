@@ -138,8 +138,8 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
   if (p.get('screen') !== 'settings') {
     localStorage.setItem('sat-srs-settings', JSON.stringify({
       // 'demo' вместо ключей: демо показывает приложение настроенным, а не пустым;
-      // настоящих запросов из демо не уходит — GitHub и Anthropic отвечают отказом
-      pat: 'demo', anthropicKey: 'demo', owner: 's4s4s4s', repo: 'second-brain', branch: 'master',
+      // настоящих запросов из демо не уходит — GitHub и очередь разборов отвечают отказом
+      pat: 'demo', coachToken: 'demo', owner: 's4s4s4s', repo: 'second-brain', branch: 'master',
       // норму берём из дефолта, а не литералом: копия уже разъехалась с ним
       // (в демо оставались прежние 15, когда рабочая норма стала 8)
       basePath: 'Учёба/Карточки', newPerDay: DEFAULT_SETTINGS.newPerDay, requestRetention: 0.9

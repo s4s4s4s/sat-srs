@@ -42,24 +42,19 @@ const shots = [
   { name: 'welcome', q: 'demo&screen=settings' }
 ]
 
-/* Разбор «Почему?» ходит в api.anthropic.com. Для скриншотов ответ подменяется
-   заготовленным потоком: снимок не должен зависеть от ключа, сети и денег, а
-   путь при этом остаётся настоящим — те же события SSE, тот же разбор в коде.
+/* Разбор «Почему?» ходит в очередь нарядов, откуда его пишет Claude Code на
+   домашней машине. Для скриншотов ответ подменяется: снимок не должен зависеть
+   от того, включён ли компьютер, — а путь при этом остаётся настоящим, тот же
+   заказ и тот же опрос готовности, что в бою.
    Заголовки CORS обязательны: запрос кросс-доменный и с нестандартными
-   заголовками, без разрешения браузер отбросил бы ответ как обрыв сети. */
+   заголовками, без разрешения браузер отбросит ответ как обрыв сети. */
 const РАЗБОР = 'Оба слова про поддержку, но corroborate — про подтверждение фактами, а bolster — про усиление того, что и так стоит. Здесь подлежащее «New fossil evidence»: свидетельства именно подтверждают гипотезу, а не делают её крепче. Bolster был бы уместен там, где укрепляют позицию или уверенность: the discovery bolstered her confidence in the theory.'
+const ОЧЕРЕДЬ = 'https://shturman.vault-78edd5.workers.dev/why'
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS'
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
 }
-const SSE = [
-  { type: 'message_start', message: { id: 'msg_demo' } },
-  { type: 'content_block_start', index: 0 },
-  ...РАЗБОР.split(/(?<=\. )/).map(t => ({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } })),
-  { type: 'content_block_stop', index: 0 },
-  { type: 'message_stop' }
-].map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('') + 'data: [DONE]\n\n'
 
 const browser = await puppeteer.launch({
   executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -71,9 +66,14 @@ await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: scheme }
 
 await page.setRequestInterception(true)
 page.on('request', r => {
-  if (!r.url().startsWith('https://api.anthropic.com/')) { r.continue(); return }
+  if (!r.url().startsWith(ОЧЕРЕДЬ)) { r.continue(); return }
   if (r.method() === 'OPTIONS') { r.respond({ status: 204, headers: CORS }); return }
-  r.respond({ status: 200, contentType: 'text/event-stream', headers: CORS, body: SSE })
+  // Заказ принят, машина ещё пишет; следующий же опрос отдаёт готовый разбор —
+  // так в кадр попадает и строка ожидания, и сам текст.
+  const тело = r.method() === 'POST'
+    ? { ok: true, id: 'why:demo', state: 'pending', pcAgo: 2 }
+    : { ok: true, id: 'why:demo', state: 'done', text: РАЗБОР, pcAgo: 2 }
+  r.respond({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify(тело) })
 })
 
 for (const s of shots) {
