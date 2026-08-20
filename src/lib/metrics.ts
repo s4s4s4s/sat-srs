@@ -324,6 +324,9 @@ export interface SpeedStats {
   slowShare: number
   n: number
   byFormat: Record<string, { medianMs: number; slowShare: number; n: number }>
+  /* Отдельно по видам карточек: словарное узнавание и разбор условия с таблицей
+     — разные работы, и мерить их одной медианой нельзя (см. slowThresholdMs). */
+  byKind: Record<string, { medianMs: number; n: number }>
 }
 
 /** Скорость ответа: медиана, p90 и доля «медленных» (> 10 c). На SAT узнавание должно быть за 2–3 c. */
@@ -332,10 +335,17 @@ export function speedStats(journal: JournalLine[]): SpeedStats {
     l.type === 'review' && typeof l.elapsed_ms === 'number' && l.elapsed_ms > 0 && l.format && l.format !== 'intro')
   const all = rev.map(l => l.elapsed_ms as number).sort((a, b) => a - b)
   const byFmt = new Map<string, number[]>()
+  const byKnd = new Map<string, number[]>()
   for (const l of rev) {
     const a = byFmt.get(l.format!) ?? []
     a.push(l.elapsed_ms as number)
     byFmt.set(l.format!, a)
+    // kind в строку пишется, только когда он не vocab (store.ts), — отсутствие
+    // поля здесь значит «словарная», а не «неизвестно».
+    const k = l.kind ?? 'vocab'
+    const b = byKnd.get(k) ?? []
+    b.push(l.elapsed_ms as number)
+    byKnd.set(k, b)
   }
   const share = (arr: number[]) => (arr.length ? Math.round((arr.filter(m => m > SLOW_MS).length / arr.length) * 100) / 100 : 0)
   const byFormat: SpeedStats['byFormat'] = {}
@@ -343,12 +353,17 @@ export function speedStats(journal: JournalLine[]): SpeedStats {
     const s = [...arr].sort((a, b) => a - b)
     byFormat[f] = { medianMs: Math.round(percentile(s, 0.5)), slowShare: share(arr), n: arr.length }
   }
+  const byKind: SpeedStats['byKind'] = {}
+  for (const [k, arr] of byKnd) {
+    byKind[k] = { medianMs: Math.round(percentile([...arr].sort((a, b) => a - b), 0.5)), n: arr.length }
+  }
   return {
     medianMs: Math.round(percentile(all, 0.5)),
     p90Ms: Math.round(percentile(all, 0.9)),
     slowShare: share(all),
     n: all.length,
-    byFormat
+    byFormat,
+    byKind
   }
 }
 

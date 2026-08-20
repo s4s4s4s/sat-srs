@@ -764,6 +764,20 @@ export const SLOW_FACTOR = 2.5
 const SLOW_FLOOR_MS = 12_000
 
 /**
+ * Сколько ответов нужно виду карточек, чтобы верить его собственной медиане.
+ * Меньше — шум: одна долгая ночная попытка сдвинет порог для всего вида.
+ */
+export const MIN_KIND_SAMPLES = 12
+
+/**
+ * Пол порога по видам, где в ответ входит чтение условия, а не только узнавание.
+ * Замер 21.08.2026 по журналу: словарные ответы — медиана 8,1 с, карточки
+ * разбора (kind error) — 21,6 с при p90 43,6 с. Общий пол в 12 с для них
+ * означает, что нормальное чтение таблицы засчитывается как заминка.
+ */
+const KIND_FLOOR_MS: Record<string, number> = { math: 90_000, error: 45_000 }
+
+/**
  * Порог «медленно» — доля от ЛИЧНОЙ медианы, а не константа.
  *
  * Стоял 25 000 мс при измеренной медиане ответа 7 412 мс и p90 17 827 мс, то
@@ -773,12 +787,32 @@ const SLOW_FLOOR_MS = 12_000
  * FSRS различает Hard и Good именно затем, чтобы не гонять полузнание по тем же
  * интервалам, что и уверенное знание.
  *
- * Медиана берётся из журнала снаружи; без неё поведение остаётся прежним.
+ * ПОЧЕМУ МЕДИАНА ПО ВИДУ, А НЕ ОБЩАЯ. Общая медиана — это медиана словарных
+ * ответов: их в журнале 447 из 464. Карточка разбора (kind error) требует
+ * прочитать условие с таблицей и четыре длинных варианта, и её нормальный
+ * ответ — 21,6 с при общем пороге 20,9 с. Итог замера 21.08.2026: 53% ответов
+ * на такие карточки уходили в Hard против 12% у словарных, а Hard в состоянии
+ * Learning не двигает ступень — карточка не выпускается и возвращается в каждый
+ * следующий урок. Александр увидел один и тот же вопрос пятый раз именно так.
+ *
+ * Медиана берётся из журнала снаружи (`medianForKind`); без неё поведение
+ * остаётся прежним.
  */
 export function slowThresholdMs(kind = 'vocab', medianMs?: number): number {
-  if (kind === 'math') return 90_000
-  if (!medianMs || !Number.isFinite(medianMs) || medianMs <= 0) return 25_000
-  return Math.max(SLOW_FLOOR_MS, Math.round(medianMs * SLOW_FACTOR))
+  const floor = KIND_FLOOR_MS[kind] ?? SLOW_FLOOR_MS
+  if (!medianMs || !Number.isFinite(medianMs) || medianMs <= 0) return Math.max(floor, 25_000)
+  return Math.max(floor, Math.round(medianMs * SLOW_FACTOR))
+}
+
+/**
+ * Медиана времени ответа для вида карточки: своя, пока её хватает на статистику,
+ * иначе общая. Возвращать общую молча — единственный честный запасной путь:
+ * пола по виду (KIND_FLOOR_MS) достаточно, чтобы холодный старт не наказывал
+ * длинное условие.
+ */
+export function medianForKind(speed: { medianMs: number; byKind: Record<string, { medianMs: number; n: number }> }, kind = 'vocab'): number {
+  const свой = speed.byKind[kind]
+  return свой && свой.n >= MIN_KIND_SAMPLES && свой.medianMs > 0 ? свой.medianMs : speed.medianMs
 }
 
 export function suggestedGrade(format: Format, correct: boolean, typo: boolean, elapsedMs = 0, kind = 'vocab', medianMs?: number): Grade | null {

@@ -18,7 +18,7 @@ import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
-  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS,
+  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
   pickTask, meaningDistractors, REVIEW_CYCLE, NEW_STOP_DATE, kindRank, expandItems, freshItems
 } from '../src/lib/scheduler'
@@ -657,9 +657,41 @@ function dontKnowChecks(): void {
   assert(suggestedGrade('mc', true, false, 20_000, 'vocab') === Rating.Good,
     'та же скорость на прежней константе давала Good — репро дефекта')
 
+  /* Порог по ВИДУ карточки. Репро дефекта, из-за которого один и тот же вопрос
+     разбора попадался пятый раз: общая медиана — это медиана словарных ответов
+     (447 строк журнала из 464), а карточка разбора требует прочитать условие с
+     таблицей и четыре длинных варианта. Замер 21.08.2026: словарные — медиана
+     8,1 с, разбор (kind error) — 21,6 с при p90 43,6 с; 53% ответов на разбор
+     уходили в Hard против 12% у словарных. Hard в состоянии Learning не двигает
+     ступень, и карточка возвращалась в каждый следующий урок. */
+  assert(suggestedGrade('mc', true, false, 21_600, 'vocab', 8360) === Rating.Hard,
+    'репро: 21,6 с по словарной мерке — заминка, и разбор судился именно ею')
+  assert(suggestedGrade('mc', true, false, 21_600, 'error', 8360) === Rating.Good,
+    'тот же ответ на карточке разбора — обычный: у неё свой пол')
+  assert(suggestedGrade('mc', true, false, 21_600, 'error', 21_649) === Rating.Good,
+    'и на своей набранной медиане — тоже обычный, карточка выпускается из Learning')
+  assert(slowThresholdMs('error', 8360) >= 45_000,
+    'порог: у разбора свой пол — иначе холодный старт наказывает длинное условие')
+  assert(slowThresholdMs('error', 21_649) === Math.round(21_649 * SLOW_FACTOR),
+    'порог: набралась своя медиана — считаем от неё, а не от пола')
+  assert(suggestedGrade('mc', true, false, 60_000, 'error', 21_649) === Rating.Hard,
+    'минута на карточку разбора — всё-таки заминка, Hard не должен исчезнуть совсем')
+  assert(slowThresholdMs('math', 7412) === 90_000, 'порог математики от правки не сдвинулся')
+
+  /* Своя медиана берётся, только когда её есть на чём считать. */
+  const speedFix = {
+    medianMs: 8360,
+    byKind: { vocab: { medianMs: 8147, n: 447 }, error: { medianMs: 21_649, n: 15 }, math: { medianMs: 23_898, n: 2 } }
+  }
+  assert(medianForKind(speedFix, 'error') === 21_649, 'медиана вида берётся, когда набралось наблюдений')
+  assert(medianForKind(speedFix, 'math') === 8360, 'на двух наблюдениях медиана вида — шум, берём общую')
+  assert(medianForKind(speedFix, 'grammar') === 8360, 'вида в журнале нет — общая медиана')
+
   console.log('  ✓ dont-know (C3/C4/C5): «не помню»=Again, пустой ввод=«не помню», type только со значением')
   console.log(`  ✓ ротация Review (C8): ${modes.map(sig).join(' → ')} — предложение на одном шаге из четырёх`)
   console.log('  ✓ порог «медленно»: доля от личной медианы, пол 12 c, математика отдельно')
+  console.log('  ✓ порог по виду карточки: разбор считается от своей медианы, а не от словарной')
+  passed++
   passed++
   passed++
   passed++

@@ -4,7 +4,7 @@ import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJo
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, sectionOf, itemKey, effectiveRetention, NEW_GAP,
+  pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP,
   earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
 } from '../lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, type OrderCtx } from '../lib/session'
@@ -299,8 +299,10 @@ export default function Review() {
 
   /* Личная медиана времени ответа — база для порога «медленно».
      Считается один раз за урок: внутри урока она не меняется, а пересчёт на
-     каждый экран гонял бы весь журнал. */
-  const personalMedianMs = useMemo(() => speedStats(app.journal).medianMs, [])
+     каждый экран гонял бы весь журнал. Медиана берётся по виду показываемой
+     карточки: словарное узнавание и разбор условия с таблицей — разные работы,
+     и общая медиана записывала нормальное чтение в заминку. */
+  const speed = useMemo(() => speedStats(app.journal), [])
 
   // в «показе» вердикт появляется, только если пользователь сам ввёл слово —
   // тогда сигнал объективный и оценка считается как у ввода.
@@ -308,7 +310,7 @@ export default function Review() {
   const suggested = task && gaveUp
     ? Rating.Again
     : task && verdict !== null
-    ? suggestedGrade(task.format === 'reveal' ? 'type' : task.format, verdict === 'correct', verdict === 'typo', answeredMs.current, task.item.view.kind, personalMedianMs)
+    ? suggestedGrade(task.format === 'reveal' ? 'type' : task.format, verdict === 'correct', verdict === 'typo', answeredMs.current, task.item.view.kind, medianForKind(speed, task.item.view.kind))
     : null
 
   async function finish(queueEmpty: boolean) {
