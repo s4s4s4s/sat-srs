@@ -603,6 +603,27 @@ function dontKnowChecks(): void {
     { view: { ...cycDeck[0], fsrs: poorFsrs }, skill: 'recall', fsrs: poorFsrs }, poorDeck, undefined, undefined, true, true)
   assert(poorStep.cue !== 'word', 'C8: без трёх значений обратный режим не собирается — шаг откатывается, а не отдаёт куцый выбор')
 
+  /* C9: производство не должно пропадать оттого, что колода выросла.
+     Ротацию раньше открывало только состояние Review, а в learning `baseFormat`
+     отдаёт mc, пока в колоде находятся три дистрактора — то есть всегда. Замер
+     журнала 20.08.2026: в июле, на маленькой колоде, 274 показа вводом; в этот
+     день — три, и все три у карточек в Review. Слово, застрявшее в learning,
+     ученик десять раз узнавал среди четырёх вариантов и ни разу не вспоминал
+     сам; ровно эти слова и оказались пиявками. */
+  const inLearning = (reps: number, typing = true) => {
+    const fsrs = { ...cycDeck[0].fsrs, state: State.Learning, reps }
+    return pickTask({ view: { ...cycDeck[0], fsrs }, skill: 'recall', fsrs }, cycDeck, undefined, undefined, true, typing)
+  }
+  assert(sig(inLearning(0)) === 'mc/sentence' && sig(inLearning(1)) === 'mc/sentence',
+    'C9: до двух опознаний ротации нет — производство раньше срока это гарантированный провал (C1)')
+  const learnModes = [2, 3, 4, 5].map(r => inLearning(r))
+  assert(new Set(learnModes.map(sig)).size === 4,
+    `C9: со второго повтора learning идёт по тому же циклу: ${learnModes.map(sig).join(', ')}`)
+  assert(learnModes.some(m => m.format === 'type'),
+    'C9: слово, застрявшее в learning, обязано хоть раз спрашиваться без вариантов — иначе оно тренирует только узнавание')
+  assert(inLearning(3, false).format === 'mc',
+    'C9: при выключенном вводе шаг производства деградирует, а не пропадает вместе с ротацией')
+
   // ---- C3: «не помню» = Again, оценка не поднимается выше ----
   const giveUpRating = Rating.Again // именно это фиксирует giveUp() в UI
   for (const f of ['reveal', 'type', 'mc', 'prep'] as const) {
@@ -669,7 +690,18 @@ function fillerChecks(): void {
   assert(earlyFillers(deck, new Date(BASE), new Set(['deck/t1.md#recall'])).length === 1,
     'B4: заполнитель, уже стоящий в очереди, не исключён')
   assert(earlyFillers(deck, new Date(BASE), new Set<string>(), 0).length === 0, 'B4: потолок заполнителей не соблюдён')
-  console.log('  ✓ фильтр заполнителей (B4): просроченное и новое не берём, потолок работает')
+
+  /* Карточка, уже спрошенная сегодня, заполнителем быть не может: иначе второй урок
+     того же вечера начинается с неё — верный ответ сделал её ближайшей по сроку. */
+  const сегодняшняя = tomorrowCard('t3')
+  сегодняшняя.fsrs = { ...сегодняшняя.fsrs, last_review: new Date(BASE - 3600_000) }
+  const вчерашняя = tomorrowCard('t4')
+  вчерашняя.fsrs = { ...вчерашняя.fsrs, last_review: new Date(BASE - 26 * 3600_000) }
+  const свежие = earlyFillers([сегодняшняя, вчерашняя], new Date(BASE), new Set<string>()).map(i => i.view.slug)
+  assert(!свежие.includes('t3'), 'B4: карточка, спрошенная сегодня, не должна возвращаться заполнителем')
+  assert(свежие.includes('t4'), 'B4: вчерашний повтор обязан остаться кандидатом в заполнители')
+
+  console.log('  ✓ фильтр заполнителей (B4): просроченное, новое и спрошенное сегодня не берём, потолок работает')
   passed++
 }
 

@@ -363,9 +363,18 @@ export const MAX_INTRO_BONUS = 2
 export function earlyFillers(cards: CardView[], now: Date, exclude: Set<string>, limit = MAX_EARLY_FILLERS): StudyItem[] {
   const eod = endOfStudyDay(now)
   const horizon = now.getTime() + FILLER_LOOKAHEAD_MS
+  const сегодня = dayKey(now)
   return expandItems(cards)
     .filter(i => {
       if (i.fsrs.state === State.New) return false
+      /* Спрошенное сегодня в заполнители не берём. Память «что уже показано» жила
+         внутри урока (`drilled` в экране), а лестница добора смотрит на трое суток
+         вперёд — и второй урок того же вечера начинался с той же карточки: ответив
+         на неё, ученик сам сделал её ближайшей по сроку, а заполнители сортируются
+         именно по сроку. Замер 20.08.2026: 51 показ на 27 карточек за день.
+         Обязательная отработка введённого сегодня слова (`forcedTodaySlugs`) от
+         этого не страдает — она идёт своей дорогой, через buildQueue. */
+      if (i.fsrs.last_review && dayKey(i.fsrs.last_review) === сегодня) return false
       const t = i.fsrs.due.getTime()
       // уже созревшее в заполнители не берём — оно и так попадает в очередь обычным путём
       const readyNow = isLearning(i.fsrs.state) ? t <= now.getTime() + LEARN_AHEAD_MS : t < eod.getTime()
@@ -457,6 +466,10 @@ export type Cue = 'sentence' | 'meaning' | 'word'
  * возможному, а не пропускается: пропуск сдвинул бы фазу и вернул предложение в
  * каждый показ.
  */
+/* С какого повтора карточка попадает в ротацию. Два — это «слово уже дважды
+   опознано»: тот же порог, что у C1 для производства (см. baseFormat). */
+export const ROTATE_FROM_REPS = 2
+
 export const REVIEW_CYCLE: ReadonlyArray<{ format: Format; cue: Cue }> = [
   { format: 'mc', cue: 'sentence' },  // Words in Context — целевой формат SAT
   { format: 'mc', cue: 'meaning' },   // значение → слово, предложения нет
@@ -506,7 +519,17 @@ export function pickTask(item: StudyItem, deck: CardView[], introduced?: Set<str
   if (format !== 'mc' && format !== 'type') return { format, cue: 'sentence' }
   // авторские варианты (error/grammar) и числовой ответ (math) — своя механика, ротации нет
   if (item.view.choices.length >= 2 || item.view.answerNum) return { format, cue: 'sentence' }
-  if (item.fsrs.state !== State.Review) return { format, cue: 'sentence' }
+  /* Ротацию открывает второй повтор, а не переход в Review.
+     Раньше здесь стояло только `state !== Review`, и на выросшей колоде это
+     молча выключило производство. В learning `baseFormat` отдаёт mc, пока в
+     колоде находятся три дистрактора, — а находятся они всегда, — так что
+     ветка `type` внизу baseFormat достижима лишь на крошечной колоде.
+     Замер журнала: в июле, пока колода была мала, 274 показа вводом; 20.08 —
+     три, и все три у карточек в Review. Слово, застрявшее в learning, ученик
+     десять раз узнавал среди четырёх вариантов и ни разу не вспоминал сам —
+     ровно эти слова и оказались пиявками. Узнавание с подсказкой не готовит к
+     экзамену, где подсказки нет. */
+  if (item.fsrs.state !== State.Review && item.fsrs.reps < ROTATE_FROM_REPS) return { format, cue: 'sentence' }
   const step = REVIEW_CYCLE[((item.fsrs.reps % REVIEW_CYCLE.length) + REVIEW_CYCLE.length) % REVIEW_CYCLE.length]
   return degrade(step, item, deck, typing)
 }
