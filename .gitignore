@@ -4,3 +4,6 @@ dev-dist/
 *.local
 .DS_Store
 tsconfig.tsbuildinfo
+
+# WAV-ы, отрендеренные `npm run sounds` для прослушивания, — вывод, а не исходник
+sounds/

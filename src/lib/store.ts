@@ -10,6 +10,7 @@ import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
 import { newId, newIntroducedOn, matureRetention, sessionAccuracy, READ_CAP_MINUTES } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS, SETTINGS_VERSION } from './types'
+import { setSoundEnabled } from './sound'
 
 const SETTINGS_KEY = 'sat-srs-settings'
 
@@ -97,7 +98,10 @@ const SETTINGS_MIGRATIONS: Record<number, (s: Settings) => Settings> = {
      перекрывали бы новый дефолт навсегда, и устройство продолжало бы стучаться в
      репозиторий, где токен уже не действует (тот же класс поля, что и выше). Токен
      (`pat`) миграция не трогает — его вводят руками. */
-  5: s => ({ ...s, repo: DEFAULT_SETTINGS.repo, branch: DEFAULT_SETTINGS.branch })
+  5: s => ({ ...s, repo: DEFAULT_SETTINGS.repo, branch: DEFAULT_SETTINGS.branch }),
+  /* Звук появился 20.08.2026. Без миграции сохранённый объект настроек перекрыл бы
+     дефолт навсегда, и в уже установленном PWA урок остался бы немым. */
+  6: s => ({ ...s, sound: DEFAULT_SETTINGS.sound })
 }
 
 export function migrateSettings(saved: Partial<Settings>): Settings {
@@ -126,6 +130,7 @@ export function saveSettings(s: Settings) {
   state.settings = s
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(s))
   setHomeOffset(s.homeOffset ? Number(s.homeOffset) : null)
+  setSoundEnabled(s.sound)
   emit()
 }
 
@@ -147,6 +152,7 @@ export async function init() {
   // порядок инициализации не должен зависеть от порядка импортов
   state.settings = loadSettings()
   setHomeOffset(state.settings.homeOffset ? Number(state.settings.homeOffset) : null)
+  setSoundEnabled(state.settings.sound)
   // без persist iOS может выселить IndexedDB — вместе с несинхронизированными ревью
   if (navigator.storage?.persist) void navigator.storage.persist().catch(() => {})
   try {

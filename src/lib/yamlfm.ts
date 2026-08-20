@@ -95,6 +95,7 @@ export function cardView(rec: CardRec): CardView {
     pos: String(fm.pos ?? ''),
     context: contexts[0] ?? '',
     contexts,
+    contextsRu: Array.isArray(fm.contexts_ru) ? fm.contexts_ru.map(String) : [],
     meaning_en: String(fm.meaning_en ?? ''),
     meaning_ru: String(fm.meaning_ru ?? ''),
     roots: String(fm.roots ?? ''),

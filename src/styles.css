@@ -471,6 +471,17 @@ body::before {
   border-top: 0; border-left: 0; border-radius: 0 0 4px 0; transform: rotate(45deg);
 }
 .rev-sentence.long { font-size: 17px; line-height: 1.55; }
+
+/* Перевод предложения: появляется вместе с ответом, под самим предложением.
+   Отступ сверху обходит «хвостик» пузыря (.rev-sentence::after висит на −9px). */
+.rev-sentence-ru {
+  margin-top: 15px; padding-left: 14px;
+  border-left: 3px solid var(--line-strong);
+  font-size: 16px; font-weight: 600; line-height: 1.5; color: var(--text2);
+  animation: sentence-ru-in .22s ease-out both;
+}
+@keyframes sentence-ru-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .rev-sentence-ru { animation: none; } }
 .rev-blank {
   display: inline-block; min-width: 92px; border-bottom: 3px solid var(--blue);
   border-radius: 2px; margin: 0 2px; color: var(--blue);
@@ -954,10 +965,18 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
   .s-review {
     max-width: 720px;
     flex: none;
-    height: min(680px, 100%);
+    /* высота компактного блока: под предложением появился его перевод (две-три
+       строки), и на прежних 680px самая полная карточка — со значением, корнями
+       и переводом — обрезалась внутренней прокруткой, хотя сверху и снизу
+       оставались поля. 760 держит её целиком и на окне 900px по высоте. */
+    height: min(760px, 100%);
     margin: auto;
   }
-  .s-review .rev-body { justify-content: center; padding-block: 0; }
+  /* `safe` обязателен: у прокручиваемого контейнера обычный center режет содержимое
+     с ОБЕИХ сторон, и верх — задание — становится недостижимым прокруткой. На низком
+     окне (720px) карточка со значением, корнями и переводом в блок не умещается,
+     и без `safe` ученик потерял бы начало вопроса. */
+  .s-review .rev-body { justify-content: safe center; padding-block: 0; }
   /* лист больше не упирается в нижнюю кромку окна — значит, скруглён со всех
      сторон и обведён цветом вердикта целиком, а не только сверху */
   .s-review .rev-bottom {

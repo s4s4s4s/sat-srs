@@ -18,6 +18,7 @@ export interface CardView {
   pos: string
   context: string
   contexts: string[]    // все контексты (ротация между показами); context = первый
+  contextsRu: string[]  // перевод предложений, по индексу совпадает с contexts; пусто = перевода нет
   meaning_en: string
   meaning_ru: string
   roots: string
@@ -117,6 +118,7 @@ export interface Settings {
   pauseTo: string
   homeOffset: string // домашний пояс в минутах от UTC ('' = часы устройства, '180' = Москва, '240' = Ереван)
   typing: boolean // участвует ли ввод слова по буквам в ротации Review (см. REVIEW_CYCLE)
+  sound: boolean // звуковые сигналы урока (src/lib/sound.ts)
 }
 
 /* Версия настроек.
@@ -126,7 +128,7 @@ export interface Settings {
    окно паузы и часовой пояс. Версия и миграция в `store.loadSettings` чинят
    именно этот класс: поле, которое пользователь не может починить руками,
    потому что не знает о его существовании. */
-export const SETTINGS_VERSION = 5
+export const SETTINGS_VERSION = 6
 
 export const DEFAULT_SETTINGS: Settings = {
   v: SETTINGS_VERSION,
@@ -164,7 +166,10 @@ export const DEFAULT_SETTINGS: Settings = {
      Оба основания отпали (рука зажила, доля ввода упала вчетверо), а без
      производства словарь проверяется только узнаванием — ровно то, из-за чего
      практика и встала. */
-  typing: true
+  typing: true,
+  /* Звук включён по умолчанию: обратная связь урока — часть механики,
+     а не украшение. Выключается в настройках одним тумблером. */
+  sound: true,
 }
 
 export type Screen = 'home' | 'review' | 'summary' | 'add' | 'stats' | 'settings' | 'path'

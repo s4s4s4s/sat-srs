@@ -16,6 +16,7 @@ import type { Format, SessionResult, StudyItem } from '../lib/types'
 import { Close, Sprout, Timer, Speaker, Flame } from '../components/Icon'
 import FlameBuddy from '../components/FlameBuddy'
 import { speak, canSpeak } from '../lib/speech'
+import { play } from '../lib/sound'
 
 const GRADE_CLASS: Record<number, string> = {
   [Rating.Again]: 'grade-again',
@@ -63,6 +64,9 @@ interface Task {
 
 /** Сколько раз добирать одно сегодняшнее новое слово за сессию (point 4), прежде чем счесть урок исчерпанным */
 const DRILL_PER_SESSION = 2
+
+/** Каждый пятый верный подряд звучит вехой серии вместо обычного «верно». */
+const STREAK_EVERY = 5
 
 /* Индекс последнего показанного примера. Живёт в localStorage, а не в памяти модуля:
    PWA открывается заново на каждый урок, и Map обнулялась вместе с ним — ротация
@@ -255,6 +259,7 @@ export default function Review() {
     }
     const shown = makeTask(head, deck, introduced.current, lapsed.current, introShown.current < introLimitNow(), app.settings.typing)
     setTask(shown)
+    if (shown.format === 'intro') play('intro')
     // point 2/A2: отметка момента показа этой единицы — pickNextIndex держит 60-секундный разрыв
     shownTimes.current.set(itemKey(head), Date.now())
     // A3/A4: что показано этим экраном — вход для следующего выбора очереди
@@ -298,6 +303,7 @@ export default function Review() {
   async function finish(queueEmpty: boolean) {
     if (finished.current) return // двойной тап ✕ / финиш после финиша не пишет дубль session-строки
     finished.current = true
+    if (queueEmpty) play('complete') // выход по крестику — не достижение, молчим
     res.current.durMs = activeSec * 1000
     res.current.queueEmpty = queueEmpty
     await finishSession(res.current)
@@ -459,6 +465,21 @@ export default function Review() {
     if (!task || revealed) return
     answeredMs.current = Date.now() - shownAt.current
     setGaveUp(true)
+    revealAnswer()
+  }
+
+  /**
+   * Звук исхода. Веха серии звучит ВМЕСТО «верно», а не вместе с ним: два сигнала
+   * в один момент дают кашу вместо награды.
+   */
+  function soundOutcome(ok: boolean) {
+    if (!ok) { play('wrong'); return }
+    play((combo + 1) % STREAK_EVERY === 0 ? 'streak' : 'correct', combo)
+  }
+
+  /** Показ ответа без вердикта («не помню», кнопка, пробел) — щелчок переворота карточки */
+  function revealAnswer() {
+    play('reveal')
     setRevealed(true)
   }
 
@@ -473,6 +494,8 @@ export default function Review() {
     answeredMs.current = Date.now() - shownAt.current
     setPicked(value)
     setVerdict(ok as 'correct' | 'typo' | 'wrong')
+    if (ok === 'typo') play('typo')
+    else soundOutcome(ok === 'correct')
     setRevealed(true)
   }
 
@@ -501,6 +524,9 @@ export default function Review() {
         await advance(task.item, false, 2)
         return
       }
+
+      // формат «показ»: объективного вердикта нет, исход задаёт выставленная оценка
+      if (verdict === null && task.format !== 'intro') soundOutcome(g > Rating.Again)
 
       const prevState = task.item.fsrs.state
       const isTypo = verdict === 'typo'
@@ -583,7 +609,7 @@ export default function Review() {
         submitObjective(typed, true) // C4: пустое поле → «не помню» внутри submitObjective
       } else if ((e.code === 'Space' && !typing) || (e.code === 'Enter' && !typing)) {
         e.preventDefault()
-        if (!revealed && task.format === 'reveal') setRevealed(true)
+        if (!revealed && task.format === 'reveal') revealAnswer()
         else if (revealed && suggested) void grade(suggested)
       } else if (!revealed && !typing && task.format !== 'reveal' && task.format !== 'type'
                  && ['1', '2', '3', '4'].includes(e.key)) {
@@ -634,6 +660,10 @@ export default function Review() {
   // Ловим и внутрисессионный провал (lapsed, на любой стадии), и приход в Relearning из прошлой сессии.
   const isReintro = isIntro && (lapsed.current.has(itemKey(task.item)) || task.item.fsrs.state === State.Relearning)
   const sentence = task.ctx
+  /* Перевод ровно того предложения, что показано: контексты ротируются, поэтому
+     перевод берётся по индексу в contexts, а не первым из списка. Предложение
+     управления (prep) в contexts не входит — там перевода нет и строки не будет. */
+  const sentenceRu = card.contextsRu[card.contexts.indexOf(sentence)] ?? ''
   const answerWord = isPrep ? card.prep : task.format === 'mc' && card.choices.length >= 2 ? task.answer : card.word
   const isNumeric = !!card.answerNum
   const isAuthored = card.choices.length >= 2
@@ -682,6 +712,8 @@ export default function Review() {
               {card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
               <div className="intro-label">Пример использования</div>
               <Sentence context={task.ctx} word={card.word} revealed />
+              {/* на знакомстве предложение открыто сразу — перевод показываем вместе с ним */}
+              {sentenceRu && <div className="rev-sentence-ru">{sentenceRu}</div>}
             </div>
           </>
         ) : (
@@ -713,7 +745,10 @@ export default function Review() {
             {card.meaning_en && <div className="rev-cue-en">{card.meaning_en}</div>}
           </div>
         ) : (
-          <Sentence context={sentence} word={answerWord} revealed={revealed} />
+          <>
+            <Sentence context={sentence} word={answerWord} revealed={revealed} />
+            {revealed && sentenceRu && <div className="rev-sentence-ru">{sentenceRu}</div>}
+          </>
         )}
         {!revealed && <div className="rev-task">{taskHint}</div>}
         {!revealed && (task.format === 'type' || canTypeAnswer) && (
@@ -799,7 +834,7 @@ export default function Review() {
               </>
             ) : (
               <>
-                <button className="btn btn-green" onClick={() => setRevealed(true)}>Показать ответ</button>
+                <button className="btn btn-green" onClick={revealAnswer}>Показать ответ</button>
                 <div className="hint-keys kb-only">Space — показать</div>
               </>
             )

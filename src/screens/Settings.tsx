@@ -183,6 +183,18 @@ export default function SettingsScreen() {
         </label>
         <div className="hint">Выключено — словарь спрашивается выбором из четырёх, как на SAT.</div>
       </div>
+      <div className="field">
+        <label>
+          <input
+            type="checkbox"
+            checked={s.sound}
+            onChange={e => setS({ ...s, sound: e.target.checked })}
+            style={{ width: 'auto', marginRight: 8, verticalAlign: 'middle' }}
+          />
+          Звуки урока
+        </label>
+        <div className="hint">Верно, мимо, опечатка, новое слово и конец урока. Выключено — урок идёт молча.</div>
+      </div>
       <div className="row">
         <div className="field">
           <label>Пауза с (YYYY-MM-DD)</label>

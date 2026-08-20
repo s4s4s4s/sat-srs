@@ -8,11 +8,44 @@ import { DEFAULT_SETTINGS, type CardRec, type JournalRec } from './types'
 
 const day = (off: number) => new Date(Date.now() + off * 86400000)
 
+/* Перевод примера для демо-карточек. В колоде он лежит полем `contexts_ru`
+   и показывается под предложением после ответа, поэтому демо без него не даёт
+   увидеть этот экран целиком. Ключ — само предложение: одна и та же фраза
+   встречается в нескольких наборах, а перевод у неё один. */
+const ПЕРЕВОД_ПРИМЕРА: Record<string, string> = {
+  'Members must ______ to the rules.': 'Участники обязаны придерживаться правил.',
+  'We can only ______ the cause.': 'О причине мы можем только догадываться.',
+  'They ______ for reform.': 'Они отстаивают реформу.',
+  'The data ______ the claim.': 'Данные опровергают это утверждение.',
+  'Results ______ the theory.': 'Результаты укрепляют теорию.',
+  'The wording is ______.': 'Формулировка неоднозначна.',
+  'A ______ argument.': 'Тонкий, взвешенный довод.',
+  'An ______ in the data.': 'Аномалия в данных.',
+  'The ______ is flawed.': 'Посылка ошибочна.',
+  'The fame of trends is ______, fading fast.': 'Слава трендов недолговечна и гаснет быстро.',
+  'The link remains ______ at best.': 'Связь в лучшем случае остаётся шаткой.',
+  'The fame of most online trends is ______, fading within weeks.':
+    'Слава большинства интернет-трендов недолговечна: она гаснет за считанные недели.',
+  'Saving is a ______ habit.': 'Копить — благоразумная привычка.',
+  'Smartphones are ______ now.': 'Смартфоны теперь повсюду.',
+  'Results ______ confidence.': 'Результаты укрепляют уверенность.',
+  'Historians ______ the loss.': 'Историки сожалеют об этой утрате.',
+  'The evidence pointed to one conclusion ______ the bridge had been failing for years.':
+    'Свидетельства указывали на один вывод: мост разрушался годами.'
+}
+
+/** Поле `contexts_ru` — только если перевод примера известен: иначе строки просто нет. */
+const переводПримера = (ctx: string) => {
+  const ru = ПЕРЕВОД_ПРИМЕРА[ctx]
+  return ru ? { contexts_ru: [ru] } : {}
+}
+
 function card(word: string, ru: string, en: string, ctx: string, st: number, reps: number, dueOff: number, extra: Record<string, any> = {}): CardRec {
   return {
     path: `Учёба/Карточки/${word}.md`, sha: 'demo-' + word, dirty: 0, body: '',
     fm: {
       type: 'card', word, pos: 'adj', meaning_en: en, meaning_ru: ru, context: ctx,
+      ...переводПримера(ctx),
       roots: 'epi- (на) + hēmera (день) — «живущий один день»', my_sentence: '', source: 'seed',
       added: '2026-07-16', first_seen: '2026-07-16', suspended: false,
       fsrs: {
@@ -41,11 +74,13 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
       domain: 'ALG', desmos: false, source: 'seed-math', added: '2026-07-18', suspended: false,
       fsrs: { state: 2, due: day(dueOff).toISOString(), stability: 5, difficulty: 5, elapsed_days: 0, scheduled_days: 1, learning_steps: 0, reps: 1, lapses: 0, last_review: day(-2).toISOString() } }
   })
+  const gramCtx = 'The evidence pointed to one conclusion ______ the bridge had been failing for years.'
   const gramCard = (dueOff: number): CardRec => ({
     path: 'Учёба/Карточки/gram-colon.md', sha: 'demo-gram', dirty: 0, body: '', fm: {
       type: 'card', kind: 'grammar', word: 'двоеточие вводит пояснение',
-      context: 'The evidence pointed to one conclusion ______ the bridge had been failing for years.',
+      context: gramCtx,
       choices: [':', ';', '—', ','], answer: ':',
+      ...переводПримера(gramCtx),
       explain: 'Двоеточие ставится ПОСЛЕ законченного предложения и вводит пояснение или список.',
       domain: 'SEC', source: 'seed-grammar', added: '2026-07-18', suspended: false,
       fsrs: { state: 2, due: day(dueOff).toISOString(), stability: 5, difficulty: 5, elapsed_days: 0, scheduled_days: 1, learning_steps: 0, reps: 1, lapses: 0, last_review: day(-2).toISOString() } }
