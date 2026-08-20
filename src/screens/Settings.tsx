@@ -20,7 +20,7 @@ export default function SettingsScreen() {
   const [resyncErr, setResyncErr] = useState('')
   const firstRun = !app.settings.pat
 
-  const set = (k: 'pat' | 'owner' | 'repo' | 'branch' | 'basePath' | 'pauseFrom' | 'pauseTo') => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const set = (k: 'pat' | 'owner' | 'repo' | 'branch' | 'basePath' | 'pauseFrom' | 'pauseTo' | 'anthropicKey') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setS({ ...s, [k]: e.target.value })
 
   async function connect() {
@@ -44,6 +44,7 @@ export default function SettingsScreen() {
     const next = {
       ...s,
       pat: s.pat.trim(),
+      anthropicKey: s.anthropicKey.trim(),
       owner: s.owner.trim(),
       repo: s.repo.trim(),
       branch: s.branch.trim(),
@@ -194,6 +195,21 @@ export default function SettingsScreen() {
           Звуки урока
         </label>
         <div className="hint">Верно, мимо, опечатка, новое слово и конец урока. Выключено — урок идёт молча.</div>
+      </div>
+      <div className="field">
+        <label>Ключ Anthropic — кнопка «Почему?»</label>
+        <input
+          type="password"
+          value={s.anthropicKey}
+          onChange={set('anthropicKey')}
+          placeholder="sk-ant-…"
+          autoCapitalize="none"
+          autoComplete="off"
+        />
+        <div className="hint">
+          Без ключа кнопка «Почему?» на уроке не работает. Ключ хранится только на этом устройстве;
+          разбор одной ошибки стоит меньше цента, повторный разбор той же пары берётся из памяти и не тратит ничего.
+        </div>
       </div>
       <div className="row">
         <div className="field">

@@ -17,6 +17,8 @@ import { Close, Sprout, Timer, Speaker, Flame } from '../components/Icon'
 import FlameBuddy from '../components/FlameBuddy'
 import { speak, canSpeak } from '../lib/speech'
 import { play } from '../lib/sound'
+import { askWhy, cacheKey, CoachError, type WhyAsk } from '../lib/coach'
+import { kvGet, kvSet } from '../lib/db'
 
 const GRADE_CLASS: Record<number, string> = {
   [Rating.Again]: 'grade-again',
@@ -190,6 +192,10 @@ export default function Review() {
   // C3/C4: карточка раскрыта через «не помню» (или пустой ввод) — ответ показан, но оценку
   // не спрашиваем: рейтинг фиксирован Again. Кнопки «Хорошо»/«Легко» в этом случае не рисуются.
   const [gaveUp, setGaveUp] = useState(false)
+  /* Разбор «Почему?»: null — панель закрыта. Открытая панель живёт до конца показа,
+     поэтому сбрасывается там же, где revealed и picked. */
+  const [why, setWhy] = useState<{ text: string; busy: boolean; err: string; open: boolean } | null>(null)
+  const whyRef = useRef<HTMLDivElement>(null)
   const [done, setDone] = useState(0)
   const [activeSec, setActiveSec] = useState(0)
   const [combo, setCombo] = useState(0)
@@ -272,6 +278,7 @@ export default function Review() {
     setTyped('')
     setVerdict(null)
     setGaveUp(false)
+    setWhy(null)
     setNeedConfirm(null)
     shownAt.current = Date.now()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -629,6 +636,19 @@ export default function Review() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  /* Панель раскрывается ниже разбора карточки, а тело урока на телефоне — узкая
+     полоса над листом, поэтому её начало надо подвести к глазам. Подводим дважды:
+     при раскрытии (дальше текст идёт вниз от верхней кромки) и когда поток кончился —
+     к этому моменту высота панели устоялась. Во время потока не трогаем: рывок
+     посреди чтения отобрал бы прокрутку у того, кто уже читает.
+     Место эффекта — до ранних возвратов ниже: порядок хуков не должен зависеть
+     от того, какая ветка экрана отрисовалась. */
+  useEffect(() => {
+    if (!why?.open) return
+    const id = requestAnimationFrame(() => whyRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+    return () => cancelAnimationFrame(id)
+  }, [why?.open, why?.busy, why?.err])
+
   if (!queue || (head && !task)) {
     return (
       <div className="screen s-review">
@@ -665,6 +685,49 @@ export default function Review() {
      управления (prep) в contexts не входит — там перевода нет и строки не будет. */
   const sentenceRu = card.contextsRu[card.contexts.indexOf(sentence)] ?? ''
   const answerWord = isPrep ? card.prep : task.format === 'mc' && card.choices.length >= 2 ? task.answer : card.word
+
+  /* Что спросить у модели по кнопке «Почему?»: показанное предложение, верный
+     ответ и то, что выбрал ученик. Без выбора (сдался, «показать ответ») строка
+     пустая — запрос тогда объясняет, почему подходит верный вариант. */
+  const whyAsk: WhyAsk = {
+    kind: card.kind || 'vocab',
+    word: isPrep ? `${card.word} ${card.prep}` : card.word,
+    pos: card.pos,
+    meaningEn: card.meaning_en,
+    meaningRu: card.meaning_ru,
+    roots: card.roots,
+    sentence,
+    sentenceRu,
+    answer: task.answer,
+    picked: picked ?? '',
+    explain: card.explain
+  }
+
+  /**
+   * Открывает разбор, а на повторный тап — сворачивает. Ответ кладётся в kv-хранилище:
+   * та же пара «предложение × выбор» второй раз приходит мгновенно, без сети и без денег.
+   * Панель не размонтируется при сворачивании, поэтому закрыть и открыть её посреди
+   * ответа не значит спросить дважды.
+   */
+  async function toggleWhy() {
+    if (why) { setWhy({ ...why, open: !why.open }); return }
+    setWhy({ text: '', busy: true, err: '', open: true })
+
+    const key = cacheKey(whyAsk)
+    const сохранённый = await kvGet<string>(key).catch(() => undefined)
+    if (сохранённый) { setWhy({ text: сохранённый, busy: false, err: '', open: true }); return }
+
+    try {
+      const текст = await askWhy(app.settings.anthropicKey, whyAsk,
+        кусок => setWhy(w => (w ? { ...w, text: w.text + кусок } : w)))
+      await kvSet(key, текст)
+      setWhy(w => (w ? { ...w, text: текст, busy: false } : w))
+    } catch (e) {
+      const сообщение = e instanceof CoachError ? e.message : e instanceof Error ? e.message : String(e)
+      setWhy(w => (w ? { ...w, busy: false, err: сообщение } : w))
+    }
+  }
+
   const isNumeric = !!card.answerNum
   const isAuthored = card.choices.length >= 2
   // «показ» тоже даёт ввести слово: самооценка без проверки завышает результат
@@ -800,6 +863,14 @@ export default function Review() {
             {!isPrep && card.explain && <div className="rev-explain"><Tex text={card.explain} /></div>}
             {card.leech && <div className="leech-note">Пиявка — слово сопротивляется: тьютор переформулирует карточку</div>}
             {!isPrep && card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
+            {why?.open && (
+              <div className="why-panel" ref={whyRef}>
+                <div className="why-title">Почему так</div>
+                {why.err
+                  ? <div className="why-err">{why.err}</div>
+                  : <div className="why-text">{why.text}{why.busy && <span className="why-caret" />}</div>}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -876,6 +947,11 @@ export default function Review() {
                   })}
               </div>
             )}
+            {/* «Почему?» живёт в листе, а не в теле ответа: на телефоне тело уходит
+                под лист, и кнопку пришлось бы искать прокруткой. */}
+            <button className="why-btn" onClick={() => void toggleWhy()}>
+              {why?.open ? 'Свернуть разбор' : 'Почему?'}
+            </button>
             {suggested ? (
               /* объективный результат — оценка определена автоматически, выбор не нужен */
               <>

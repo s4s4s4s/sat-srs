@@ -119,6 +119,11 @@ export interface Settings {
   homeOffset: string // домашний пояс в минутах от UTC ('' = часы устройства, '180' = Москва, '240' = Ереван)
   typing: boolean // участвует ли ввод слова по буквам в ротации Review (см. REVIEW_CYCLE)
   sound: boolean // звуковые сигналы урока (src/lib/sound.ts)
+  /* Ключ Anthropic для кнопки «Почему?» (src/lib/coach.ts). Живёт там же, где токен
+     GitHub, — в настройках устройства; в коде и в репозитории его нет. Пусто = кнопка
+     объясняет, чего не хватает, вместо запроса. Миграции не требует: пустая строка —
+     и дефолт, и то, что получает сохранённый объект без этого поля. */
+  anthropicKey: string
 }
 
 /* Версия настроек.
@@ -170,6 +175,7 @@ export const DEFAULT_SETTINGS: Settings = {
   /* Звук включён по умолчанию: обратная связь урока — часть механики,
      а не украшение. Выключается в настройках одним тумблером. */
   sound: true,
+  anthropicKey: '',
 }
 
 export type Screen = 'home' | 'review' | 'summary' | 'add' | 'stats' | 'settings' | 'path'

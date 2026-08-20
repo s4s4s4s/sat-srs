@@ -509,6 +509,44 @@ body::before {
 
 .rev-explain { font-size: 15px; color: var(--text); margin-top: 8px; padding: 10px 12px; background: var(--surface2); border-radius: 12px; }
 
+/* ── «Почему?»: разбор задания моделью (src/lib/coach.ts) ───────────────── */
+/* Панель показывается в теле ответа, а кнопка — в нижнем листе. Общий синий
+   тон связывает их и отделяет разбор от авторского пояснения карточки
+   (.rev-explain, серый): ученик должен видеть, где говорит колода, а где модель. */
+.why-btn {
+  width: 100%; background: none; border: none; cursor: pointer;
+  font-family: var(--font); font-size: 14px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .8px; color: var(--blue-text);
+  padding: 10px; margin-bottom: 6px; border-radius: 12px;
+  touch-action: manipulation;
+}
+.why-btn:active { background: var(--surface2); }
+
+.why-panel {
+  margin-top: 12px; padding: 12px 14px; text-align: left;
+  background: var(--blue-soft); border: 1px solid var(--blue-line); border-radius: 14px;
+  animation: fadein .2s ease-out;
+}
+.why-title {
+  font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .8px;
+  color: var(--blue-text); margin-bottom: 6px;
+}
+/* pre-wrap: модель отвечает сплошным текстом, но абзац, если он всё же придёт,
+   не должен склеиться в одну строку */
+.why-text { font-size: 15px; line-height: 1.55; color: var(--text); white-space: pre-wrap; }
+/* курсор потока: показывает, что текст ещё идёт, и заменяет отдельный спиннер */
+.why-caret {
+  display: inline-block; width: 2px; height: 1em; margin-left: 2px;
+  vertical-align: text-bottom; background: var(--blue-text);
+  animation: why-blink 1s steps(2, start) infinite;
+}
+@keyframes why-blink { 50% { opacity: 0; } }
+.why-err { font-size: 14px; font-weight: 700; color: var(--red-text); }
+@media (prefers-reduced-motion: reduce) {
+  .why-panel { animation: none; }
+  .why-caret { animation: none; opacity: .6; }
+}
+
 /* слово-кнопка с озвучкой */
 .speak-word {
   background: none; border: none; padding: 0; margin: 0; cursor: pointer;
