@@ -18,7 +18,7 @@ import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
-  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS,
+  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, makeScheduler,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
   pickTask, meaningDistractors, REVIEW_CYCLE, NEW_STOP_DATE, kindRank, expandItems, freshItems
 } from '../src/lib/scheduler'
@@ -691,6 +691,54 @@ function dontKnowChecks(): void {
   console.log(`  ✓ ротация Review (C8): ${modes.map(sig).join(' → ')} — предложение на одном шаге из четырёх`)
   console.log('  ✓ порог «медленно»: доля от личной медианы, пол 12 c, математика отдельно')
   console.log('  ✓ порог по виду карточки: разбор считается от своей медианы, а не от словарной')
+
+  /* Выпуск, отложенный до завтра, не роняет карточку на низ лестницы.
+
+     Правило point 1 («слово, введённое сегодня, не уходит в Review в тот же
+     учебный день») возвращает выпущенную карточку в Learning. FSRS отдаёт
+     выпущенную карточку с learning_steps = 0, и раньше этот ноль уезжал в файл:
+     карточка теряла пройденную лестницу, следующий Good поднимал её на ступень
+     «через 10 минут», и она возвращалась в тот же урок. Замер 21.08.2026: три
+     Good подряд, карточка всё ещё в Learning и приходит каждые 10 минут пять
+     часов подряд — жалоба «одни и те же два примера крутятся и крутятся». */
+  {
+    const f = makeScheduler(0.9)
+    const день = new Date('2026-08-20T21:00:00+04:00')
+    const позже = new Date('2026-08-20T21:30:00+04:00')
+
+    // Первый Good: New → Learning, ступень поднялась, срок внутри урока.
+    const { card: шаг1 } = f.next(createEmptyCard(день), день, Rating.Good)
+    const held1 = holdOnIntroDay(createEmptyCard(день), шаг1, день, '2026-08-20')
+    assert(held1.state === State.Learning && held1.learning_steps === 1,
+      'первый верный ответ поднимает ступень и оставляет карточку в обучении')
+
+    // Второй Good: FSRS выпускает карточку, правило откладывает выпуск до завтра.
+    const { card: сырой } = f.next(held1, позже, Rating.Good)
+    assert(сырой.state === State.Review, 'FSRS на второй ступени карточку выпускает')
+    const held2 = holdOnIntroDay(held1, сырой, позже, '2026-08-20')
+    assert(held2.state === State.Learning, 'в день знакомства выпуск откладывается')
+    assert(held2.learning_steps === held1.learning_steps,
+      'репро: ступень обучения сохраняется, а не обнуляется вместе с состоянием')
+    assert(held2.due.getTime() === endOfStudyDay(позже).getTime(),
+      'отложенная карточка ждёт конца учебного дня, а не десяти минут')
+    assert(held2.due.getTime() - позже.getTime() > 30 * 60_000,
+      'срок отложенной карточки выходит за LEARN_AHEAD_MS — в этот урок она не вернётся')
+
+    // Добор вытащил её ещё раз в тот же день: она снова откладывается, а не падает на низ.
+    const ещёПозже = new Date('2026-08-21T00:04:00+04:00')
+    const { card: сырой3 } = f.next(held2, ещёПозже, Rating.Good)
+    const held3 = holdOnIntroDay(held2, сырой3, ещёПозже, '2026-08-20')
+    assert(held3.due.getTime() === endOfStudyDay(ещёПозже).getTime(),
+      'принудительный добор не возвращает карточку в десятиминутный цикл')
+
+    // На следующий учебный день правило молчит — карточка выпускается по-настоящему.
+    const завтра = new Date('2026-08-21T10:00:00+04:00')
+    const { card: сырой4 } = f.next(held3, завтра, Rating.Good)
+    const выпуск = holdOnIntroDay(held3, сырой4, завтра, '2026-08-20')
+    assert(выпуск.state === State.Review, 'назавтра карточка уходит в Review, отсрочка не вечная')
+  }
+  console.log('  ✓ отложенный выпуск: ступень сохраняется, карточка ждёт конца дня, назавтра выпускается')
+  passed++
   passed++
   passed++
   passed++

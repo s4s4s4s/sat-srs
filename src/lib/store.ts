@@ -4,7 +4,7 @@ import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
-import { makeScheduler, effectiveRetention, homeCounts, isLevelled, DUE_CAP, type Section } from './scheduler'
+import { makeScheduler, effectiveRetention, holdOnIntroDay, homeCounts, isLevelled, DUE_CAP, type Section } from './scheduler'
 import { parseMetrics, isLeech, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
 import { newId, newIntroducedOn, matureRetention, sessionAccuracy, READ_CAP_MINUTES } from './journal'
@@ -282,22 +282,10 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     next = { ...next, due, scheduled_days: Math.max(1, Math.round((due.getTime() - now.getTime()) / 86400_000)) }
   }
 
-  // point 1: слово, введённое сегодня, не уходит в Review внутри того же учебного дня.
-  // Три верных ответа за минуту проверяют кратковременный буфер, а не долговременную память;
-  // stability такой карточки завышена и не отражает знание. Держим её в Learning до следующего
-  // календарного дня (rollover 04:00) — due переносим на начало следующего учебного дня, настоящий
-  // выпуск в Review будет уже завтра (тогда introDay !== сегодня и это условие не сработает).
+  // point 1: слово, введённое сегодня, не уходит в Review внутри того же учебного
+  // дня. Само правило и цена ошибки в нём — в holdOnIntroDay (scheduler.ts).
   const introDay = rec.fm.first_seen ?? (prev.state === State.New ? dayKey(now) : null)
-  const wasIntroState = prev.state === State.New || prev.state === State.Learning || prev.state === State.Relearning
-  if (next.state === State.Review && wasIntroState && introDay && introDay === dayKey(now)) {
-    const nextDay = endOfStudyDay(now)
-    next = {
-      ...next,
-      state: State.Learning,
-      due: nextDay,
-      scheduled_days: Math.max(1, Math.round((nextDay.getTime() - now.getTime()) / 86400_000))
-    }
-  }
+  next = holdOnIntroDay(prev, next, now, introDay)
 
   // строка журнала строится ДО записи карточки: любой сбой здесь не рассинхронизирует БД и UI
   const line: JournalRec = {

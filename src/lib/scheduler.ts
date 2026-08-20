@@ -416,6 +416,41 @@ export function shouldRequeue(next: FsrsCard, now: Date): boolean {
 }
 
 /**
+ * Слово, введённое сегодня, не уходит в Review внутри того же учебного дня
+ * (point 1). Три верных ответа за минуту проверяют кратковременный буфер, а не
+ * долговременную память: stability такой карточки завышена и знания не
+ * отражает. Держим её в Learning до следующего календарного дня — due на конец
+ * учебного дня (rollover 04:00), настоящий выпуск будет завтра, когда
+ * `introDay` перестанет совпадать с сегодняшним днём.
+ *
+ * СТУПЕНЬ ОБУЧЕНИЯ ПРИ ЭТОМ СОХРАНЯЕТСЯ. FSRS отдаёт выпущенную карточку с
+ * `learning_steps = 0`, и раньше этот ноль уезжал в файл вместе с
+ * возвращённым состоянием — карточка падала на низ лестницы, хотя выпуск уже
+ * заслужила. Следующий Good поднимал её обратно на ступень «через 10 минут»,
+ * то есть возвращал в тот же урок и в следующий, а не откладывал до завтра.
+ * Замер 21.08.2026 по журналу: карточка разбора с тремя Good подряд так и
+ * осталась в Learning и приходила каждые десять минут пять часов подряд —
+ * жалоба «одни и те же два примера крутятся и крутятся». Сохранённая ступень
+ * означает «выпуск заслужен, отложен до завтра»: следующий Good снова выпустит
+ * карточку, а не начнёт лестницу заново.
+ *
+ * Функция чистая и живёт здесь, а не внутри `rateItem`, чтобы её можно было
+ * проверить настоящей последовательностью оценок из журнала.
+ */
+export function holdOnIntroDay(prev: FsrsCard, next: FsrsCard, now: Date, introDay: string | null): FsrsCard {
+  const wasIntro = prev.state === State.New || prev.state === State.Learning || prev.state === State.Relearning
+  if (!(next.state === State.Review && wasIntro && introDay && introDay === dayKey(now))) return next
+  const nextDay = endOfStudyDay(now)
+  return {
+    ...next,
+    state: State.Learning,
+    learning_steps: prev.learning_steps,
+    due: nextDay,
+    scheduled_days: Math.max(1, Math.round((nextDay.getTime() - now.getTime()) / 86400_000))
+  }
+}
+
+/**
  * Формат упражнения:
  * - prep-навык → всегда prep (выбор предлога);
  * - recall в New → intro (знакомство: слово+значения+пример, без викторины);
