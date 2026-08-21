@@ -40,13 +40,43 @@ const переводПримера = (ctx: string) => {
   return ru ? { contexts_ru: [ru] } : {}
 }
 
+/**
+ * Корни демо-слов.
+ *
+ * Раньше `roots` было прибито одной строкой на все карточки, и любое слово демо
+ * объявляло себя происходящим от «epi- (на) + hēmera (день)»: на экране знакомства
+ * bolster честно сообщал, что он «живущий один день». Демо — лицо продукта, и
+ * заглушка в нём читается как враньё колоды, а не как заглушка.
+ *
+ * Слова, чьё происхождение сюда не вписано, поля `roots` просто не получают — как
+ * это уже сделано с переводом примера (`переводПримера`): отсутствующей строки не
+ * видно, а неверная бросается в глаза.
+ */
+const КОРНИ: Record<string, string> = {
+  ephemeral: 'epi- (на) + hēmera (греч. «день») — «живущий один день»',
+  ubiquitous: 'ubique (лат. «повсюду»)',
+  adhere: 'ad- (к) + haerere (лат. «прилипать»)',
+  surmise: 'super- (сверх) + mittere (лат. «посылать») — «додумать сверх сказанного»',
+  advocate: 'ad- (к) + vocare (лат. «звать») — «призванный на помощь»',
+  refute: 'refutare (лат. «отражать, отбивать»)',
+  bolster: 'др.-англ. bolster — «валик, подушка», то, что подпирает',
+  ambiguous: 'ambi- (с обеих сторон) + agere (лат. «гнать») — «ведущий в обе стороны»',
+  nuanced: 'фр. nuance («оттенок») ← nue («облако»)',
+  anomaly: 'an- (не) + homalos (греч. «ровный»)',
+  premise: 'prae- (впереди) + mittere (лат. «посылать») — «посланное вперёд»',
+  tenuous: 'tenuis (лат. «тонкий»)',
+  prudent: 'providens (лат. «предвидящий»), стянутое до prudens',
+  lament: 'lamentum (лат. «плач»)'
+}
+
 function card(word: string, ru: string, en: string, ctx: string, st: number, reps: number, dueOff: number, extra: Record<string, any> = {}): CardRec {
   return {
     path: `Учёба/Карточки/${word}.md`, sha: 'demo-' + word, dirty: 0, body: '',
     fm: {
       type: 'card', word, pos: 'adj', meaning_en: en, meaning_ru: ru, context: ctx,
       ...переводПримера(ctx),
-      roots: 'epi- (на) + hēmera (день) — «живущий один день»', my_sentence: '', source: 'seed',
+      ...(КОРНИ[word] ? { roots: КОРНИ[word] } : {}),
+      my_sentence: '', source: 'seed',
       added: '2026-07-16', first_seen: '2026-07-16', suspended: false,
       fsrs: {
         state: st, due: day(dueOff).toISOString(), stability: st === 2 ? 6.4 : 0, difficulty: st === 2 ? 5 : 0,
@@ -135,8 +165,11 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
       card('advocate', 'отстаивать', 'to support', 'They ______ for reform.', 2, 3, 2, { pos: 'verb', level: 2 }),
       card('refute', 'опровергать', 'to disprove', 'The data ______ the claim.', 1, 1, 0, { pos: 'verb', level: 2 }),
       card('bolster', 'укреплять', 'to support', 'Results ______ the theory.', 0, 0, 0, { pos: 'verb', level: 2 }),
-      card('ambiguous', 'неоднозначный', 'unclear', 'The wording is ______.', 0, 0, 0, { pos: 'adjective', level: 3 }),
-      card('nuanced', 'тонкий', 'subtle', 'A ______ argument.', 0, 0, 0, { pos: 'adjective', level: 3 }),
+      /* Часть речи пишется тем же словарём, что в живой колоде (verb/adj/noun/adv/
+         transition): её сравнивает правило двойников (meaningTwin в scheduler.ts), и
+         «adjective» против «adj» — не описка стиля, а молча несравнимые значения. */
+      card('ambiguous', 'неоднозначный', 'unclear', 'The wording is ______.', 0, 0, 0, { pos: 'adj', level: 3 }),
+      card('nuanced', 'тонкий', 'subtle', 'A ______ argument.', 0, 0, 0, { pos: 'adj', level: 3 }),
       card('anomaly', 'аномалия', 'irregularity', 'An ______ in the data.', 0, 0, 0, { pos: 'noun', level: 4 }),
       card('premise', 'посылка', 'basis', 'The ______ is flawed.', 0, 0, 0, { pos: 'noun', level: 4 })
     ] :
@@ -164,8 +197,8 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
       card('tenuous', 'слабый, шаткий', 'very weak or slight', 'The link remains ______ at best.', 2, 4, 3),
       card('prudent', 'благоразумный', 'acting with care', 'Saving is a ______ habit.', 2, 4, 3),
       card('ubiquitous', 'вездесущий', 'present everywhere', 'Smartphones are ______ now.', 2, 4, 3),
-      card('bolster', 'укреплять', 'to support', 'Results ______ confidence.', 0, 0, 0),
-      card('lament', 'сожалеть', 'to mourn', 'Historians ______ the loss.', 0, 0, 0)
+      card('bolster', 'укреплять', 'to support', 'Results ______ confidence.', 0, 0, 0, { pos: 'verb' }),
+      card('lament', 'сожалеть', 'to mourn', 'Historians ______ the loss.', 0, 0, 0, { pos: 'verb' })
     ]
 
   const journal: JournalRec[] = [{
