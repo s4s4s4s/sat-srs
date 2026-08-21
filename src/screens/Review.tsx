@@ -6,11 +6,11 @@ import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
   pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, typedTwin, suggestedGrade, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP,
   type TypeVerdict,
-  earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
+  newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
 } from '../lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, type OrderCtx } from '../lib/session'
 import Tex from '../components/Tex'
-import { newIntroducedOn, minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs } from '../lib/journal'
+import { minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs } from '../lib/journal'
 import { speedStats } from '../lib/metrics'
 import { dayKey } from '../lib/daytime'
 import type { Format, SessionResult, StudyItem } from '../lib/types'
@@ -175,13 +175,14 @@ export default function Review() {
   useEffect(() => {
     // новых за урок — не больше newPerLesson (и не больше остатка дневного лимита);
     // режим «только повторение» — ноль новых
-    const dayLeft = Math.max(0, app.settings.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
+    const карточкиРаздела = views().filter(v => sectionOf(v) === section)
+    const dayLeft = newBudgetFor(карточкиРаздела, app.settings.newPerDay, currentJournal(), dayKey())
     const budget = app.sessionReviewOnly ? 0 : Math.min(dayLeft, app.settings.newPerLesson || 3)
     dayNewLeft.current = dayLeft   // граница для добора новых сверх урочного лимита
     // point 3: слова, введённые сегодня в прошлых уроках и ещё не отработанные дважды,
     // принудительно добираются в этот урок (buildQueue дотягивает их из Learning с due на завтра)
     const forced = forcedTodaySlugs(currentJournal(), dayKey())
-    setQueue(buildQueue(views().filter(v => sectionOf(v) === section), budget, new Date(), forced))
+    setQueue(buildQueue(карточкиРаздела, budget, new Date(), forced))
     if (app.settings.pat && navigator.onLine) void startSync()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

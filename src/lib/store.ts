@@ -4,10 +4,10 @@ import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
-import { makeScheduler, effectiveRetention, holdOnIntroDay, homeCounts, isLevelled, DUE_CAP, type Section, type TypeVerdict } from './scheduler'
+import { makeScheduler, effectiveRetention, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, DUE_CAP, type Section, type TypeVerdict } from './scheduler'
 import { parseMetrics, isLeech, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
-import { newId, newIntroducedOn, matureRetention, sessionAccuracy, READ_CAP_MINUTES } from './journal'
+import { newId, matureRetention, sessionAccuracy, READ_CAP_MINUTES } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS, SETTINGS_VERSION } from './types'
 import { setSoundEnabled } from './sound'
@@ -438,8 +438,9 @@ function updateBadge() {
   const nav = navigator as Navigator & { setAppBadge?: (n: number) => Promise<void> }
   if (typeof nav.setAppBadge !== 'function') return
   try {
-    const budget = Math.max(0, state.settings.newPerDay - newIntroducedOn(state.journal, dayKey()))
-    const c = homeCounts(state.cards.map(cardView), budget)
+    const все = state.cards.map(cardView)
+    const budget = newBudgetTotal(все, state.settings.newPerDay, state.journal, dayKey())
+    const c = homeCounts(все, budget)
     void nav.setAppBadge(c.learnDue + c.revDue).catch(() => {})
   } catch { /* ignore */ }
 }

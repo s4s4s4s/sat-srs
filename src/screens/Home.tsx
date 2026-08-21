@@ -1,6 +1,6 @@
 import { useApp, views, setScreen, startSync, startLesson, logReading, unsyncedCount } from '../lib/store'
-import { homeCounts, sectionOf, levelStats, activeLevel, isLevelled, type Section } from '../lib/scheduler'
-import { streak, newIntroducedOn, minutesToday, readMinutesToday, floorDays, MIN_MINUTES, READ_MIN_MINUTES, RUN_MIN_REVIEWS, type PauseRange } from '../lib/journal'
+import { homeCounts, sectionOf, newBudgetFor, levelStats, activeLevel, isLevelled, type Section } from '../lib/scheduler'
+import { streak, minutesToday, readMinutesToday, floorDays, MIN_MINUTES, READ_MIN_MINUTES, RUN_MIN_REVIEWS, type PauseRange } from '../lib/journal'
 import { examReady, maturity, PRIMARY_DATE } from '../lib/metrics'
 import { State } from 'ts-fsrs'
 import { dayKey } from '../lib/daytime'
@@ -59,11 +59,16 @@ function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart, onRev
 export default function Home() {
   const app = useApp()
   const today = dayKey()
-  const budget = Math.max(0, app.settings.newPerDay - newIntroducedOn(app.journal, today))
   const all = views()
   const rw = all.filter(v => sectionOf(v) === 'rw')
   const grammar = all.filter(v => sectionOf(v) === 'grammar')
   const math = all.filter(v => sectionOf(v) === 'math')
+  /* Бюджет новых — свой у каждого раздела (`newBudgetFor`). Общий на колоду
+     доставался тому, кого открывали первым, и остальные стояли с погашенной
+     кнопкой «Всё повторено» поверх нетронутых карточек. */
+  const budgetRw = newBudgetFor(rw, app.settings.newPerDay, app.journal, today)
+  const budgetGrammar = newBudgetFor(grammar, app.settings.newPerDay, app.journal, today)
+  const budgetMath = newBudgetFor(math, app.settings.newPerDay, app.journal, today)
   const pause: PauseRange | null = app.settings.pauseFrom && app.settings.pauseTo
     ? { from: app.settings.pauseFrom, to: app.settings.pauseTo } : null
   const st = streak(app.journal, today, pause)
@@ -91,7 +96,7 @@ export default function Home() {
      открытии приложения, а не на занятии. Добитая очередь по-прежнему
      засчитывает день, но только через строку session с reviews > 0
      (см. `journal.emptyDays`). */
-  const cAll = homeCounts(all, budget)
+  const cAll = homeCounts(all, budgetRw + budgetGrammar + budgetMath)
 
   const syncText =
     app.syncStatus === 'syncing' ? 'Синхронизация…'
@@ -204,9 +209,9 @@ export default function Home() {
         {st.freezeSpentYesterday && <div className="freeze-note">❄ Заморозка спасла серию — осталось {st.freezes}</div>}
       </div>
 
-      <SectionBlock title="Слова" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budget} onStart={go('rw')} onReview={go('rw', true)} levelLine={levelLine} onPath={() => setScreen('path')} />
-      <SectionBlock title="Грамматика" icon={<span className="sec-x">¶</span>} badge="badge-green" glyph="var(--rune-ansuz)" cards={grammar} budget={budget} onStart={go('grammar')} onReview={go('grammar', true)} />
-      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budget} onStart={go('math')} onReview={go('math', true)} />
+      <SectionBlock title="Слова" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budgetRw} onStart={go('rw')} onReview={go('rw', true)} levelLine={levelLine} onPath={() => setScreen('path')} />
+      <SectionBlock title="Грамматика" icon={<span className="sec-x">¶</span>} badge="badge-green" glyph="var(--rune-ansuz)" cards={grammar} budget={budgetGrammar} onStart={go('grammar')} onReview={go('grammar', true)} />
+      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budgetMath} onStart={go('math')} onReview={go('math', true)} />
 
       <div className="home-actions">
         <div className="row">

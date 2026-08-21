@@ -15,12 +15,13 @@
  * Запуск: `npm test` (esbuild бандлит этот файл и node его исполняет).
  */
 import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
-import type { CardView, StudyItem } from '../src/lib/types'
+import type { CardView, StudyItem, JournalLine } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
   pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, LAST_LEARNING_STEP, sharesMeaning, typedTwin, checkTyped,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
-  pickTask, meaningDistractors, REVIEW_CYCLE, NEW_STOP_DATE, kindRank, expandItems, freshItems
+  pickTask, meaningDistractors, REVIEW_CYCLE, NEW_STOP_DATE, kindRank, expandItems, freshItems,
+  homeCounts, sectionOf, newBudgetFor, newBudgetTotal
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
 import { endOfStudyDay } from '../src/lib/daytime'
@@ -1086,6 +1087,7 @@ function main(): void {
   console.log(`  ✓ рандомизированный батч: ${N} дней по 2 урока, инвариант держит везде`)
   passed++
 
+  sectionBudgetChecks()
   fillerChecks()
   summaryChecks()
   dontKnowChecks()
@@ -1094,6 +1096,62 @@ function main(): void {
   leechFlagChecks()
 
   console.log(`\nВсе проверки пройдены (${passed} групп).`)
+}
+
+/**
+ * Дневной лимит новых карточек считается ПО РАЗДЕЛУ.
+ *
+ * Репро дефекта, найденного 21.08.2026 на живых данных: лимит был один на всю колоду
+ * (`newPerDay − введено за день`), и раздел, который открывали первым, забирал его
+ * целиком. За четырнадцать дней «Слова» выбирали норму каждый день, поэтому
+ * «Грамматика» (20 карточек) и «Математика» (4) не ввели НИ ОДНОЙ: их блок на главной
+ * считал `newAvail = min(новых, 0)`, печатал «Всё повторено» и гасил кнопку поверх
+ * нетронутой колоды. Интерфейс не отражал лень владельца — он ему врал.
+ */
+function sectionBudgetChecks() {
+  const день = '2026-08-21'
+  const слова = [newCard('alpha'), newCard('beta'), newCard('gamma')]
+  const грамматика = [baseView('semicolon', 1, 'grammar'), baseView('dangling', 1, 'grammar')]
+  const математика = [baseView('quadratic', 1, 'math')]
+  const все = [...слова, ...грамматика, ...математика]
+
+  assert(слова.every(v => sectionOf(v) === 'rw'), 'предпосылка: словарные карточки — раздел «Слова»')
+  assert(грамматика.every(v => sectionOf(v) === 'grammar'), 'предпосылка: грамматические карточки — раздел «Грамматика»')
+  assert(математика.every(v => sectionOf(v) === 'math'), 'предпосылка: математические карточки — раздел «Математика»')
+
+  // дневная норма (3) выбрана целиком уроком СЛОВ
+  const журнал: JournalLine[] = слова.map(v => ({
+    id: v.slug, type: 'review', ts: `${день}T10:00:00+04:00`, day: день,
+    slug: v.slug, skill: 'recall', prev_state: State.New
+  }))
+
+  assert(newBudgetFor(слова, 3, журнал, день) === 0, 'словарь свою дневную норму выбрал')
+  assert(newBudgetFor(грамматика, 3, журнал, день) === 3, 'репро: урок слов не съедает дневную норму грамматики')
+  assert(newBudgetFor(математика, 3, журнал, день) === 3, 'репро: урок слов не съедает дневную норму математики')
+
+  // …и обратно: введённая грамматическая карточка списывается только со своего раздела
+  const журнал2: JournalLine[] = [...журнал, {
+    id: 'semicolon', type: 'review', ts: `${день}T11:00:00+04:00`, day: день,
+    slug: 'semicolon', skill: 'recall', prev_state: State.New
+  }]
+  assert(newBudgetFor(грамматика, 3, журнал2, день) === 2, 'введённая грамматика списывается с бюджета грамматики')
+  assert(newBudgetFor(слова, 3, журнал2, день) === 0, 'и не возвращает словарю уже потраченное')
+
+  // ровно то место, где дефект был виден глазами: блок раздела на главной
+  const общийКотёл = Math.max(0, 3 - журнал.length)   // как считалось ДО правки
+  assert(homeCounts(грамматика, общийКотёл, new Date(BASE)).newAvail === 0,
+    'репро дефекта: при общем лимите грамматике доступно ноль новых при двух непоказанных')
+  assert(homeCounts(грамматика, newBudgetFor(грамматика, 3, журнал, день), new Date(BASE)).newAvail === 2,
+    'после правки грамматике доступны обе непоказанные карточки')
+
+  // сумма по разделам — ею живут сводка «Статистики» и бейдж на иконке
+  assert(newBudgetTotal(все, 3, журнал, день) === 6, 'общий остаток — сумма остатков разделов')
+
+  // чужой день чужую норму не занимает
+  assert(newBudgetFor(слова, 3, журнал, '2026-08-22') === 3, 'вчерашние вводы не занимают сегодняшнюю норму')
+
+  console.log('  ✓ дневной лимит новых считается по разделу, а не одним котлом на колоду')
+  passed++
 }
 
 try {

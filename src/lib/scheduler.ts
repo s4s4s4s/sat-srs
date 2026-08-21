@@ -1,7 +1,7 @@
 import { fsrs, generatorParameters, Rating, State, type Grade, type Card as FsrsCard, type FSRS } from 'ts-fsrs'
-import type { CardView, Format, StudyItem } from './types'
+import type { CardView, Format, StudyItem, JournalLine } from './types'
 import { endOfStudyDay, dayKey, addDaysKey } from './daytime'
-import { TYPO_MIN_LEN, TYPO_MAX_EDITS } from './journal'
+import { TYPO_MIN_LEN, TYPO_MAX_EDITS, newIntroducedOn } from './journal'
 
 export function makeScheduler(requestRetention: number): FSRS {
   // fuzz разводит одновременно выученные карточки по разным дням — меньше комков и MC-соседей
@@ -96,6 +96,28 @@ export function sectionOf(v: CardView): Section {
   // грамматика: пунктуация/правила SEC + связки/логика EOI — отдельно от словаря
   if (v.kind === 'grammar' || v.domain === 'SEC' || v.domain === 'EOI' || v.pos === 'transition') return 'grammar'
   return 'rw'
+}
+
+export const SECTIONS: readonly Section[] = ['rw', 'grammar', 'math']
+
+/**
+ * Дневной остаток новых карточек ДЛЯ РАЗДЕЛА.
+ *
+ * `newPerDay` — норма ввода по ПРЕДМЕТУ, а не общий котёл на колоду. Общий котёл
+ * доставался тому разделу, который открыли первым: за четырнадцать дней «Слова»
+ * забирали его каждый день целиком, и «Грамматика» (20 карточек) с «Математикой»
+ * (4 карточки) не ввели ни одной — их блоки показывали «Всё повторено» и гасили
+ * кнопку, потому что `newAvail = min(новых, 0)`. Это была не лень владельца, а
+ * ложь интерфейса.
+ */
+export function newBudgetFor(cards: CardView[], perDay: number, journal: JournalLine[], day: string = dayKey()): number {
+  const slugs = new Set(cards.map(c => c.slug))
+  return Math.max(0, perDay - newIntroducedOn(journal, day, slugs))
+}
+
+/** Остаток по всей колоде — сумма остатков разделов (сводка «Статистики» и бейдж иконки). */
+export function newBudgetTotal(all: CardView[], perDay: number, journal: JournalLine[], day: string = dayKey()): number {
+  return SECTIONS.reduce((сумма, s) => сумма + newBudgetFor(all.filter(c => sectionOf(c) === s), perDay, journal, day), 0)
 }
 
 /**

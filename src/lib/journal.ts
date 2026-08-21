@@ -292,10 +292,18 @@ export function trueRetention30(lines: JournalLine[], today: string = dayKey()):
 }
 
 /** Сколько новых учебных единиц (слово × навык) уже введено в этот учебный день */
-export function newIntroducedOn(lines: JournalLine[], day: string): number {
+/**
+ * Сколько новых единиц введено в этот учебный день. `slugs` сужает счёт до одного
+ * раздела, и это не удобство, а условие правильности: пока лимит был один на всю
+ * колоду, урок слов съедал его целиком, и блок «Грамматика» рисовал «Всё повторено»
+ * поверх двадцати НИ РАЗУ не показанных карточек — с погашенной кнопкой. Предметы у
+ * нас разведены по разделам, значит и дневная норма ввода считается по предмету.
+ */
+export function newIntroducedOn(lines: JournalLine[], day: string, slugs?: ReadonlySet<string>): number {
   const seen = new Set<string>()
   for (const l of lines) {
     if (l.type === 'review' && l.day === day && l.prev_state === State.New && l.slug) {
+      if (slugs && !slugs.has(l.slug)) continue
       seen.add(`${l.slug}#${l.skill ?? 'recall'}`)
     }
   }

@@ -1,6 +1,6 @@
 import { useApp, views, setScreen } from '../lib/store'
-import { homeCounts, loadForecast, sectionOf } from '../lib/scheduler'
-import { streak, trueRetention30, minutesToday, newIntroducedOn, retentionByFormat, minutesByDay, emptyDays, isDayDone } from '../lib/journal'
+import { homeCounts, loadForecast, sectionOf, newBudgetTotal } from '../lib/scheduler'
+import { streak, trueRetention30, minutesToday, retentionByFormat, minutesByDay, emptyDays, isDayDone } from '../lib/journal'
 import {
   pace, maturity, retentionByInterval, retentionByLevel, retentionByDomain,
   speedStats, enoughForPct, ddmm, PRIMARY_DATE, NEW_STOP_DATE,
@@ -78,8 +78,8 @@ function series(hist: MetricSnapshot[], pick: (s: MetricSnapshot) => number | un
 export default function Stats() {
   const app = useApp()
   const today = dayKey()
-  const budget = Math.max(0, app.settings.newPerDay - newIntroducedOn(app.journal, today))
   const all = views()
+  const budget = newBudgetTotal(all, app.settings.newPerDay, app.journal, today)
   const c = homeCounts(all, budget)
   const pause = app.settings.pauseFrom && app.settings.pauseTo ? { from: app.settings.pauseFrom, to: app.settings.pauseTo } : null
   const st = streak(app.journal, undefined, pause)
