@@ -615,7 +615,7 @@ body::before {
 .verdict { font-size: 17px; font-weight: 800; margin-bottom: 8px; }
 .verdict-row { display: flex; align-items: center; gap: 10px; }
 .verdict-correct { color: var(--green-text); }
-.verdict-typo { color: var(--amber-text); }
+.verdict-typo, .verdict-twin { color: var(--amber-text); }
 .verdict-wrong { color: var(--red-text); }
 
 /* feedback-sheet: низ экрана подкрашивается результатом (фирменный жест Duolingo) */
@@ -632,8 +632,8 @@ body::before {
 }
 .rev-bottom.is-right { background: linear-gradient(180deg, var(--sheet-ok-a), var(--sheet-ok-b)); border-top-color: var(--sheet-ok-border); }
 .rev-bottom.is-wrong { background: linear-gradient(180deg, var(--sheet-fail-a), var(--sheet-fail-b)); border-top-color: var(--sheet-fail-border); }
-.rev-bottom.is-typo { background: linear-gradient(180deg, rgba(230, 194, 104, .13), rgba(230, 194, 104, .06)); border-top-color: rgba(230, 194, 104, .35); }
-.rev-bottom.is-right, .rev-bottom.is-wrong, .rev-bottom.is-typo { animation: sheet-in .3s cubic-bezier(.2, .9, .3, 1.15); }
+.rev-bottom.is-typo, .rev-bottom.is-twin { background: linear-gradient(180deg, rgba(230, 194, 104, .13), rgba(230, 194, 104, .06)); border-top-color: rgba(230, 194, 104, .35); }
+.rev-bottom.is-right, .rev-bottom.is-wrong, .rev-bottom.is-typo, .rev-bottom.is-twin { animation: sheet-in .3s cubic-bezier(.2, .9, .3, 1.15); }
 @keyframes sheet-in { from { transform: translateY(14px); opacity: .5; } }
 
 .hint-keys { text-align: center; font-size: 12px; color: var(--text2); font-weight: 700; margin-top: 10px; }
@@ -932,7 +932,7 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 .rev-wash.wash-rw::before { background: linear-gradient(180deg, color-mix(in srgb, var(--blue) 13%, transparent), transparent 85%); }
 .rev-wash.wash-grammar::before { background: linear-gradient(180deg, color-mix(in srgb, var(--green) 13%, transparent), transparent 85%); }
 .rev-wash.wash-math::before { background: linear-gradient(180deg, color-mix(in srgb, var(--purple) 13%, transparent), transparent 85%); }
-.rev-wash:has(.rev-bottom.is-right, .rev-bottom.is-wrong, .rev-bottom.is-typo)::before { opacity: .3; }
+.rev-wash:has(.rev-bottom.is-right, .rev-bottom.is-wrong, .rev-bottom.is-typo, .rev-bottom.is-twin)::before { opacity: .3; }
 /* после ответа пилюля-задание демотируется — вердикт главный */
 .rev-body:has(.rev-answer) .pill { opacity: .55; }
 
@@ -1031,7 +1031,7 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
   }
   .s-review .rev-bottom.is-right { border-color: var(--sheet-ok-border); }
   .s-review .rev-bottom.is-wrong { border-color: var(--sheet-fail-border); }
-  .s-review .rev-bottom.is-typo { border-color: rgba(230, 194, 104, .35); }
+  .s-review .rev-bottom.is-typo, .s-review .rev-bottom.is-twin { border-color: rgba(230, 194, 104, .35); }
   .s-review .rev-bottom > * { width: 100%; max-width: 560px; margin-left: auto; margin-right: auto; }
   /* цветная заливка раздела больше не упирается в края окна — без бокового
      растворения её прямые кромки читались как рамка несуществующей карточки */

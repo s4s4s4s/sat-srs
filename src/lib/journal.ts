@@ -266,7 +266,7 @@ export function retentionByFormat(lines: JournalLine[], today: string = dayKey()
   const acc: Record<string, { pass: number; total: number }> = {}
   for (const l of lines) {
     if (l.type !== 'review' || !l.day || l.day < from) continue
-    if (l.prev_state !== State.Review || l.typo) continue
+    if (l.prev_state !== State.Review || l.typo || l.twin) continue
     const f = l.format ?? 'reveal'
     if (f === 'intro') continue
     acc[f] ??= { pass: 0, total: 0 }
@@ -283,7 +283,7 @@ export function trueRetention30(lines: JournalLine[], today: string = dayKey()):
   let pass = 0
   let total = 0
   for (const l of lines) {
-    if (l.type !== 'review' || l.prev_state !== State.Review || l.typo) continue
+    if (l.type !== 'review' || l.prev_state !== State.Review || l.typo || l.twin) continue
     if (l.day < from || l.day > today) continue
     total++
     if ((l.rating ?? 0) > 1) pass++

@@ -833,7 +833,12 @@ export function levenshtein(a: string, b: string): number {
   return prev[n]
 }
 
-export type TypeVerdict = 'correct' | 'typo' | 'wrong'
+/**
+ * Исход объективного ответа. `twin` — введён СИНОНИМ загаданного слова (C10):
+ * значение вспомнено, форма — нет. Это не промах и не успех, и именно поэтому
+ * оно отдельное значение, а не флаг поверх `wrong`.
+ */
+export type TypeVerdict = 'correct' | 'typo' | 'twin' | 'wrong'
 
 export function checkTyped(typed: string, word: string): TypeVerdict {
   const t = typed.trim().toLowerCase()
@@ -842,6 +847,29 @@ export function checkTyped(typed: string, word: string): TypeVerdict {
   // опечатка: <= TYPO_MAX_EDITS правок при длине слова >= TYPO_MIN_LEN (пороги в journal.ts)
   if (w.length >= TYPO_MIN_LEN && levenshtein(t, w) <= TYPO_MAX_EDITS) return 'typo'
   return 'wrong'
+}
+
+/**
+ * C10 (21.08.2026). Во «впиши слово» вариантов нет, и синоним из колоды —
+ * законный ответ на то же предложение. Живой случай: «The lawyer cited three
+ * precedents to ______ her central argument», введено `bolster` при загаданном
+ * `buttress`. Оба в колоде, оба значат «подкреплять», оба сочетаются с
+ * `argument`. Прежде это давало «Мимо» и Rating.Again: карточка уходила в
+ * переучивание, difficulty росла — за верно вспомненное значение.
+ *
+ * Считать такой ответ верным тоже нельзя: тогда слово никогда не выучится, его
+ * будет подменять привычный синоним. Поэтому Hard — ровно та оценка, для
+ * которой FSRS и держит середину: вспомнил, но не то, что спрашивали.
+ *
+ * Двойник ищется ТОЛЬКО среди колоды: общее значение мы умеем доказать по
+ * `meaning_ru` (см. meaningTwin), а про слово со стороны — нет. Молчаливо
+ * прощать незнакомое слово значило бы прощать и опечатку, и чужой язык.
+ */
+export function typedTwin(typed: string, card: CardView, deck: CardView[]): CardView | null {
+  const t = typed.trim().toLowerCase()
+  if (!t || t === card.word.trim().toLowerCase()) return null
+  const другое = deck.find(c => c.word.trim().toLowerCase() === t && c.path !== card.path)
+  return другое && sharesMeaning(card, другое) ? другое : null
 }
 
 /** Парсинг числового ответа: "15", "-2.5", ".75", "3/4", запятая как точка */
@@ -928,9 +956,16 @@ export function medianForKind(speed: { medianMs: number; byKind: Record<string, 
   return свой && свой.n >= MIN_KIND_SAMPLES && свой.medianMs > 0 ? свой.medianMs : speed.medianMs
 }
 
-export function suggestedGrade(format: Format, correct: boolean, typo: boolean, elapsedMs = 0, kind = 'vocab', medianMs?: number): Grade | null {
+/**
+ * Оценка, предложенная по объективному исходу. Вердикт приходит целиком, а не
+ * парой булевых: `correct`/`typo` допускали комбинацию, которой не бывает, и
+ * четвёртый исход (`twin`, C10) в эту пару уже не помещался.
+ */
+export function suggestedGrade(format: Format, verdict: TypeVerdict, elapsedMs = 0, kind = 'vocab', medianMs?: number): Grade | null {
   if (format === 'reveal' || format === 'intro') return null
-  if (!correct && !typo) return Rating.Again
+  if (verdict === 'wrong') return Rating.Again
+  // синоним: значение вспомнено, форма — нет; скорость тут уже ничего не решает
+  if (verdict === 'twin') return Rating.Hard
   if (elapsedMs > slowThresholdMs(kind, medianMs)) return Rating.Hard
   return Rating.Good
 }

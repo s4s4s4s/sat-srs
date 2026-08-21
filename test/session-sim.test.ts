@@ -18,7 +18,7 @@ import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
-  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, LAST_LEARNING_STEP, sharesMeaning,
+  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, LAST_LEARNING_STEP, sharesMeaning, typedTwin, checkTyped,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
   pickTask, meaningDistractors, REVIEW_CYCLE, NEW_STOP_DATE, kindRank, expandItems, freshItems
 } from '../src/lib/scheduler'
@@ -628,7 +628,7 @@ function dontKnowChecks(): void {
   const giveUpRating = Rating.Again // именно это фиксирует giveUp() в UI
   for (const f of ['reveal', 'type', 'mc', 'prep'] as const) {
     // reveal → в UI считается как 'type' (объективный сигнал ввода); для остальных формат тот же
-    const g = suggestedGrade(f === 'reveal' ? 'type' : f, false, false)
+    const g = suggestedGrade(f === 'reveal' ? 'type' : f, 'wrong')
     assert(g === Rating.Again, `C3: пустой/неверный ${f} даёт Again, а не ${g}`)
   }
   assert(giveUpRating <= Rating.Again, 'C3: «не помню» не выдаёт оценку выше Again')
@@ -637,7 +637,7 @@ function dontKnowChecks(): void {
   assert(isGiveUp('') && isGiveUp('   ') && isGiveUp('\t\n'), 'C4: пустое/пробельное поле = «не помню»')
   assert(!isGiveUp('bias'), 'C4: непустой ввод — не «не помню»')
   // и пустой ввод, и кнопка «не помню» идут одним путём → одна и та же оценка
-  const emptyRating = isGiveUp('') ? giveUpRating : suggestedGrade('type', false, false)
+  const emptyRating = isGiveUp('') ? giveUpRating : suggestedGrade('type', 'wrong')
   assert(emptyRating === giveUpRating, 'C4: пустой ввод даёт тот же рейтинг, что кнопка «не помню»')
 
   /* Порог «медленно» — доля от личной медианы, а не константа.
@@ -652,9 +652,9 @@ function dontKnowChecks(): void {
     'порог: пол держит — на быстрой медиане «медленно» не должно срабатывать на здоровых ответах')
   assert(slowThresholdMs('vocab') === 25_000, 'порог: без медианы поведение прежнее')
   assert(slowThresholdMs('math', 7412) === 90_000, 'порог: математика считается отдельно')
-  assert(suggestedGrade('mc', true, false, 20_000, 'vocab', 7412) === Rating.Hard,
+  assert(suggestedGrade('mc', 'correct', 20_000, 'vocab', 7412) === Rating.Hard,
     '20 c при медиане 7,4 c — это Hard')
-  assert(suggestedGrade('mc', true, false, 20_000, 'vocab') === Rating.Good,
+  assert(suggestedGrade('mc', 'correct', 20_000, 'vocab') === Rating.Good,
     'та же скорость на прежней константе давала Good — репро дефекта')
 
   /* Порог по ВИДУ карточки. Репро дефекта, из-за которого один и тот же вопрос
@@ -664,17 +664,17 @@ function dontKnowChecks(): void {
      8,1 с, разбор (kind error) — 21,6 с при p90 43,6 с; 53% ответов на разбор
      уходили в Hard против 12% у словарных. Hard в состоянии Learning не двигает
      ступень, и карточка возвращалась в каждый следующий урок. */
-  assert(suggestedGrade('mc', true, false, 21_600, 'vocab', 8360) === Rating.Hard,
+  assert(suggestedGrade('mc', 'correct', 21_600, 'vocab', 8360) === Rating.Hard,
     'репро: 21,6 с по словарной мерке — заминка, и разбор судился именно ею')
-  assert(suggestedGrade('mc', true, false, 21_600, 'error', 8360) === Rating.Good,
+  assert(suggestedGrade('mc', 'correct', 21_600, 'error', 8360) === Rating.Good,
     'тот же ответ на карточке разбора — обычный: у неё свой пол')
-  assert(suggestedGrade('mc', true, false, 21_600, 'error', 21_649) === Rating.Good,
+  assert(suggestedGrade('mc', 'correct', 21_600, 'error', 21_649) === Rating.Good,
     'и на своей набранной медиане — тоже обычный, карточка выпускается из Learning')
   assert(slowThresholdMs('error', 8360) >= 45_000,
     'порог: у разбора свой пол — иначе холодный старт наказывает длинное условие')
   assert(slowThresholdMs('error', 21_649) === Math.round(21_649 * SLOW_FACTOR),
     'порог: набралась своя медиана — считаем от неё, а не от пола')
-  assert(suggestedGrade('mc', true, false, 60_000, 'error', 21_649) === Rating.Hard,
+  assert(suggestedGrade('mc', 'correct', 60_000, 'error', 21_649) === Rating.Hard,
     'минута на карточку разбора — всё-таки заминка, Hard не должен исчезнуть совсем')
   assert(slowThresholdMs('math', 7412) === 90_000, 'порог математики от правки не сдвинулся')
 
@@ -803,6 +803,49 @@ function dontKnowChecks(): void {
   passed++
   passed++
   passed++
+  passed++
+
+  /* C10: во «впиши слово» синоним из колоды — не промах.
+
+     Живой случай 21.08.2026: «The lawyer cited three precedents to ______ her
+     central argument», введено bolster при загаданном buttress. Оба слова есть в
+     колоде, оба значат «подкреплять», оба сочетаются с argument. Прежде это давало
+     «Мимо» и Rating.Again: карточка уходила в переучивание, difficulty росла — за
+     верно вспомненное значение. Считать верным тоже нельзя: тогда buttress никогда
+     не выучится, его будет подменять привычный синоним. Отсюда Hard. */
+  {
+    const слово = (word: string, ru: string): CardView => {
+      const v = baseView(word, 1, 'vocab')
+      v.pos = 'verb'
+      v.meaning_ru = ru
+      return v
+    }
+    const buttress = слово('buttress', 'подкреплять, укреплять')
+    const bolster = слово('bolster', 'подкреплять, поддерживать (довод, позицию, дух)')
+    const felicitate = слово('felicitate', 'поздравлять')
+    const колода = [buttress, bolster, felicitate]
+
+    assert(checkTyped('bolster', 'buttress') === 'wrong',
+      'предпосылка: побуквенно синоним — не тот ответ, и опечаткой он тоже не считается')
+    assert(typedTwin('bolster', buttress, колода)?.word === 'bolster',
+      'репро: синоним из колоды опознан по общему значению')
+    assert(typedTwin('felicitate', buttress, колода) === null,
+      'слово с другим значением двойником не считается — ловушка по написанию остаётся ошибкой')
+    assert(typedTwin('buttrss', buttress, колода) === null,
+      'опечатка не выдаётся за синоним: её нет в колоде')
+    assert(typedTwin('support', buttress, колода) === null,
+      'слово вне колоды не прощается: общее значение доказать нечем')
+    assert(typedTwin('buttress', buttress, колода) === null, 'сам ответ не двойник самому себе')
+
+    assert(suggestedGrade('type', 'twin', 1_000, 'vocab', 8_000) === Rating.Hard,
+      'репро: синоним — Hard, а не Again; значение вспомнено, форма нет')
+    assert(suggestedGrade('type', 'wrong', 1_000, 'vocab', 8_000) === Rating.Again,
+      'настоящий промах остаётся Again')
+    assert(suggestedGrade('type', 'twin', 90_000, 'vocab', 8_000) === Rating.Hard,
+      'медленный синоним не проваливается в Again: скорость тут уже ничего не решает')
+    assert(suggestedGrade('intro', 'twin') === null, 'в знакомстве оценки нет и у синонима')
+  }
+  console.log('  ✓ C10: синоним вместо загаданного слова — Hard и вторая попытка, а не переучивание')
   passed++
 }
 

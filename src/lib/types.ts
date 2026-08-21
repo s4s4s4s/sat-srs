@@ -75,6 +75,7 @@ export interface JournalLine {
   format?: string      // intro | reveal | mc | type | prep
   correct?: boolean    // объективный результат (mc/type/prep); у reveal отсутствует
   typo?: boolean       // ошибка ввода = опечатка (Левенштейн), а не незнание — исключается из retention
+  twin?: boolean       // введён синоним из колоды (C10): значение вспомнено, форма — нет; из retention исключается
   gave_up?: boolean    // C3/C4: пользователь сам признал незнание («не помню» / пустой ввод), не ошибка ввода
   cause?: string       // самоотчёт после ошибки: правило | слово | misread | логика | тайминг
   kind?: string        // тип карточки, если не vocab

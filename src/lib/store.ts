@@ -4,7 +4,7 @@ import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
-import { makeScheduler, effectiveRetention, holdOnIntroDay, homeCounts, isLevelled, DUE_CAP, type Section } from './scheduler'
+import { makeScheduler, effectiveRetention, holdOnIntroDay, homeCounts, isLevelled, DUE_CAP, type Section, type TypeVerdict } from './scheduler'
 import { parseMetrics, isLeech, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
 import { newId, newIntroducedOn, matureRetention, sessionAccuracy, READ_CAP_MINUTES } from './journal'
@@ -266,7 +266,7 @@ export function unsyncedCount(): number {
 }
 
 /** Оценка учебной единицы (карточка × навык): FSRS → запись в свой fsrs-блок файла (dirty) → строка журнала. */
-export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, correct?: boolean, gaveUp?: boolean, typo?: boolean): Promise<{ card: FsrsCard; lineId: string }> {
+export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, verdict?: TypeVerdict, gaveUp?: boolean): Promise<{ card: FsrsCard; lineId: string }> {
   const rec = state.cards.find(c => c.path === item.view.path)
   if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${item.view.path}`)
   const fsrsKey = item.skill === 'prep' ? 'fsrs_prep' : 'fsrs'
@@ -298,9 +298,11 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     slug: item.view.slug,
     skill: item.skill,
     format,
-    ...(correct === undefined ? {} : { correct }),
+    ...(verdict === undefined ? {} : { correct: verdict !== 'wrong' }),
     // опечатка (Левенштейн) при вводе — не незнание: помечаем, чтобы исключить из retention
-    ...(typo ? { typo: true } : {}),
+    ...(verdict === 'typo' ? { typo: true } : {}),
+    // C10: синоним вместо загаданного слова — тоже не незнание, и тоже не чистый сигнал retention
+    ...(verdict === 'twin' ? { twin: true } : {}),
     // C3/C4: «не помню» / пустой ввод — честное признание незнания, семантически ≠ неверный ответ
     ...(gaveUp ? { gave_up: true } : {}),
     ...(item.view.kind !== 'vocab' ? { kind: item.view.kind } : {}),

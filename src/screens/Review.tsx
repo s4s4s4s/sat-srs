@@ -4,7 +4,8 @@ import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJo
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, suggestedGrade, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP,
+  pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, typedTwin, suggestedGrade, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP,
+  type TypeVerdict,
   earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
 } from '../lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, type OrderCtx } from '../lib/session'
@@ -188,7 +189,7 @@ export default function Review() {
   const [revealed, setRevealed] = useState(false)
   const [picked, setPicked] = useState<string | null>(null) // выбранный вариант mc/prep
   const [typed, setTyped] = useState('')
-  const [verdict, setVerdict] = useState<'correct' | 'typo' | 'wrong' | null>(null)
+  const [verdict, setVerdict] = useState<TypeVerdict | null>(null)
   // C3/C4: карточка раскрыта через «не помню» (или пустой ввод) — ответ показан, но оценку
   // не спрашиваем: рейтинг фиксирован Again. Кнопки «Хорошо»/«Легко» в этом случае не рисуются.
   const [gaveUp, setGaveUp] = useState(false)
@@ -310,7 +311,7 @@ export default function Review() {
   const suggested = task && gaveUp
     ? Rating.Again
     : task && verdict !== null
-    ? suggestedGrade(task.format === 'reveal' ? 'type' : task.format, verdict === 'correct', verdict === 'typo', answeredMs.current, task.item.view.kind, medianForKind(speed, task.item.view.kind))
+    ? suggestedGrade(task.format === 'reveal' ? 'type' : task.format, verdict, answeredMs.current, task.item.view.kind, medianForKind(speed, task.item.view.kind))
     : null
 
   async function finish(queueEmpty: boolean) {
@@ -501,14 +502,20 @@ export default function Review() {
     if (!task || revealed) return
     // C4: пустой/пробельный ответ — не ошибка ввода, а «не помню» (тот же путь, что кнопка)
     if (isGiveUp(value)) { giveUp(); return }
-    const ok = byTyping || task.format === 'type'
+    const вводом = byTyping || task.format === 'type'
+    const ok: TypeVerdict = вводом
       ? (task.item.view.answerNum ? checkNumeric(value, task.answer) : checkTyped(value, task.answer))
       : value.trim().toLowerCase() === task.answer.toLowerCase() ? 'correct' : 'wrong'
+    /* C10: синоним из колоды — законный ответ на то же предложение, и «Мимо» за него
+       отправляло карточку в переучивание за верно вспомненное значение. Вариантам это
+       не нужно: там двойник не попадает в список (C9). */
+    const итог: TypeVerdict = ok === 'wrong' && вводом && !task.item.view.answerNum
+      && typedTwin(value, task.item.view, deck) ? 'twin' : ok
     answeredMs.current = Date.now() - shownAt.current
     setPicked(value)
-    setVerdict(ok as 'correct' | 'typo' | 'wrong')
-    if (ok === 'typo') play('typo')
-    else soundOutcome(ok === 'correct')
+    setVerdict(итог)
+    if (итог === 'typo' || итог === 'twin') play('typo')
+    else soundOutcome(итог === 'correct')
     setRevealed(true)
   }
 
@@ -542,10 +549,9 @@ export default function Review() {
       if (verdict === null && task.format !== 'intro') soundOutcome(g > Rating.Again)
 
       const prevState = task.item.fsrs.state
-      const isTypo = verdict === 'typo'
       let rated
       try {
-        rated = await rateItem(task.item, g, elapsed, task.format, verdict === null ? undefined : verdict !== 'wrong', gaveUp, isTypo)
+        rated = await rateItem(task.item, g, elapsed, task.format, verdict ?? undefined, gaveUp)
       } catch {
         // карточка исчезла (синк удалил/тьютор переименовал) — пропускаем, не блокируя сессию
         await advance(null)
@@ -593,9 +599,10 @@ export default function Review() {
       if (wrong && prevState === State.Review && !gaveUp) {
         pendingAdvance.current = { next: { ...task.item, fsrs: rated.card }, atFront: false }
         setCauseFor(rated.lineId)
-      } else if (isTypo) {
-        // опечатка: интервал FSRS не рушим (оценка Good), но слово переспрашивается в этом же
-        // уроке — вернём его в очередь через несколько экранов (A2-разрыв соблюдёт pickNext)
+      } else if (verdict === 'typo' || verdict === 'twin') {
+        // опечатка и синоним (C10): интервал FSRS не рушим, но слово переспрашивается в этом же
+        // уроке — вернём его в очередь через несколько экранов (A2-разрыв соблюдёт pickNext).
+        // Для синонима это и есть вторая попытка вспомнить загаданную форму.
         await advance({ ...task.item, fsrs: rated.card }, false, 3)
       } else {
         await advance({ ...task.item, fsrs: rated.card })
@@ -845,10 +852,11 @@ export default function Review() {
           <div className="rev-answer">
             {verdict && (
               <div className={`verdict verdict-${verdict} verdict-row`}>
-                <FlameBuddy size={34} mood={verdict === 'correct' ? 'happy' : verdict === 'typo' ? 'idle' : 'sad'} />
+                <FlameBuddy size={34} mood={verdict === 'correct' ? 'happy' : verdict === 'typo' || verdict === 'twin' ? 'idle' : 'sad'} />
                 <span>
                   {verdict === 'correct' ? (combo >= 3 ? `Верно! Серия ×${combo + 1}` : 'Верно!')
                     : verdict === 'typo' ? `Почти — опечатка: вы ввели «${typed.trim()}»`
+                    : verdict === 'twin' ? `Не мимо: «${typed.trim()}» значит то же — но здесь загадано ${card.word}`
                     : isPrep ? `Правильно: ${card.word} ${card.prep}`
                     : isNumeric ? <>Мимо — ответ: <Tex text={task.answer} /></>
                     : task.format === 'type' ? <>Мимо — вы ввели «{typed.trim()}»</>
@@ -886,7 +894,7 @@ export default function Review() {
         )}
       </div>
 
-      <div className={`rev-bottom${revealed && verdict ? (verdict === 'wrong' ? ' is-wrong' : verdict === 'typo' ? ' is-typo' : ' is-right') : ''}`}>
+      <div className={`rev-bottom${revealed && verdict ? (verdict === 'wrong' ? ' is-wrong' : verdict === 'typo' ? ' is-typo' : verdict === 'twin' ? ' is-twin' : ' is-right') : ''}`}>
         {causeFor ? (
           <div className="cause-wrap">
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 4 }}><FlameBuddy size={50} mood="think" /></div>

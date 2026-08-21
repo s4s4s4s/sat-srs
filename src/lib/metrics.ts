@@ -233,7 +233,7 @@ const seal = (b: Bucketed): Bucketed => ({ ...b, pct: b.n ? Math.round((b.pass /
 
 /** Зрелый показ, засчитываемый в retention: review-строка, prev_state=Review, не опечатка. */
 function isMatureShow(l: JournalLine): boolean {
-  return l.type === 'review' && l.prev_state === State.Review && !l.typo
+  return l.type === 'review' && l.prev_state === State.Review && !l.typo && !l.twin
 }
 
 export type IntervalBucket = '<1' | '1-3' | '4-10' | '11-30' | '30+'
