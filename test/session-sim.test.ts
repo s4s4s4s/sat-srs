@@ -18,7 +18,7 @@ import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
-  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, sharesMeaning,
+  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, LAST_LEARNING_STEP, sharesMeaning,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
   pickTask, meaningDistractors, REVIEW_CYCLE, NEW_STOP_DATE, kindRank, expandItems, freshItems
 } from '../src/lib/scheduler'
@@ -717,8 +717,8 @@ function dontKnowChecks(): void {
     assert(сырой.state === State.Review, 'FSRS на второй ступени карточку выпускает')
     const held2 = holdOnIntroDay(held1, сырой, позже, '2026-08-20')
     assert(held2.state === State.Learning, 'в день знакомства выпуск откладывается')
-    assert(held2.learning_steps === held1.learning_steps,
-      'репро: ступень обучения сохраняется, а не обнуляется вместе с состоянием')
+    assert(held2.learning_steps === LAST_LEARNING_STEP,
+      'репро: отложенная карточка стоит на последней ступени, а не обнуляется вместе с состоянием')
     assert(held2.due.getTime() === endOfStudyDay(позже).getTime(),
       'отложенная карточка ждёт конца учебного дня, а не десяти минут')
     assert(held2.due.getTime() - позже.getTime() > 30 * 60_000,
@@ -736,8 +736,24 @@ function dontKnowChecks(): void {
     const { card: сырой4 } = f.next(held3, завтра, Rating.Good)
     const выпуск = holdOnIntroDay(held3, сырой4, завтра, '2026-08-20')
     assert(выпуск.state === State.Review, 'назавтра карточка уходит в Review, отсрочка не вечная')
+
+    /* Второй заход того же дня. Easy выпускает карточку с ЛЮБОЙ ступени, в том
+       числе с нулевой, и сохранение `prev.learning_steps` парковало её на рунг
+       ниже заслуженного: назавтра верный ответ давал не выпуск, а «ещё десять
+       минут» — то есть возврат в этот же урок и в следующий. */
+    const деньЛёгкой = new Date('2026-08-20T21:00:00+04:00')
+    const { card: лёгкая } = f.next(createEmptyCard(деньЛёгкой), деньЛёгкой, Rating.Easy)
+    assert(лёгкая.state === State.Review && лёгкая.learning_steps === 0,
+      'предпосылка репро: Easy выпускает карточку с нулевой ступени')
+    const держимЛёгкую = holdOnIntroDay(createEmptyCard(деньЛёгкой), лёгкая, деньЛёгкой, '2026-08-20')
+    assert(держимЛёгкую.state === State.Learning, 'выпуск по Easy тоже откладывается до завтра')
+    const назавтра = new Date('2026-08-21T10:00:00+04:00')
+    const { card: сыраяЛёгкая } = f.next(держимЛёгкую, назавтра, Rating.Good)
+    const итогЛёгкой = holdOnIntroDay(держимЛёгкую, сыраяЛёгкая, назавтра, '2026-08-20')
+    assert(итогЛёгкой.state === State.Review,
+      'репро: один верный ответ назавтра выпускает отложенную карточку, а не двигает её на десять минут')
   }
-  console.log('  ✓ отложенный выпуск: ступень сохраняется, карточка ждёт конца дня, назавтра выпускается')
+  console.log('  ✓ отложенный выпуск: последняя ступень, ожидание до конца дня, один верный ответ назавтра')
 
   /* C9: у задания с вариантами верный ответ ровно один.
 
