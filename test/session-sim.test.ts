@@ -18,7 +18,7 @@ import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
-  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, makeScheduler,
+  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, sharesMeaning,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
   pickTask, meaningDistractors, REVIEW_CYCLE, NEW_STOP_DATE, kindRank, expandItems, freshItems
 } from '../src/lib/scheduler'
@@ -738,6 +738,51 @@ function dontKnowChecks(): void {
     assert(выпуск.state === State.Review, 'назавтра карточка уходит в Review, отсрочка не вечная')
   }
   console.log('  ✓ отложенный выпуск: ступень сохраняется, карточка ждёт конца дня, назавтра выпускается')
+
+  /* C9: у задания с вариантами верный ответ ровно один.
+
+     Живой случай 21.08.2026: «The new protocol was meant to ______ collaboration
+     between the two labs», варианты facilitate и foster. foster collaboration —
+     обычное английское сочетание, ответ засчитали мимо. Оба слова есть в колоде,
+     и значения у них пересекаются: «облегчать, способствовать» и «способствовать,
+     взращивать». Замер по живой колоде: 87 таких пар, 128 карточек из 418 (31%).
+
+     Ловушка по написанию значений не делит и остаётся дистрактором — это она и
+     проверяет знание. */
+  {
+    const близнец = (word: string, ru: string, confusables: string[] = []): CardView => {
+      const v = baseView(word, 1, 'vocab')
+      v.pos = 'verb'
+      v.meaning_ru = ru
+      v.confusables = confusables
+      v.fsrs = { ...v.fsrs, reps: 3, state: State.Review }   // видённое слово — годится в дистракторы
+      return v
+    }
+    const facilitate = близнец('facilitate', 'облегчать, способствовать', ['felicitate', 'foster'])
+    const foster = близнец('foster', 'способствовать, взращивать')
+    const felicitate = близнец('felicitate', 'поздравлять')
+    const hinder = близнец('hinder', 'препятствовать, мешать')
+    const converge = близнец('converge', 'сходиться в одной точке (об оценках, мнениях)')
+    const diverge = близнец('diverge', 'расходиться (о путях, мнениях, линиях развития)')
+
+    assert(sharesMeaning(facilitate, foster), 'репро: facilitate и foster делят значение «способствовать»')
+    assert(!sharesMeaning(facilitate, hinder), 'разные значения двойниками не считаются')
+    assert(!sharesMeaning(converge, diverge),
+      'пояснение в скобках — не значение: антонимы не должны выпасть из дистракторов из-за общих «мнениях»')
+
+    const deck = [facilitate, foster, felicitate, hinder, converge, diverge]
+    const слова = mcDistractors(facilitate, deck, 3)
+    assert(!слова.map(s => s.toLowerCase()).includes('foster'),
+      'репро: слово-двойник не предлагается вариантом — в предложении оно тоже верно')
+    assert(слова.map(s => s.toLowerCase()).includes('felicitate'),
+      'ловушка по написанию остаётся: значения не делит, знание проверяет')
+
+    const значения = meaningDistractors(facilitate, deck, 3)
+    assert(!значения.includes(foster.meaning_ru),
+      'в обратном режиме значение-двойник тоже не вариант')
+  }
+  console.log('  ✓ C9: слово-двойник не попадает в варианты ни прямым режимом, ни обратным')
+  passed++
   passed++
   passed++
   passed++

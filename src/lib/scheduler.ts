@@ -513,6 +513,60 @@ export const REVIEW_CYCLE: ReadonlyArray<{ format: Format; cue: Cue }> = [
 ]
 
 /**
+ * Части значения карточки: «облегчать, способствовать» → {облегчать, способствовать}.
+ *
+ * Пояснения в скобках выбрасываются: «расходиться (о путях, мнениях)» — это не
+ * значение, а пример употребления. По ним слова совпадают ложно: converge и
+ * diverge — антонимы, но «мнениях» стоит у обоих, и без этой чистки правило
+ * выбросило бы лучший дистрактор к слову вместо худшего.
+ */
+function glossParts(v: CardView): Set<string> {
+  return new Set(
+    (v.meaning_ru || '')
+      .toLowerCase()
+      .replace(/\([^)]*\)/g, ' ')
+      .split(/[,;/]| или /)
+      .map(s => s.trim())
+      .filter(s => s.length > 2)
+  )
+}
+
+/**
+ * Двойник по значению — слово, которое в том же предложении тоже верно.
+ *
+ * C9: такое слово не может быть дистрактором. «The new protocol was meant to
+ * ______ collaboration between the two labs» с вариантами facilitate и foster
+ * не имеет одного верного ответа: foster collaboration — обычное английское
+ * сочетание, и ученик, выбравший его, получает «мимо» за верный ответ. Замер
+ * 21.08.2026 по живой колоде: 87 пар словарных карточек делят хотя бы одно
+ * значение, это 128 карточек из 418 (31%) — то есть у трети словаря есть
+ * двойник, которого выборка дистракторов раньше могла подставить.
+ *
+ * Признак — общая часть русского значения. Он строгий (facilitate «облегчать,
+ * способствовать» и alleviate «облегчать (боль)» в одном предложении вряд ли
+ * взаимозаменимы, а правило их разведёт), и это верная сторона ошибки: пул
+ * дистракторов — сотни слов раздела, потеря двух не стоит ничего, а второй
+ * верный вариант стоит доверия к упражнению.
+ *
+ * Авторские ловушки тьютора проверяются тем же правилом, а не берутся на веру:
+ * ловушка, которая тоже верна, — не ловушка. Ловушки по написанию (facilitate /
+ * felicitate) значений не делят и проверку проходят.
+ */
+export function meaningTwin(card: CardView): (other: CardView) => boolean {
+  const parts = glossParts(card)
+  if (!parts.size) return () => false
+  return other => {
+    for (const p of glossParts(other)) if (parts.has(p)) return true
+    return false
+  }
+}
+
+/** Тот же вопрос про одну пару — для тестов и вызовов вне выборки дистракторов. */
+export function sharesMeaning(a: CardView, b: CardView): boolean {
+  return meaningTwin(a)(b)
+}
+
+/**
  * Дистракторы-значения для обратного режима (`cue: 'word'`).
  *
  * Здесь узнавание по новизне не работает в принципе — все варианты русские, — но
@@ -524,8 +578,11 @@ export function meaningDistractors(card: CardView, deck: CardView[], n = 3): str
   const answer = (card.meaning_ru || '').trim()
   const taken = new Set([answer.toLowerCase()])
   const sec = sectionOf(card)
+  // C9: значение-двойник среди вариантов делает верными сразу два (см. meaningTwin)
+  const двойник = meaningTwin(card)
   const pool = deck.filter(c =>
-    !c.suspended && c.path !== card.path && sectionOf(c) === sec && !!(c.meaning_ru || '').trim())
+    !c.suspended && c.path !== card.path && sectionOf(c) === sec && !!(c.meaning_ru || '').trim() &&
+    !двойник(c))
   const samePos = (c: CardView) => c.pos === card.pos
   // 999 — «без уровня» (связки, SEC): такие между собой не роднее, чем любые другие
   const sameLevel = (c: CardView) => card.level !== 999 && c.level === card.level
@@ -668,14 +725,21 @@ export function mcDistractors(card: CardView, deck: CardView[], n = 3): string[]
   const AUTHORED_KEEP = 1
   const sec = sectionOf(card)
   const taken = new Set([card.word.toLowerCase()])
+  const двойник = meaningTwin(card)   // C9: слово-двойник тоже верно в этом предложении
   const pool = deck.filter(c =>
-    !c.suspended && c.word.toLowerCase() !== card.word.toLowerCase() && sectionOf(c) === sec)
+    !c.suspended && c.word.toLowerCase() !== card.word.toLowerCase() && sectionOf(c) === sec &&
+    !двойник(c))
   const seenWords = new Set(pool.filter(isSeenWord).map(c => c.word.toLowerCase()))
   /* Авторский дистрактор тоже проверяется на знакомость: 71% confusables не
      встречаются в колоде больше нигде, и незнакомая ловушка выдаёт ответ ровно так же,
      как незнакомый случайный сосед. Знакомые авторские идут первыми, незнакомые
      остаются в хвосте — как запас, когда живых слов не хватает. */
-  const authored = shuffle(card.confusables.filter(c => c && c.toLowerCase() !== card.word.toLowerCase()))
+  const двойникПоСловарю = (w: string) => {
+    const c = deck.find(x => x.word.toLowerCase() === w.toLowerCase())
+    return !!c && двойник(c)
+  }
+  const authored = shuffle(card.confusables.filter(c =>
+    c && c.toLowerCase() !== card.word.toLowerCase() && !двойникПоСловарю(c)))
     .sort((a, b) => Number(seenWords.has(b.toLowerCase())) - Number(seenWords.has(a.toLowerCase())))
   const out: string[] = []
   for (const a of authored.slice(0, AUTHORED_KEEP)) {
