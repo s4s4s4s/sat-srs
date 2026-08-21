@@ -2,12 +2,13 @@ import { State } from 'ts-fsrs'
 import type { CardRec, CardView, JournalRec, JournalLine } from './types'
 import { cardView } from './yamlfm'
 import { addDaysKey, dayKey, isoLocal } from './daytime'
-import { byTime, minutesByDay, readMinutesByDay, streak, trueRetention30, retentionByFormat, READ_MIN_MINUTES, type PauseRange } from './journal'
-import { activeLevel, levelStats, isLevelled, EXAM_DATE } from './scheduler'
+import { minutesByDay, readMinutesByDay, streak, trueRetention30, retentionByFormat, READ_MIN_MINUTES, type PauseRange } from './journal'
+import { activeLevel, levelStats, isLevelled, EXAM_DATE, SECTIONS } from './scheduler'
 import {
-  examReady, maturity, pace, retentionByInterval, isLeechCard, ddmm,
+  examReady, maturity, pace, retentionByInterval, retentionBySection, maturityBySection,
+  speedStats, typoSplit, gaveUpShare, planVsFact, isLeechCard, orphanedLines, ddmm,
   PRIMARY_DATE, NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS,
-  INTERVAL_LABELS, type IntervalBucket
+  INTERVAL_LABELS, SECTION_LABELS, type IntervalBucket
 } from './metrics'
 
 /**
@@ -19,43 +20,9 @@ import {
 const STATE_RU: Record<number, string> = { 0: 'new', 1: 'learning', 2: 'review', 3: 'relearning' }
 
 const fmtDay = (d: Date) => dayKey(d)
-const dueDay = (iso: string) => {
-  const d = new Date(iso)
-  return isNaN(d.getTime()) ? '' : fmtDay(d)
-}
 
 function pct(part: number, total: number): string {
   return total ? `${Math.round((part / total) * 100)}% (n=${total})` : '—'
-}
-
-/** План vs факт: по каждой паре соседних ревью одного (слово×навык) — планировался день X, случился день Y */
-function planVsFact(lines: JournalLine[], today: string) {
-  const from = addDaysKey(today, -6)
-  const byItem = new Map<string, JournalLine[]>()
-  for (const l of lines) {
-    if (l.type !== 'review' || !l.slug) continue
-    const key = `${l.slug}#${l.skill ?? 'recall'}`
-    if (!byItem.has(key)) byItem.set(key, [])
-    byItem.get(key)!.push(l)
-  }
-  const perDay = new Map<string, { done: number; onTime: number; delaySum: number }>()
-  for (const seq of byItem.values()) {
-    seq.sort(byTime)
-    for (let i = 1; i < seq.length; i++) {
-      const planned = seq[i - 1].due ? dueDay(seq[i - 1].due!) : ''
-      const actual = seq[i].day
-      if (!planned || !actual || actual < from || actual > today) continue
-      // учебные шаги внутри дня (learning) не считаем просрочкой/планом — интересуют межднёвные интервалы
-      if (planned === seq[i - 1].day && actual === planned) continue
-      const delay = Math.round((Date.parse(actual) - Date.parse(planned)) / 86400_000)
-      const d = perDay.get(actual) ?? { done: 0, onTime: 0, delaySum: 0 }
-      d.done++
-      if (delay <= 0) d.onTime++
-      d.delaySum += Math.max(0, delay)
-      perDay.set(actual, d)
-    }
-  }
-  return perDay
 }
 
 export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date = new Date(), pause?: PauseRange | null): string {
@@ -77,6 +44,9 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   const minutes = minutesByDay(lines)
   const ret = trueRetention30(lines, today)
   const retF = retentionByFormat(lines, today)
+  const sp = speedStats(lines)
+  const ts = typoSplit(lines)
+  const gu = gaveUpShare(lines)   // за всю историю; дневной срез уже копится в _метрики.ndjson
 
   // прогноз нагрузки: due по учебным дням на 7 дней вперёд (просроченное — в «сегодня»)
   const load = new Map<string, number>()
@@ -160,6 +130,24 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   const ri = retentionByInterval(lines)
   const riParts = (Object.keys(ri) as IntervalBucket[]).map(k => `${INTERVAL_LABELS[k]} ${ri[k].pct === null ? '—' : ri[k].pct + '%'}${ri[k].n ? ` (n=${ri[k].n})` : ''}`)
   out.push(`- Retention по бакетам интервала: ${riParts.join(' · ')}`)
+  // Разрез по разделам (слова/грамматика/математика) — до 17.08.2026 отсутствовал везде:
+  // ни retention, ни зрелость не показывали, какой раздел проседает.
+  const rs = retentionBySection(views, lines)
+  const rsParts = SECTIONS.map(s => {
+    const b = rs.get(s) ?? { pct: null as number | null, n: 0, pass: 0 }
+    return `${SECTION_LABELS[s]} ${b.pct === null ? '—' : b.pct + '%'}${b.n ? ` (n=${b.n})` : ''}`
+  })
+  out.push(`- Retention по разделам: ${rsParts.join(' · ')}`)
+  // Join по slug (retentionByLevel/Domain/Section выше) молча теряет строку, если карточки
+  // со slug уже нет в колоде (переработка пиявки, переименование файла) — тьютору нужно
+  // видеть это явно, а не догадываться по тихо просевшим процентам.
+  const orph = orphanedLines(views, lines)
+  out.push(orph.n
+    ? `- Осиротевшие строки журнала (slug карточки пропал из колоды — переработка/переименование): **${orph.n} из ${orph.total} (${Math.round(orph.share * 100)}%)** · ${orph.slugs.map(s => `${s.slug} ×${s.n}`).join(', ')}`
+    : `- Осиротевшие строки журнала: нет — все ${orph.total} строк со slug привязаны к карточкам колоды`)
+  const ms = maturityBySection(active)
+  const msParts = SECTIONS.map(s => `${SECTION_LABELS[s]} review ${ms[s].reviewCount}/${ms[s].total} · зрелых ${ms[s].matureCount}/${ms[s].total}`)
+  out.push(`- В review / зрелых по разделам: ${msParts.join(' · ')}`)
   out.push('')
 
   out.push('## Сводка', '')
@@ -174,6 +162,15 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   const fmtNames: Record<string, string> = { mc: 'MC', type: 'ввод', prep: 'предлоги', reveal: 'показ' }
   const retParts = Object.entries(retF).map(([f, v]) => `${fmtNames[f] ?? f} ${pct(v.pass, v.total)}`)
   if (retParts.length) out.push(`- По форматам: ${retParts.join(' · ')}`)
+  /* Три метрики ниже (скорость по видам, «не помню», опечатки vs незнание) считались
+     в metrics.ts и раньше, но не попадали ни на экран, ни в отчёт — тьютор их не видел
+     нигде. «Не помню» — прямой признак того, что ученик перестал пытаться вспомнить. */
+  const kindNames: Record<string, string> = { vocab: 'слово', grammar: 'грамматика', math: 'математика', error: 'разбор ошибки' }
+  const kindParts = Object.entries(sp.byKind).map(([k, v]) => `${kindNames[k] ?? k} ${(v.medianMs / 1000).toFixed(1)} c (n=${v.n})`)
+  if (kindParts.length) out.push(`- Скорость ответа по видам карточек (медиана): ${kindParts.join(' · ')}`)
+  out.push(`- «Не помню» вместо попытки вспомнить (вся история, интро не считается): ${pct(gu.gaveUp, gu.n)}`)
+  const typoTotal = ts.typos + ts.realMisses
+  out.push(`- Ошибки ввода слова: опечаток ${ts.typos} · настоящих незнаний ${ts.realMisses}${typoTotal ? ` (доля опечаток ${Math.round((ts.typos / typoTotal) * 100)}%, n=${typoTotal})` : ''}`)
   out.push('')
 
   out.push('## Нагрузка на 7 дней (план из FSRS)', '')

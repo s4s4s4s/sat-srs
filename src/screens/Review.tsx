@@ -9,8 +9,10 @@ import {
   newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
 } from '../lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, type OrderCtx } from '../lib/session'
+import { lessonProgress, DRILL_PER_SESSION } from '../lib/progress'
 import Tex from '../components/Tex'
 import { minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs } from '../lib/journal'
+import { NEW_PER_DAY, NEW_PER_LESSON } from '../lib/norms'
 import { speedStats } from '../lib/metrics'
 import { dayKey } from '../lib/daytime'
 import type { Format, SessionResult, StudyItem } from '../lib/types'
@@ -65,11 +67,23 @@ interface Task {
   cue: Cue          // по чему вспоминаем: пропуск в предложении, значение или само слово
 }
 
-/** Сколько раз добирать одно сегодняшнее новое слово за сессию (point 4), прежде чем счесть урок исчерпанным */
-const DRILL_PER_SESSION = 2
-
 /** Каждый пятый верный подряд звучит вехой серии вместо обычного «верно». */
 const STREAK_EVERY = 5
+
+/**
+ * Сравнение ответа ученика с эталоном: обрезка и регистр — с ОБЕИХ сторон.
+ *
+ * Раньше ввод сравнивался как `value.trim().toLowerCase() === answer.toLowerCase()`, а
+ * выбор варианта — как `o.toLowerCase() === answer.toLowerCase()`: эталон не обрезался
+ * ни там, ни там. Карточка, у которой в `answer` затесался краевой пробел, в режиме
+ * ввода не засчитала бы верный ответ НИКОГДА, а в режиме вариантов ни один вариант не
+ * подсветился бы как правильный. Замер живой колоды 21.08.2026: краевых пробелов в
+ * `word`/`prep`/`answer` сейчас нет ни в одном из 663 файлов колоды — но карточки пишет
+ * тьютор, и цена одного пробела здесь несоразмерна цене одной функции.
+ */
+function sameAnswer(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase()
+}
 
 /* Индекс последнего показанного примера. Живёт в localStorage, а не в памяти модуля:
    PWA открывается заново на каждый урок, и Map обнулялась вместе с ним — ротация
@@ -173,11 +187,15 @@ export default function Review() {
      дней, а уроков в день должно быть несколько. */
   const [queue, setQueue] = useState<StudyItem[] | null>(null)
   useEffect(() => {
-    // новых за урок — не больше newPerLesson (и не больше остатка дневного лимита);
+    // новых за урок — не больше NEW_PER_LESSON (и не больше остатка дневного лимита);
     // режим «только повторение» — ноль новых
     const карточкиРаздела = views().filter(v => sectionOf(v) === section)
-    const dayLeft = newBudgetFor(карточкиРаздела, app.settings.newPerDay, currentJournal(), dayKey())
-    const budget = app.sessionReviewOnly ? 0 : Math.min(dayLeft, app.settings.newPerLesson || 3)
+    /* Дневная квота новых: обычно оптимум, а в уроке сверх нормы — максимум.
+       Стена «Всё повторено» при выбранном оптимуме и живом запасе до максимума —
+       не защита, а простой: до экзамена недели. Максимум остаётся границей. */
+    const dayQuota = app.sessionOverNorm ? NEW_PER_DAY.max : NEW_PER_DAY.norm
+    const dayLeft = newBudgetFor(карточкиРаздела, dayQuota, currentJournal(), dayKey())
+    const budget = app.sessionReviewOnly ? 0 : Math.min(dayLeft, NEW_PER_LESSON)
     dayNewLeft.current = dayLeft   // граница для добора новых сверх урочного лимита
     // point 3: слова, введённые сегодня в прошлых уроках и ещё не отработанные дважды,
     // принудительно добираются в этот урок (buildQueue дотягивает их из Learning с due на завтра)
@@ -202,11 +220,23 @@ export default function Review() {
     { text: string; busy: boolean; err: string; open: boolean; stage: WhyStage } | null
   >(null)
   const whyRef = useRef<HTMLDivElement>(null)
-  const [done, setDone] = useState(0)
+  /* Два счётчика вместо одного, и это не дубль.
+     `step` — номер перехода между экранами: по нему пересобирается задание и
+     перезапускается анимация тела урока. Растёт и тогда, когда экран показать не
+     удалось (знакомство без разделителя пропускается, см. эффект головы очереди).
+     `shown` — ПОКАЗОВ, которые ученик действительно увидел и закрыл; это числитель
+     полоски. Пропуск непоказанного знакомства его не трогает: раньше оба смысла
+     жили в одной переменной, и призрачный шаг двигал полоску без экрана. */
+  const [step, setStep] = useState(0)
+  const [shown, setShown] = useState(0)
   const [activeSec, setActiveSec] = useState(0)
   const [combo, setCombo] = useState(0)
   const [causeFor, setCauseFor] = useState<string | null>(null)
   const [needConfirm, setNeedConfirm] = useState<Grade | null>(null)
+  // ряд оценок поверх предложенной: раскрывается одним тапом, основной проход остаётся в один тап
+  const [gradesOpen, setGradesOpen] = useState(false)
+  // запись оценки не удалась — ответ не проглатываем, показываем строку и даём повторить
+  const [saveError, setSaveError] = useState('')
   const pendingAdvance = useRef<{ next: StudyItem; atFront: boolean } | null>(null)
   // слова, уже показанные интро в этой сессии: их New-показы дальше — отработка, не интро
   const introduced = useRef(new Set<string>())
@@ -216,7 +246,7 @@ export default function Review() {
   // поэтому входит в общий урочный лимит. Новые приоритетны, переznakomство берёт остаток.
   const introShown = useRef(0)
   // урочный лимит окон-знакомств; introBonus поднимает его, когда иначе уроку нечего показать
-  const baseIntroLimit = Math.max(1, app.settings.newPerLesson || 3)
+  const baseIntroLimit = Math.max(1, NEW_PER_LESSON)
   const introBonus = useRef(0)
   const introLimitNow = () => baseIntroLimit + introBonus.current
   // знакомств НОВЫХ слов за сессию и остаток дневного лимита — граница для добора сверх урочного
@@ -265,7 +295,8 @@ export default function Review() {
       const freshNew = head.fsrs.state === State.New && !introduced.current.has(itemKey(head))
       const overLimit = freshNew && introShown.current >= introLimitNow()
       if (overLimit || !hasSeparator(queue ?? [head], 0, orderCtx(queue ?? []))) {
-        void proceed((queue ?? []).slice(1))
+        // экран не показан — переход есть, ПОКАЗА нет: полоску это двигать не должно
+        void proceed((queue ?? []).slice(1), false)
         return
       }
     }
@@ -286,11 +317,46 @@ export default function Review() {
     setGaveUp(false)
     setWhy(null)
     setNeedConfirm(null)
+    setGradesOpen(false)
+    setSaveError('')
     shownAt.current = Date.now()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [head && `${head.view.path}#${head.skill}#${done}`])
+  }, [head && `${head.view.path}#${head.skill}#${step}`])
 
-  const total = done + (queue?.length ?? 0)
+  /* Полоска прогресса. Числитель — сделанные показы плюс текущий экран (он «сделан»
+     для отображения, иначе урок из четырёх экранов навсегда заканчивался бы на 75%).
+     Знаменатель — оценка всех показов урока (см. lib/progress.ts).
+
+     Храповик: показанный процент не уменьшается. Оценка знаменателя точна ровно до
+     того, что урок обязан сделать; заполнители и лишнее новое слово подтягиваются лишь
+     когда урок иначе встанет, и предсказать их нельзя. Без храповика такой добор
+     разворачивал полоску назад — ровно то, что ученик видел как сползание на 30 и 53
+     пункта. `Math.max` идемпотентен, поэтому двойной вызов memo в StrictMode безвреден. */
+  const pctFloor = useRef(0)
+  const progressPct = useMemo(() => {
+    if (!queue || !queue.length) return pctFloor.current
+    const ctx = orderCtx(queue)
+    const inQueue = new Set(queue.map(itemKey))
+    // обязательная работа урока, которая в очередь ещё не встала: без неё знаменатель
+    // занижен ровно на ту пачку, которую topUp() втащит, когда очередь опустеет
+    const pending = topUp().filter(i =>
+      !deferredToday.current.has(i.view.path) && !inQueue.has(itemKey(i)))
+    const raw = lessonProgress({
+      shown,
+      queue,
+      pending,
+      isIntro: it => screenFormat(it, ctx) === 'intro',
+      introsLeft: ctx.introsLeft,
+      introduced: introduced.current,
+      forced: forcedTodaySlugs(currentJournal(), dayKey()),
+      drilled: drilled.current,
+      fillerAvailable: ctx.hasFiller,
+      bonusNew: bonusNew(queue, MAX_INTRO_BONUS)
+    })
+    pctFloor.current = Math.max(pctFloor.current, raw)
+    return pctFloor.current
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, shown])
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -314,6 +380,11 @@ export default function Review() {
     : task && verdict !== null
     ? suggestedGrade(task.format === 'reveal' ? 'type' : task.format, verdict, answeredMs.current, task.item.view.kind, medianForKind(speed, task.item.view.kind))
     : null
+
+  /* Предложение выведено из объективного ответа — значит ученику есть что возразить:
+     вариант можно угадать, а «верно» уйдёт в FSRS как вспомненное слово. Честное «не
+     помню» (gaveUp) — не предложение, а признание, и переопределять там нечего (C3). */
+  const canOverrideGrade = suggested !== null && verdict !== null && !gaveUp
 
   async function finish(queueEmpty: boolean) {
     if (finished.current) return // двойной тап ✕ / финиш после финиша не пишет дубль session-строки
@@ -360,15 +431,18 @@ export default function Review() {
 
   /**
    * Последняя ступень лестницы: ещё одно новое слово сверх урочного лимита. Урочный лимит —
-   * про комфортный темп, ДНЕВНОЙ (`newPerDay`) — про нагрузку на память; здесь уступает
+   * про комфортный темп, ДНЕВНОЙ (`NEW_PER_DAY`) — про нагрузку на память; здесь уступает
    * только первый, и лишь когда альтернатива — пустой экран.
    */
-  function bonusNew(exclude: StudyItem[]): StudyItem[] {
+  function bonusNew(exclude: StudyItem[], n = 1): StudyItem[] {
     if (app.sessionReviewOnly) return []              // режим «только повторение» — новых не вводим
-    if (introBonus.current >= MAX_INTRO_BONUS) return []
-    if (freshIntros.current >= dayNewLeft.current) return []
+    // сколько слов эта ступень ещё вправе поднять: урочный запас и дневной остаток. Лестница
+    // берёт по одному (n = 1), полоске нужен весь остаток — она считает будущие экраны урока
+    const slots = Math.min(MAX_INTRO_BONUS - introBonus.current,
+      dayNewLeft.current - freshIntros.current, n)
+    if (slots <= 0) return []
     const used = new Set(exclude.map(itemKey))
-    return nextNewItems(deck, used, 1).filter(i => !deferredToday.current.has(i.view.path))
+    return nextNewItems(deck, used, slots).filter(i => !deferredToday.current.has(i.view.path))
   }
 
   /**
@@ -397,8 +471,11 @@ export default function Review() {
    *   3) заполнитель — повтор со сроком в пределах суток, поднятый заранее;
    *   4) единственное препятствие — 60-секундный разрыв A2 → короткая пауза, не конец урока;
    *   5) и только если добирать действительно нечего — урок завершён.
+   *
+   * `counted` = был ли закрыт настоящий показ. Пропуск непоказанного знакомства — тоже
+   * переход к следующему экрану, но полоску он двигать не имеет права.
    */
-  async function proceed(list: StudyItem[]) {
+  async function proceed(list: StudyItem[], counted = true) {
     let rest = list
     let pick = pickNext(rest, orderCtx(rest))
     if (pick.idx < 0) {
@@ -440,7 +517,8 @@ export default function Review() {
       const [it] = q.splice(pick.idx, 1)
       q.unshift(it)
     }
-    setDone(d => d + 1)
+    setStep(s => s + 1)
+    if (counted) setShown(n => n + 1)
     setQueue(q)
   }
 
@@ -506,7 +584,7 @@ export default function Review() {
     const вводом = byTyping || task.format === 'type'
     const ok: TypeVerdict = вводом
       ? (task.item.view.answerNum ? checkNumeric(value, task.answer) : checkTyped(value, task.answer))
-      : value.trim().toLowerCase() === task.answer.toLowerCase() ? 'correct' : 'wrong'
+      : sameAnswer(value, task.answer) ? 'correct' : 'wrong'
     /* C10: синоним из колоды — законный ответ на то же предложение, и «Мимо» за него
        отправляло карточку в переучивание за верно вспомненное значение. Вариантам это
        не нужно: там двойник не попадает в список (C9). */
@@ -553,11 +631,17 @@ export default function Review() {
       let rated
       try {
         rated = await rateItem(task.item, g, elapsed, task.format, verdict ?? undefined, gaveUp)
-      } catch {
-        // карточка исчезла (синк удалил/тьютор переименовал) — пропускаем, не блокируя сессию
-        await advance(null)
+      } catch (e) {
+        /* Запись оценки не удалась: карточка исчезла (синк удалил, тьютор переименовал)
+           либо не отдала IndexedDB. Молча ехать дальше нельзя — ответ ученика пропал бы,
+           а FSRS остался бы со старым интервалом, и слово вернулось бы «по графику»,
+           которого никто не пересчитывал. Показываем строку, карточку с экрана не
+           убираем: «Дальше» повторяет запись, а явная кнопка пропускает карточку,
+           если она действительно исчезла и повтор обречён. */
+        setSaveError(e instanceof Error ? e.message : String(e))
         return
       }
+      setSaveError('')
 
       creditedSec.current += Math.min(elapsed, cardTimeCap(task.item.view.kind)) / 1000
       sinceIntro.current++
@@ -640,8 +724,9 @@ export default function Review() {
           e.preventDefault()
           submitObjective(task.options[i])
         }
-      } else if (revealed && !suggested && !typing && ['1', '2', '3', '4'].includes(e.key)) {
-        // ручная оценка 1–4 только у «показа»; в объективных форматах оценка авто
+      } else if (revealed && !typing && (!suggested || gradesOpen) && ['1', '2', '3', '4'].includes(e.key)) {
+        // ручная оценка 1–4 у «показа», а в объективных форматах — когда ученик сам
+        // раскрыл ряд, чтобы переопределить предложенную оценку
         e.preventDefault()
         void grade(GRADES[Number(e.key) - 1].rating)
       }
@@ -767,12 +852,12 @@ export default function Review() {
     <div className={`screen s-review rev-wash wash-${section}`}>
       <div className="rev-top" style={{ position: 'relative' }}>
         <button className="rev-close" onClick={() => { if (!busy.current) void finish(false) }} aria-label="Завершить"><Close /></button>
-        <div className="progress"><div style={{ width: `${total ? (done / total) * 100 : 0}%` }} /></div>
+        <div className="progress"><div style={{ width: `${Math.round(progressPct * 1000) / 10}%` }} /></div>
         <div className={`combo${combo >= 3 ? ' on' : ''}`}><Flame size={13} /> ×{combo}</div>
         <div className={`rev-timer${minLeft === 0 ? ' done' : ''}`}><Timer size={15} />{minLeft === 0 ? '✓' : `${mm}:${ss}`}</div>
       </div>
 
-      <div className="rev-body" key={done}>
+      <div className="rev-body" key={step}>
         {isIntro ? (
           <>
             <span className={`pill ${isReintro ? 'pill-yellow' : 'pill-green'}`}>{isReintro ? 'Подзабылось' : 'Новое слово'}</span>
@@ -896,6 +981,14 @@ export default function Review() {
       </div>
 
       <div className={`rev-bottom${revealed && verdict ? (verdict === 'wrong' ? ' is-wrong' : verdict === 'typo' ? ' is-typo' : verdict === 'twin' ? ' is-twin' : ' is-right') : ''}`}>
+        {saveError && (
+          <div className="why-err" style={{ marginBottom: 8 }}>
+            Оценка не сохранилась: {saveError}. Ответ не записан — нажмите ещё раз.
+            <button className="intro-know" onClick={() => { setSaveError(''); void advance(null) }}>
+              Пропустить карточку
+            </button>
+          </div>
+        )}
         {causeFor ? (
           <div className="cause-wrap">
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 4 }}><FlameBuddy size={50} mood="think" /></div>
@@ -956,9 +1049,9 @@ export default function Review() {
             {(task.format === 'mc' || task.format === 'prep') && (
               <div className="mc-stack answered">
                 {task.options
-                  .filter(o => o.toLowerCase() === task.answer.toLowerCase() || o === picked)
+                  .filter(o => sameAnswer(o, task.answer) || o === picked)
                   .map(o => {
-                    const isAnswer = o.toLowerCase() === task.answer.toLowerCase()
+                    const isAnswer = sameAnswer(o, task.answer)
                     return (
                       <button key={o} disabled className={`mc-option ${isAnswer ? 'mc-right' : 'mc-wrong'}`}>
                         <Tex text={o} />
@@ -973,10 +1066,38 @@ export default function Review() {
               {why?.open ? 'Свернуть разбор' : 'Почему?'}
             </button>
             {suggested ? (
-              /* объективный результат — оценка определена автоматически, выбор не нужен */
+              /* Объективный результат — оценка предложена автоматически, и обычный проход
+                 остаётся в один тап: «Дальше». Но предложение — не факт: угаданный из четырёх
+                 вариантов ответ приложение видит как «верно», а ученик знает, что слова не
+                 помнит, и уходило это в FSRS как знание. Ряд оценок разворачивается одним
+                 тапом рядом. Честное «не помню» (gaveUp) переопределять нечем — там оценка
+                 и так `Заново`, и ряд не рисуется (C3). */
               <>
                 <button className="btn btn-green btn-lg" onClick={() => void grade(suggested)}>Дальше</button>
-                <div className="hint-keys kb-only">Enter — дальше</div>
+                {canOverrideGrade && gradesOpen ? (
+                  <>
+                    <div className="grades">
+                      {GRADES.map(g => (
+                        <button
+                          key={g.key}
+                          className={`btn grade-btn ${GRADE_CLASS[g.rating]}${g.rating === suggested ? ' suggested' : ''}`}
+                          onClick={() => void grade(g.rating)}
+                        >
+                          {g.label}
+                          <span className="iv">{intervalLabel(scheduler, task.item.fsrs, g.rating, new Date())}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="hint-keys">Своя оценка решает, когда слово вернётся<span className="kb-only"> · клавиши 1–4</span></div>
+                  </>
+                ) : (
+                  <>
+                    {canOverrideGrade && (
+                      <button className="intro-know" onClick={() => setGradesOpen(true)}>Оценить самому</button>
+                    )}
+                    <div className="hint-keys kb-only">Enter — дальше</div>
+                  </>
+                )}
               </>
             ) : (
               /* показ (learning-шаг) — объективного сигнала нет, оценивает пользователь */

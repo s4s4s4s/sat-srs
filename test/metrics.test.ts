@@ -9,22 +9,27 @@
  *
  * Запуск: `npm run test:metrics` (esbuild бандлит файл и node его исполняет).
  */
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { fsrs, generatorParameters, State, type Card as FsrsCard } from 'ts-fsrs'
 import type { CardView, JournalLine } from '../src/lib/types'
 import {
   examReady, maturity, pace, reviewCount, retentionByInterval, retentionByLevel, retentionByDomain,
   speedStats, typoSplit, gaveUpShare, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
-  intervalBucketOf, enoughForPct, isLeechCard,
+  intervalBucketOf, enoughForPct, isLeechCard, orphanedLines,
   PRIMARY_DATE, NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MIN_N_FOR_PCT,
   MATURE_STABILITY_DAYS, READY_R
 } from '../src/lib/metrics'
 import { dayKey, addDaysKey } from '../src/lib/daytime'
+import { parseMd, cardView } from '../src/lib/yamlfm'
+import { parseNdjson } from '../src/lib/journal'
 
 let passed = 0
 function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg)
 }
 function group(name: string): void { console.log(`  ✓ ${name}`); passed++ }
+function skip(name: string): void { console.log(`  ⚠ ${name}`) }
 
 // ---- фабрики -------------------------------------------------------------
 
@@ -350,6 +355,74 @@ function snapshotChecks(): void {
   group('snapshot: одна строка в день, parse/append roundtrip')
 }
 
+// ---- orphanedLines ---------------------------------------------------------
+
+function orphanedLinesChecks(): void {
+  const cards = [vocab('a', reviewFsrs(30, 1)), vocab('b', reviewFsrs(30, 1))]
+  const j: JournalLine[] = [
+    rev({ slug: 'a', rating: 3 }),
+    rev({ slug: 'ghost1', rating: 1 }),
+    rev({ slug: 'ghost1', rating: 3 }),
+    rev({ slug: 'ghost2', rating: 4 }),
+    rev({ slug: 'b', rating: 3 }),
+    rev({ type: 'session', slug: undefined, dur_ms: 90000 }),   // без slug — вне счёта
+  ]
+  const orph = orphanedLines(cards, j)
+  assert(orph.total === 5, `total (строк со slug) ожидалось 5, получено ${orph.total}`)
+  assert(orph.n === 3, `n (осиротевших) ожидалось 3, получено ${orph.n}`)
+  assert(Math.abs(orph.share - 0.6) < 0.001, `share ожидалась 0.6, получено ${orph.share}`)
+  assert(orph.slugs.length === 2, `слагов ожидалось 2 (ghost1, ghost2), получено ${orph.slugs.length}`)
+  assert(orph.slugs[0].slug === 'ghost1' && orph.slugs[0].n === 2,
+    `по убыванию первым ожидался ghost1 ×2, получено ${JSON.stringify(orph.slugs[0])}`)
+  assert(orph.slugs[1].slug === 'ghost2' && orph.slugs[1].n === 1,
+    `вторым ожидался ghost2 ×1, получено ${JSON.stringify(orph.slugs[1])}`)
+
+  // все слаги журнала есть в колоде — ноль, без ложной тревоги на пустом месте
+  const clean = orphanedLines(cards, [rev({ slug: 'a' }), rev({ slug: 'b' })])
+  assert(clean.n === 0 && clean.total === 2 && clean.slugs.length === 0,
+    `журнал без осиротевших: ожидалось n=0 total=2 slugs=[], получено ${JSON.stringify(clean)}`)
+
+  group('orphanedLines: осиротевшие строки считаются и перечисляются по убыванию, строки без slug вне счёта, чистый журнал даёт ноль')
+}
+
+// ---- живая колода (необязательно) ------------------------------------------
+
+const DECK_DIR = 'C:/Users/sasha/dev/sat-deck/Учёба/Карточки'
+
+/** Тот же приём, что в test/data.test.ts (liveDeckChecks): путь существует только на
+ *  машине автора, поэтому группа пропускается (не падает), если каталога нет. */
+function liveDeckOrphanCheck(): void {
+  if (!existsSync(DECK_DIR)) {
+    skip(`живая колода не найдена (${DECK_DIR}) — группа пропущена, это не эта машина`)
+    return
+  }
+  const files = readdirSync(DECK_DIR).filter(f => f.endsWith('.md') && !f.startsWith('_'))
+  const cards: CardView[] = []
+  for (const f of files) {
+    const text = readFileSync(path.join(DECK_DIR, f), 'utf8')
+    const { fm, body, broken } = parseMd(text)
+    if (broken) continue
+    cards.push(cardView({ path: `Учёба/Карточки/${f}`, sha: null, fm, body, dirty: 0 }))
+  }
+
+  const journalDir = path.join(DECK_DIR, '_журнал')
+  const monthFiles = existsSync(journalDir)
+    ? readdirSync(journalDir).filter(f => /^\d{4}-\d{2}\.ndjson$/.test(f))
+    : []
+  let journal: JournalLine[] = []
+  for (const jf of monthFiles) {
+    const { lines } = parseNdjson(readFileSync(path.join(journalDir, jf), 'utf8'))
+    journal = journal.concat(lines)
+  }
+
+  const orph = orphanedLines(cards, journal)
+  assert(orph.n <= orph.total, `осиротевших не может быть больше строк со slug: n=${orph.n} total=${orph.total}`)
+  assert(orph.slugs.reduce((a, s) => a + s.n, 0) === orph.n, 'сумма n по слагам должна сходиться с общим n')
+  console.log(`  ⓘ живая колода: ${cards.length} карточек, ${journal.length} строк журнала → осиротевших ${orph.n} из ${orph.total} (${Math.round(orph.share * 100)}%): ${orph.slugs.map(s => `${s.slug} ×${s.n}`).join(', ') || '—'}`)
+
+  group('orphanedLines на живой колоде: считает без ошибок, сумма по слагам сходится с общим счётом')
+}
+
 function main(): void {
   console.log('SRS metrics — цель/examReady/maturity/pace/retention/speed/typo/snapshot')
   examReadyChecks()
@@ -361,6 +434,8 @@ function main(): void {
   speedTypoChecks()
   paceChecks()
   snapshotChecks()
+  orphanedLinesChecks()
+  liveDeckOrphanCheck()
   console.log(`\nВсе проверки метрик пройдены (${passed} групп).`)
 }
 

@@ -5,12 +5,14 @@ import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
 import { makeScheduler, effectiveRetention, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, DUE_CAP, type Section, type TypeVerdict } from './scheduler'
-import { parseMetrics, isLeech, type MetricSnapshot } from './metrics'
+import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
-import { newId, matureRetention, sessionAccuracy, READ_CAP_MINUTES } from './journal'
+import { newId, matureRetention, sessionAccuracy, cardTimeCap, READ_CAP_MINUTES } from './journal'
 import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
-import { DEFAULT_SETTINGS, SETTINGS_VERSION } from './types'
+import { DEFAULT_SETTINGS } from './types'
+import { NEW_PER_DAY } from './norms'
 import { setSoundEnabled } from './sound'
+import { migrateSettings } from './settings'
 
 const SETTINGS_KEY = 'sat-srs-settings'
 
@@ -19,6 +21,12 @@ interface AppState {
   screen: Screen
   sessionSection: Section
   sessionReviewOnly: boolean
+  /* Урок сверх нормы: квота новых берётся из максимума дня, а не из оптимума.
+     Взводится только с главного экрана кнопкой «Ещё», когда повторять нечего, а
+     оптимум ввода уже выбран, — чтобы день не упирался в стену при экзамене на
+     носу. Оценки такого урока пишутся как обычные повторения: это занятие, а не
+     тренажёр. */
+  sessionOverNorm: boolean
   settings: Settings
   cards: CardRec[]
   journal: JournalRec[]
@@ -36,6 +44,7 @@ let state: AppState = {
   screen: 'home',
   sessionSection: 'rw',
   sessionReviewOnly: false,
+  sessionOverNorm: false,
   settings: loadSettings(),
   cards: [],
   journal: [],
@@ -50,9 +59,44 @@ let state: AppState = {
 
 const listeners = new Set<() => void>()
 
+/* Перезагрузка после обновления, отложенная до конца урока.
+
+   Service worker стоит в режиме autoUpdate, и workbox по умолчанию сам зовёт
+   location.reload(), как только новый билд забрал контроль. Посреди урока это
+   стоило целой сессии: уже поставленные оценки переживают перезагрузку (их
+   пишет rateItem), но finishSession не вызывается, и строки type: session за
+   этот урок в журнале не появляется. Дальше по цепочке — день не зачитывается
+   добитой очередью, точность урока не доходит до тьютора, а forcedTodaySlugs
+   делит день на блоки именно строками session и склеивает два урока в один:
+   слово недосчитывает отработку и приходит в лишние уроки. */
+let pendingReload: (() => void) | null = null
+
+/** Экраны, с которых перезагружать нельзя: урок в ходу или его итоги ещё не прочитаны. */
+function reloadBlocked(): boolean {
+  return state.screen === 'review' || state.screen === 'summary'
+}
+
 function emit() {
   state = { ...state }
   listeners.forEach(l => l())
+  if (pendingReload && !reloadBlocked()) {
+    const reload = pendingReload
+    pendingReload = null
+    reload()
+  }
+}
+
+/**
+ * Отложить перезагрузку страницы до выхода из урока.
+ *
+ * Вне урока перезагружает сразу — обновление не должно ждать без причины.
+ * Если ученик так и не вышел из урока, перезагрузки не будет вовсе: новый
+ * service worker уже активен, и следующий запуск приложения возьмёт свежий
+ * код сам. Потерять обновление здесь дешевле, чем потерять урок.
+ */
+export function deferReloadUntilLessonEnds(reload: () => void) {
+  if (!reloadBlocked()) { reload(); return }
+  pendingReload = reload
 }
 
 export function useApp(): AppState {
@@ -60,71 +104,6 @@ export function useApp(): AppState {
     l => { listeners.add(l); return () => listeners.delete(l) },
     () => state
   )
-}
-
-/* Миграции настроек.
-   Ключ — версия, ДО которой мигрируем. Каждая получает уже слитый с дефолтами
-   объект и возвращает исправленный. Правка дефолта сама по себе до устройства
-   не доедет (сохранённое перекрывает дефолты), поэтому всё, что обязано
-   примениться принудительно, живёт здесь. */
-const SETTINGS_MIGRATIONS: Record<number, (s: Settings) => Settings> = {
-  /* → v2 (05.08.2026). Два поля, которые пользователь не мог починить руками,
-     потому что не знал о них: окно паузы до 16.08 (приложение разрешало не
-     заниматься при 59 днях до экзамена) и московский пояс после переезда в
-     Ереван (граница учебного дня 04:00 съезжала на час). */
-  2: s => ({
-    ...s,
-    pauseFrom: DEFAULT_SETTINGS.pauseFrom,
-    pauseTo: DEFAULT_SETTINGS.pauseTo,
-    homeOffset: DEFAULT_SETTINGS.homeOffset
-  }),
-  /* → v3 (17.08.2026). Ввод слова становится шагом ротации Review (C8). Тумблер
-     выключался 05.08 под сломанную руку, лежит в сохранённых настройках телефона
-     и без принудительной миграции остался бы выключенным навсегда — ровно тот
-     класс поля, ради которого версия и заведена. */
-  3: s => ({ ...s, typing: DEFAULT_SETTINGS.typing }),
-  /* → v4 (17.08.2026). Дневная норма новых слов — 8, а не прежние 15. Именно ввод
-     пачками уже спровоцировал половину нынешних проблем: 27.07 в колоду вошло 187
-     показов за один день, стабильность просевших карточек не успела подрасти ни у
-     одной. План требует восьми в день; правки одного DEFAULT_SETTINGS для этого не
-     хватает — сохранённые 15 лежат в телефоне и без миграции перекрывали бы новый
-     дефолт навсегда (тот же класс поля, что и newPerDay/typing выше). */
-  4: s => ({ ...s, newPerDay: DEFAULT_SETTINGS.newPerDay }),
-  /* → v5 (17.08.2026). Колода переезжает из личного вальта (s4s4s4s/second-brain,
-     master) в отдельный приватный репозиторий s4s4s4s/sat-deck, ветка main — токен
-     на телефоне носил scope на весь вальт, после переезда он выдан только на колоду.
-     Пути внутри репозитория те же (basePath не меняется), меняются только repo и
-     branch. Без принудительной миграции сохранённые в телефоне старые repo/branch
-     перекрывали бы новый дефолт навсегда, и устройство продолжало бы стучаться в
-     репозиторий, где токен уже не действует (тот же класс поля, что и выше). Токен
-     (`pat`) миграция не трогает — его вводят руками. */
-  5: s => ({ ...s, repo: DEFAULT_SETTINGS.repo, branch: DEFAULT_SETTINGS.branch }),
-  /* Звук появился 20.08.2026. Без миграции сохранённый объект настроек перекрыл бы
-     дефолт навсегда, и в уже установленном PWA урок остался бы немым. */
-  6: s => ({ ...s, sound: DEFAULT_SETTINGS.sound }),
-  /* → v7 (20.08.2026). Кнопка «Почему?» перестала ходить в платный API Anthropic:
-     разбор пишет Claude Code на домашней машине под подпиской. Поле `anthropicKey`
-     удаляется, а не просто перестаёт читаться: ключ от платного API, оставшийся
-     лежать в устройстве без применения, — это утечка, которая ждёт своего часа. */
-  7: s => {
-    /* Только удаление: `coachToken` здесь не трогаем. Поля до этой версии не
-       существовало, пустую строку ему уже дал разлив дефолтов, — а насильно
-       сбросить его значило бы стирать токен, который пользователь только что
-       вписал (и который, в отличие от полей выше, приложение не знает само). */
-    const { anthropicKey, ...без } = s as Settings & { anthropicKey?: string }
-    void anthropicKey
-    return без as Settings
-  }
-}
-
-export function migrateSettings(saved: Partial<Settings>): Settings {
-  let s: Settings = { ...DEFAULT_SETTINGS, ...saved }
-  const from = Number.isFinite(saved.v as number) ? Number(saved.v) : 1
-  for (let v = from + 1; v <= SETTINGS_VERSION; v++) {
-    const m = SETTINGS_MIGRATIONS[v]
-    if (m) s = m(s)
-  }
-  return { ...s, v: SETTINGS_VERSION }
 }
 
 function loadSettings(): Settings {
@@ -152,10 +131,15 @@ export function setScreen(s: Screen) {
   emit()
 }
 
-/** Старт урока в разделе; reviewOnly = только повторения, без ввода новых слов */
-export function startLesson(section: Section, reviewOnly = false) {
+/**
+ * Старт урока в разделе.
+ * reviewOnly — только повторения, без ввода новых слов;
+ * overNorm — урок сверх дневного оптимума: квота новых идёт до максимума дня.
+ */
+export function startLesson(section: Section, reviewOnly = false, overNorm = false) {
   state.sessionSection = section
   state.sessionReviewOnly = reviewOnly
+  state.sessionOverNorm = overNorm
   state.screen = 'review'
   emit()
 }
@@ -265,6 +249,77 @@ export function unsyncedCount(): number {
   return state.journal.filter(j => !j.synced).length + state.cards.filter(c => c.dirty && !c.broken).length
 }
 
+/**
+ * Потолок интервала: всё выученное обязано вернуться хотя бы раз до DUE_CAP (scheduler.ts) —
+ * иначе карточка получает срок за первой попыткой и до экзамена не показывается ни разу.
+ *
+ * Срок разыгрывается в окне шириной `span` дней, упирающемся в DUE_CAP, и ширина растёт со
+ * стабильностью: прочные карточки уезжают раньше, хрупкие жмутся к самому потолку, и зрелая
+ * часть колоды не сваливается в один день. Замысел прежний, сломана была реализация.
+ *
+ * Окно обязано лежать МЕЖДУ `now` и потолком. Прежняя версия отсчитывала только назад от
+ * DUE_CAP и с `now` не сверялась вовсе: 24.09 при стабильности 120 карточка получала срок
+ * 15–18.09 — на 5–8 дней в прошлом, и так в 86% розыгрышей того дня. Ровно за две недели до
+ * первой попытки вся зрелая часть колоды разом стала бы просроченной. Побочно `scheduled_days`
+ * писался как `Math.max(1, …)` от отрицательного числа, то есть единицей, и уезжал в журнал:
+ * ретеншн по бакетам интервала предпочитает это поле фактическому разрыву, и карточка с
+ * настоящим интервалом в 40 дней попадала в бакет «1 день».
+ *
+ * Нижняя граница окна — начало следующего учебного дня: FSRS только что сказал, что сегодня
+ * карточку показывать не нужно, и зажим не повод возвращать её в сегодняшнюю очередь.
+ * Если до потолка осталось меньше суток, разыгрывать нечего — карточка получает сам DUE_CAP:
+ * это последний слот, который ещё раньше первой попытки, и он всё равно в будущем.
+ *
+ * `rnd` вынесен в параметр, чтобы розыгрыш можно было проверить тестом, а не поверить в него.
+ */
+export function clampDueBeforeCap(next: FsrsCard, now: Date, cap: Date = DUE_CAP, rnd: () => number = Math.random): FsrsCard {
+  if (next.state !== State.Review || now >= cap || next.due <= cap) return next
+  const span = Math.min(14, Math.max(5, Math.round(next.stability / 10)))
+  const earliest = Math.max(endOfStudyDay(now).getTime(), cap.getTime() - span * 86400_000)
+  const slots = Math.max(0, Math.floor((cap.getTime() - earliest) / 86400_000))
+  const due = new Date(cap.getTime() - Math.floor(rnd() * (slots + 1)) * 86400_000)
+  // интервал считаем от фактически полученного срока: ноль здесь — честное «меньше суток»
+  // (у метрик для него есть свой бакет), а замаскированная единица врала бы отчётности
+  return { ...next, due, scheduled_days: Math.round((due.getTime() - now.getTime()) / 86400_000) }
+}
+
+/**
+ * Замер времени, который уедет в журнал.
+ *
+ * Потолок cardTimeCap (journal.ts, «AFK-защита») применялся к зачётным минутам и к таймеру
+ * на экране, но не к полю `elapsed_ms` самой строки — и в журнал попадали замеры вида «ответ
+ * за 25 минут» (ученик отошёл, карточка осталась открытой): в живом журнале таких строк 28 из
+ * 537. Это не медленный ответ, а отсутствие замера, и медиану времени ответа — от которой
+ * считается порог «медленно» — они тянут на себя. Чиним на записи, а не на каждом чтении:
+ * журнал уходит тьютору и в метрики как есть, и починку на чтении однажды забудут сделать.
+ */
+export function journalElapsedMs(elapsedMs: number, kind?: string): number {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return 0
+  return Math.min(elapsedMs, cardTimeCap(kind))
+}
+
+/* Во сколько раз стабильность должна превысить порог пиявки, чтобы флаг сняли.
+   Снимать по простому !isLeech нельзя: у порога стабильность гуляет, флаг дёргался бы
+   туда-сюда на каждой оценке, а каждое движение — это dirty-карточка и лишний коммит в
+   колоде. Тройной порог (6 дней против 2) — это уже не колебание, а несколько успешных
+   повторов подряд: карточка вернулась в обычную ротацию, и «слово сопротивляется» на ней
+   больше не про неё. */
+const LEECH_CLEAR_FACTOR = 3
+
+/**
+ * Что сделать с флагом «Пиявка» после этой оценки: поставить, снять или ничего.
+ *
+ * Флаг ставился навсегда — снятия не было в кодовой базе нигде, и давно выученное слово
+ * до самого экзамена показывало ученику «слово сопротивляется», а тьютору предлагало
+ * переформулировать уже работающую карточку.
+ */
+export function leechTransition(leech: unknown, next: FsrsCard): 'set' | 'clear' | null {
+  const flagged = !!leech
+  if (!flagged) return isLeech(next) ? 'set' : null
+  const recovered = next.state === State.Review && next.stability >= LEECH_STABILITY_DAYS * LEECH_CLEAR_FACTOR
+  return recovered ? 'clear' : null
+}
+
 /** Оценка учебной единицы (карточка × навык): FSRS → запись в свой fsrs-блок файла (dirty) → строка журнала. */
 export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, verdict?: TypeVerdict, gaveUp?: boolean): Promise<{ card: FsrsCard; lineId: string }> {
   const rec = state.cards.find(c => c.path === item.view.path)
@@ -274,13 +329,9 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
   const now = new Date()
   const prev = fsrsFromKey(rec.fm, fsrsKey)
   let { card: next } = f.next(prev, now, grade)
-  // потолок интервалов: всё возвращается до экзамена; окно 5–14 дней перед DUE_CAP (31.10),
-  // взвешено по стабильности — прочные карточки раньше, хрупкие ближе к 31.10; без свалки в одну неделю
-  if (next.state === State.Review && now < DUE_CAP && next.due > DUE_CAP) {
-    const span = Math.min(14, Math.max(5, Math.round(next.stability / 10)))
-    const due = new Date(DUE_CAP.getTime() - Math.floor(Math.random() * span) * 86400_000)
-    next = { ...next, due, scheduled_days: Math.max(1, Math.round((due.getTime() - now.getTime()) / 86400_000)) }
-  }
+  // потолок интервалов: всё возвращается до DUE_CAP, окно 5–14 дней перед ним взвешено по
+  // стабильности — прочные карточки раньше, хрупкие ближе к потолку (см. clampDueBeforeCap)
+  next = clampDueBeforeCap(next, now)
 
   // point 1: слово, введённое сегодня, не уходит в Review внутри того же учебного
   // дня. Само правило и цена ошибки в нём — в holdOnIntroDay (scheduler.ts).
@@ -316,7 +367,7 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     stability: Math.round(next.stability * 100) / 100,
     // плановый интервал FSRS — точный бакет интервала в retentionByInterval без реконструкции из ts
     scheduled_days: next.scheduled_days,
-    elapsed_ms: elapsedMs,
+    elapsed_ms: journalElapsedMs(elapsedMs, item.view.kind),
     synced: 0
   }
 
@@ -333,14 +384,18 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
      поле leech пусто во всех 450 карточках, тьютор сигнала не получал, а 14 слов,
      которые отчёт считает пиявками, съели 210 показов из 486 (43% всей работы SRS).
      Смотрим на next (состояние ПОСЛЕ этой оценки), а не prev — иначе флаг ставился бы
-     на шаг позже настоящего порога. */
-  if (isLeech(next) && !rec.fm.leech) {
-    fmPatch.leech = dayKey(now)
-  }
-  const updated: CardRec = { ...rec, fm: { ...rec.fm, ...fmPatch }, dirty: 1 }
-  await db.putCard(updated)
+     на шаг позже настоящего порога. Снятие флага — leechTransition, там же гистерезис. */
+  const fm: Record<string, any> = { ...rec.fm, ...fmPatch }
+  const leech = leechTransition(rec.fm.leech, next)
+  if (leech === 'set') fm.leech = dayKey(now)
+  // выздоровевшая карточка теряет поле целиком, а не получает пустую строку: `leech: ''`
+  // в файле — тот же мусор, который тьютору пришлось бы читать и объяснять себе
+  if (leech === 'clear') delete fm.leech
+  const updated: CardRec = { ...rec, fm, dirty: 1 }
+  // карточка и строка журнала — одной транзакцией: сбой между ними двигал бы расписание
+  // без следа в журнале, а на журнале держится вся отчётность (см. db.putCardAndJournal)
+  await db.putCardAndJournal(updated, [line])
   state.cards = state.cards.map(c => (c.path === rec.path ? updated : c))
-  await db.putJournal([line])
   state.journal = [...state.journal, line]
   emit()
   updateBadge()
@@ -439,7 +494,7 @@ function updateBadge() {
   if (typeof nav.setAppBadge !== 'function') return
   try {
     const все = state.cards.map(cardView)
-    const budget = newBudgetTotal(все, state.settings.newPerDay, state.journal, dayKey())
+    const budget = newBudgetTotal(все, NEW_PER_DAY.norm, state.journal, dayKey())
     const c = homeCounts(все, budget)
     void nav.setAppBadge(c.learnDue + c.revDue).catch(() => {})
   } catch { /* ignore */ }

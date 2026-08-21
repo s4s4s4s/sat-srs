@@ -369,6 +369,17 @@ body::before {
 .minbar-label { font-size: 13px; font-weight: 800; color: var(--text2); white-space: nowrap; }
 .minbar-label.done { color: var(--green-text); }
 
+/* Полоса дня с тремя нормами (norms.ts::DAY_NORMS). Засечки поверх заливки:
+   одна шкала показывает и сделанное, и все три цели сразу — раньше цель дня была
+   одна и работала как стена. Взятая засечка зелёная, невзятая — светлая риска на
+   тёмном фоне (тема тёмная, поэтому контраст даём белым, а не чёрным). */
+.minbar-day { position: relative; }
+.minbar-tick {
+  position: absolute; top: -1px; bottom: -1px; width: 2px;
+  background: rgba(255, 255, 255, .55); border-radius: 1px; pointer-events: none;
+}
+.minbar-tick.is-hit { background: var(--green-text); }
+
 /* Отметка чтения: цель — одно касание. Половина защищённого минимума не
    трекалась семь недель подряд, и любой лишний шаг здесь означает, что она
    не будет трекаться и дальше. */

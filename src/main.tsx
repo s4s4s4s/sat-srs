@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import './styles.css'
 import App from './App'
-import { init } from './lib/store'
+import { init, deferReloadUntilLessonEnds } from './lib/store'
 
 // высота экранной клавиатуры в --kb: нижние кнопки поднимаются над ней, а при
 // закрытой клавиатуре остаются внизу (VisualViewport надёжнее dvh на iOS Safari)
@@ -24,6 +24,11 @@ if (vv) {
 // workbox-window перезагрузит страницу, когда новый SW заберёт контроль — деплой виден с первого запуска
 registerSW({
   immediate: true,
+  // Без этого обработчика workbox перезагружает страницу немедленно, в том
+  // числе посреди урока, и урок теряется целиком (цена — в deferReloadUntilLessonEnds).
+  onNeedReload() {
+    deferReloadUntilLessonEnds(() => window.location.reload())
+  },
   onRegisteredSW(_url, r) {
     if (!r) return
     setInterval(() => void r.update(), 60 * 60 * 1000)
@@ -52,11 +57,12 @@ async function maybeGoStraightToLesson(): Promise<void> {
   const { views: allViews, startLesson, currentJournal, currentSettings } = await import('./lib/store')
   const { homeCounts, sectionOf } = await import('./lib/scheduler')
   const { newIntroducedOn } = await import('./lib/journal')
+  const { NEW_PER_DAY } = await import('./lib/norms')
   const { dayKey } = await import('./lib/daytime')
   const s = currentSettings()
   if (!s.pat && !import.meta.env.DEV) return
   const rw = allViews().filter(v => sectionOf(v) === 'rw')
-  const budget = Math.max(0, s.newPerDay - newIntroducedOn(currentJournal(), dayKey()))
+  const budget = Math.max(0, NEW_PER_DAY.norm - newIntroducedOn(currentJournal(), dayKey()))
   const c = homeCounts(rw, budget)
   if (c.learnDue + c.revDue + c.newAvail > 0) startLesson('rw', p.get('review') === '1')
 }

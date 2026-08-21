@@ -21,13 +21,44 @@ export interface SyncResult {
 
 const JOURNAL_DIR = '_журнал'
 
-const isCardPath = (p: string, base: string) =>
-  p.startsWith(base + '/') && p.endsWith('.md') && !p.includes(`/${JOURNAL_DIR}/`) && !p.split('/').pop()!.startsWith('_')
+/* Пути сравниваются в канонической форме Unicode (db.nfcPath), а не как есть.
+   Всё, что решают предикаты ниже, держится на кириллице в путях: и базовый каталог колоды,
+   и имя каталога журнала. Файл, созданный на macOS, приходит из репозитория в NFD — те же
+   буквы, другие байты, — и тогда `startsWith(base)` не срабатывает НИ НА ОДНОЙ карточке:
+   remoteCards пуст, приложение считает, что колоды в репозитории больше нет, и предохранитель
+   массового удаления встречает пустой список удалённого. То же с `_журнал`: не опознанный
+   каталог журнала утащил бы ndjson-файлы в разбор карточек. */
+export const isCardPath = (p: string, base: string) => {
+  const path = db.nfcPath(p)
+  return path.startsWith(db.nfcPath(base) + '/') && path.endsWith('.md')
+    && !path.includes(`/${JOURNAL_DIR}/`) && !path.split('/').pop()!.startsWith('_')
+}
 
 // месячные журналы (2026-07.ndjson) — но НЕ служебные `_`-файлы (_метрики.ndjson): у последних
 // нет id/ts/day, они сломали бы parseNdjson и уехали бы в rawByMonth. Метрики тянутся адресно.
-const isJournalPath = (p: string, base: string) =>
-  p.startsWith(`${base}/${JOURNAL_DIR}/`) && p.endsWith('.ndjson') && !p.split('/').pop()!.startsWith('_')
+export const isJournalPath = (p: string, base: string) => {
+  const path = db.nfcPath(p)
+  return path.startsWith(`${db.nfcPath(base)}/${JOURNAL_DIR}/`) && path.endsWith('.ndjson')
+    && !path.split('/').pop()!.startsWith('_')
+}
+
+/**
+ * Текст предупреждения о массовом удалении.
+ *
+ * Прежний звал «нажмите Синк ещё раз в течение 10 минут» и не называл ни одного файла: реакция
+ * на ошибку — нажать ещё раз — и выполняла удаление вслепую. Теперь человек видит, СКОЛЬКО и ЧТО
+ * именно уйдёт, и подтверждает уже конкретный список (db.massDeleteConfirmed): изменился состав —
+ * подтверждение не действует.
+ */
+export function massDeleteMessage(e: db.MassDeleteError): string {
+  const SHOW = 10
+  const names = e.paths.slice(0, SHOW).map(p => p.split('/').pop())
+  const tail = e.paths.length > SHOW ? ` и ещё ${e.paths.length - SHOW}` : ''
+  return `Синхронизация хочет удалить ${e.count} карточек из ${e.total}: ${names.join(', ')}${tail}. `
+    + 'Локально пока не удалено ничего. Если это не чистка колоды — проверьте репозиторий, ветку и путь в Настройках. '
+    + `Если чистка — повторный Синк в течение ${Math.round(db.MASS_DELETE_CONFIRM_MS / 60_000)} минут удалит ровно эти файлы; `
+    + 'при любом другом составе подтверждение не сработает.'
+}
 
 const metricsPathOf = (base: string) => `${base}/${JOURNAL_DIR}/_метрики.ndjson`
 
@@ -116,7 +147,10 @@ async function doSync(settings: Settings): Promise<SyncResult> {
         dirtyCards.map(c => ({ path: c.path, sha: shaByPath.get(c.path)!, content: contentByPath.get(c.path)! })),
         rec => serializeMd(rec.fm, rec.body)
       )
-      await db.putJournal(unsynced.map(j => ({ ...j, synced: 1 })))
+      // то же правило для журнала: `synced` ставится по СВЕЖЕЙ записи, а не по снимку `unsynced`,
+      // взятому до сетевых запросов. Причина ошибки, выбранная учеником во время push-а, дописывается
+      // в ту же строку — по снимку она затиралась бы и уезжала бы в «уже отправлено» навсегда.
+      await db.confirmJournalPushed(unsynced)
       // shas только что записанных журнальных файлов — чтобы следующий pull их не перекачивал
       const jShas = (await db.kvGet<Record<string, string>>('journalShas')) ?? {}
       for (const f of files) {
@@ -142,8 +176,10 @@ async function doSync(settings: Settings): Promise<SyncResult> {
       return { status: 'error', error: 'Токен GitHub недействителен или истёк — создайте новый и обновите в Настройках. Оценки сохранены локально.' }
     }
     if (e instanceof db.MassDeleteError) {
-      await db.kvSet('pendingMassDelete', Date.now())
-      return { status: 'error', error: `Синхронизация хочет удалить ${e.count} из ${e.total} карточек. Если это ожидаемо (чистка колоды) — нажмите Синк ещё раз в течение 10 минут.` }
+      // подтверждение помнит СОСТАВ, а не только время: см. db.massDeleteConfirmed
+      const pending: db.MassDeletePending = { ts: Date.now(), paths: e.paths }
+      await db.kvSet('pendingMassDelete', pending)
+      return { status: 'error', error: massDeleteMessage(e) }
     }
     return { status: 'error', error: e?.message ?? String(e) }
   }
@@ -187,11 +223,13 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, toFetch.length) }, fetchWorker))
-  // подтверждение массового удаления: второй Синк в течение 10 минут после предупреждения
-  const pendingTs = await db.kvGet<number>('pendingMassDelete')
-  const allowMass = !!pendingTs && Date.now() - pendingTs < 10 * 60_000
-  const conflicts = await db.applyPull(fetched, new Set(remoteCards.keys()), mergeCard, allowMass)
-  if (allowMass) await db.kvSet('pendingMassDelete', 0)
+  // подтверждение массового удаления: второй Синк вскоре после предупреждения И тот же состав
+  // удаляемого. Проверку состава делает applyPull — только он знает, что удаляется на самом деле.
+  const pending = await db.kvGet<db.MassDeletePending>('pendingMassDelete')
+  const conflicts = await db.applyPull(fetched, new Set(remoteCards.keys()), mergeCard, pending)
+  // подтверждение одноразовое: applyPull дошёл до конца, значит либо удаление применено, либо
+  // предохранитель не сработал вовсе — в обоих случаях старому разрешению висеть незачем
+  if (pending) await db.kvSet('pendingMassDelete', null)
   const warning = conflictedFiles.length
     ? `⚠️ Git-конфликт в: ${conflictedFiles.join(', ')} — карточки в карантине, почините <<<<<<< в vault`
     : undefined

@@ -124,15 +124,64 @@ export function fsrsFromKey(fm: Record<string, any>, key: string): FsrsCard {
   return fsrsFromFm({ added: fm.added, fsrs: fm[key] })
 }
 
+/** Момент последнего повтора из fsrs-блока в миллисекундах; null — карточку ни разу не оценивали.
+ *  Форма поля не гарантирована: своё приложение пишет ISO-строку UTC (fsrsToFm), но файл
+ *  правит и тьютор, а другой YAML-загрузчик отдал бы уже Date. Сравнение идёт по абсолютному
+ *  моменту, поэтому смещение пояса в строке роли не играет: `+03:00` и `Z` дают одно число. */
+function lastReviewMs(block: any): number | null {
+  const v = block?.last_review
+  if (v == null || v === '') return null
+  const t = (v instanceof Date ? v : new Date(String(v))).getTime()
+  return Number.isNaN(t) ? null : t
+}
+
+function repsOf(block: any): number {
+  const n = Number(block?.reps)
+  return Number.isFinite(n) ? n : 0
+}
+
+/**
+ * Кто из двух версий одного fsrs-блока описывает более позднее состояние карточки.
+ *
+ * Раньше локальный блок брался безусловно, и слияние двух устройств откатывало FSRS: телефон
+ * отправил reps=8 при стабильности 30.18, ноутбук записал свой повтор поверх старой базы и
+ * после синхронизации вернул reps=6 и стабильность 25.0 — два повтора и пять дней стабильности
+ * исчезали. Заметить это нечем: журнал остаётся полным, расхождение не видно ни на одном экране.
+ *
+ * Правило: побеждает более свежий last_review; при равенстве — больший reps. Блок без
+ * last_review проигрывает оценённому: «ни разу не показывали» не может быть более поздним
+ * состоянием, чем «показывали». Полное равенство оставляет локальный — он и так уедет
+ * ближайшим push-ем, и подменять его равным по смыслу значит писать файл впустую.
+ */
+export function pickFsrsBlock(remote: any, local: any): any {
+  const okRemote = !!remote && typeof remote === 'object'
+  const okLocal = !!local && typeof local === 'object'
+  if (!okLocal) return remote
+  if (!okRemote) return local
+  const tRemote = lastReviewMs(remote)
+  const tLocal = lastReviewMs(local)
+  if (tRemote !== null && tLocal !== null && tRemote !== tLocal) return tRemote > tLocal ? remote : local
+  if (tRemote !== null && tLocal === null) return remote
+  if (tLocal !== null && tRemote === null) return local
+  return repsOf(remote) > repsOf(local) ? remote : local
+}
+
 /**
  * Слияние при конфликте: удалённая версия файла — база (тьютор мог править текст),
  * наш вклад — только fsrs-блоки и my_sentence (то, чем владеет приложение).
+ * fsrs-блоки не «наши по умолчанию», а те, что описывают более позднее состояние (pickFsrsBlock):
+ * с двумя устройствами локальная копия может оказаться старше удалённой.
  * fsrs_prep сохраняем лишь пока у карточки есть prep-поля: их удаление тьютором — осознанное.
  */
 export function mergeCard(remote: { fm: Record<string, any>; body: string }, local: CardRec): { fm: Record<string, any>; body: string } {
   const fm = { ...remote.fm }
-  if (local.fm.fsrs) fm.fsrs = local.fm.fsrs
-  if (local.fm.fsrs_prep && fm.prep && fm.prep_context) fm.fsrs_prep = local.fm.fsrs_prep
+  const fsrs = pickFsrsBlock(remote.fm.fsrs, local.fm.fsrs)
+  if (fsrs !== undefined) fm.fsrs = fsrs
+  if (fm.prep && fm.prep_context) {
+    // у prep своя история повторов — и свой розыгрыш «кто новее», независимый от recall
+    const prep = pickFsrsBlock(remote.fm.fsrs_prep, local.fm.fsrs_prep)
+    if (prep !== undefined) fm.fsrs_prep = prep
+  }
   if (local.fm.my_sentence) fm.my_sentence = local.fm.my_sentence
   // A7: дату первого показа тянем только у оценённого слова — см. hasRatedFsrs в db.ts
   if (local.fm.first_seen && !fm.first_seen && Number(local.fm.fsrs?.reps) > 0) fm.first_seen = local.fm.first_seen

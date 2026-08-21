@@ -21,16 +21,17 @@ import {
   pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, LAST_LEARNING_STEP, sharesMeaning, typedTwin, checkTyped,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
   pickTask, meaningDistractors, REVIEW_CYCLE, NEW_STOP_DATE, kindRank, expandItems, freshItems,
-  homeCounts, sectionOf, newBudgetFor, newBudgetTotal
+  homeCounts, sectionOf, newBudgetFor, newBudgetTotal,
+  MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
-import { endOfStudyDay } from '../src/lib/daytime'
-import { sessionAccuracy, matureRetention } from '../src/lib/journal'
+import { lessonProgress, estimateShowsLeft, DRILL_PER_SESSION, type ProgressInput } from '../src/lib/progress'
+import { endOfStudyDay, dayKey, addDaysKey } from '../src/lib/daytime'
+import { sessionAccuracy, matureRetention, CARD_TIME_CAP_MS } from '../src/lib/journal'
 import { isLeech, LEECH_REPS, LEECH_STABILITY_DAYS } from '../src/lib/metrics'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
 const RETENTION = 0.9
-const DRILL_PER_SESSION = 2
 /** Секунд на экран: реальные показы 25.07 занимали 5–16 c, поэтому разрыв A2 действительно мешает */
 const SCREEN_MS = 10_000
 
@@ -84,7 +85,27 @@ interface Show {
 
 interface DayOpts { budget: number; introLimit: number; failWords?: Set<string>; lessons?: number; dayNew?: number }
 
-interface DayRun { lessons: Show[][] }
+/**
+ * Кадр полоски прогресса — ровно то, что Review.tsx рисует в `.progress` в момент кадра.
+ * `kind: 'skip'` — знакомство, которое урок показать не смог: кадр отрисовался, показа не было.
+ * `est`, `word` и `queue` в проверках не участвуют: это расшифровка кадра для разбора
+ * упавшего прогона (`BARDUMP=1 npm run test:session`), без неё падение полоски немое.
+ */
+interface Bar {
+  kind: 'screen' | 'skip'
+  /** Доля, нарисованная на экране, 0..1 — уже под храповиком. */
+  pct: number
+  /** Числитель: закрытых показов до этого кадра. */
+  shown: number
+  /** Знаменатель на этом кадре: показов всего по оценке. */
+  est: number
+  /** Что на экране: слово и формат. */
+  word: string
+  /** Очередь, добор и запасы лестницы на момент кадра. */
+  queue: string
+}
+
+interface DayRun { lessons: Show[][]; bars: Bar[][] }
 
 /**
  * Прогон учебного дня: несколько уроков подряд по одной колоде (состояние карточек мутирует,
@@ -98,6 +119,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
   const lessonsN = opts.lessons ?? 1
   let now = BASE
   const lessons: Show[][] = []
+  const allBars: Bar[][] = []
   const dayNew = opts.dayNew ?? 15
   // эмуляция forcedTodaySlugs: slug → { первый урок со знакомством, уроки с отработкой после него }
   const introAt = new Map<string, number>()
@@ -121,6 +143,10 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
     let lastWasIntro = false
     const introPending = new Set<string>()
     const shows: Show[] = []
+    const bars: Bar[] = []
+    // Review.tsx: `shown` — закрытые показы (числитель полоски), pctFloor — храповик
+    let shownCount = 0
+    let pctFloor = 0
 
     const forced = (): Set<string> => {
       const out = new Set<string>()
@@ -151,6 +177,40 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
         .filter(v => fs.has(v.slug) && v.fsrs.state !== State.Review)
         .map(v => ({ view: v, skill: 'recall' as const, fsrs: v.fsrs }))
         .filter(i => (drilled.get(itemKey(i)) ?? 0) < DRILL_PER_SESSION)
+    }
+
+    /** Полоска прогресса ровно как в Review.tsx: та же функция, тот же храповик. */
+    const barNow = (q: StudyItem[]): Bar => {
+      const c = ctx(q)
+      const inQueue = new Set(q.map(itemKey))
+      const pending = topUp().filter(i => !deferred.has(i.view.path) && !inQueue.has(itemKey(i)))
+      // весь остаток ступени bonusNew — столько экранов урок ещё вправе себе добавить
+      const bonusSlots = Math.min(MAX_INTRO_BONUS - introBonus, dayNew - freshIntros)
+      const bonusItems = bonusSlots > 0
+        ? nextNewItems(deck, new Set(q.map(itemKey)), bonusSlots).filter(i => !deferred.has(i.view.path))
+        : []
+      const input: ProgressInput = {
+        shown: shownCount,
+        queue: q,
+        pending,
+        isIntro: it => screenFormat(it, c) === 'intro',
+        introsLeft: c.introsLeft,
+        introduced,
+        forced: forced(),
+        drilled,
+        fillerAvailable: c.hasFiller,
+        bonusNew: bonusItems
+      }
+      pctFloor = Math.max(pctFloor, lessonProgress(input))
+      return {
+        kind: 'screen', pct: pctFloor, shown: shownCount,
+        est: shownCount + estimateShowsLeft(input),
+        word: q.length ? `${q[0].view.slug}/${screenFormat(q[0], c)}` : '-',
+        queue: q.map(i => `${i.view.slug}:${State[i.fsrs.state]}:${drilled.get(itemKey(i)) ?? 0}`).join(',') +
+          ' |добор ' + pending.map(i => `${i.view.slug}:${drilled.get(itemKey(i)) ?? 0}`).join(',') +
+          ` |окон ${c.introsLeft}` + (c.hasFiller ? ' +заполнитель' : '') +
+          (bonusItems.length ? ` +новых ${bonusItems.length}` : '')
+      }
     }
 
     /** Лестница добора из Review.tsx::proceed. [] = урок закончен. Ожидания нет по построению. */
@@ -197,6 +257,8 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       if (fmt === 'intro') {
         const freshNew = head.fsrs.state === State.New && !introduced.has(itemKey(head))
         if ((freshNew && introShown >= introLimit()) || !hasSeparator(queue, 0, ctx(queue))) {
+          // кадр отрисован, показа не было: полоска двигаться не имеет права
+          bars.push({ ...barNow(queue), kind: 'skip' })
           queue = proceed(queue.slice(1))
           continue
         }
@@ -206,12 +268,14 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       lastPath = head.view.path
       lastWasIntro = fmt === 'intro'
       if (fmt === 'intro') introPending.add(itemKey(head)); else introPending.delete(itemKey(head))
+      bars.push(barNow(queue))
       shows.push({
         path: head.view.path, format: fmt, skill: head.skill, graded: null, at: now, key: itemKey(head),
         reps: head.fsrs.reps, wasNew: head.fsrs.state === State.New
       })
       const show = shows[shows.length - 1]
       now += SCREEN_MS
+      shownCount++
 
       if (fmt === 'intro') {
         introShown++
@@ -266,9 +330,10 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
     }
     if (guard >= 2000) throw new Error('сессия не сошлась за 2000 шагов — вероятно, зацикливание')
     lessons.push(shows)
+    allBars.push(bars)
     now += 30 * 60000 // пауза между уроками
   }
-  return { lessons }
+  return { lessons, bars: allBars }
 }
 
 const runSession = (deck: CardView[], opts: DayOpts): Show[] => runDay(deck, opts).lessons[0]
@@ -399,12 +464,55 @@ function checkAll(shows: Show[], tag: string): number {
   return byFloor
 }
 
+/**
+ * Полоска прогресса урока (репро 21.08.2026).
+ *
+ * Прежняя дробь считала числитель в ПОКАЗАХ, а знаменатель — в ЭЛЕМЕНТАХ очереди, и на
+ * живой колоде это давало откаты на 30 и 53 пункта в момент добора, систематическое
+ * завышение до +43,8 п.п. и конец урока на 75–93,8% вместо 100%. Проверяем три свойства,
+ * каждое из которых ломалось:
+ *   — полоска не идёт назад НИ НА ОДНОМ кадре, включая кадры добора;
+ *   — кадр непоказанного знакомства не двигает числитель (призрачный шаг);
+ *   — урок, доработавший свою очередь, заканчивается ровно на 100%.
+ */
+function checkProgress(bars: Bar[], tag: string): void {
+  const pc = (x: number) => (x * 100).toFixed(1) + '%'
+  for (let i = 1; i < bars.length; i++) {
+    assert(bars[i].pct >= bars[i - 1].pct - 1e-9,
+      `[${tag}] полоска пошла НАЗАД на кадре ${i + 1}: ${pc(bars[i - 1].pct)} → ${pc(bars[i].pct)}`)
+  }
+  for (let i = 0; i < bars.length; i++) {
+    assert(bars[i].pct > 0 && bars[i].pct <= 1 + 1e-9,
+      `[${tag}] полоска вне диапазона на кадре ${i + 1}: ${pc(bars[i].pct)}`)
+  }
+  for (let i = 1; i < bars.length; i++) {
+    if (bars[i - 1].kind !== 'skip') continue
+    assert(bars[i].shown === bars[i - 1].shown,
+      `[${tag}] пропуск непоказанного знакомства сдвинул числитель полоски на кадре ${i}: ` +
+      `${bars[i - 1].shown} → ${bars[i].shown}`)
+  }
+  if (!bars.length) return
+  if (process.env.BARDUMP) {
+    console.log('DUMP', tag)
+    bars.forEach((b, i) => console.log(`  ${i + 1}${b.kind === 'skip' ? 'S' : ' '} ${b.word.padEnd(20)} shown=${b.shown} est=${b.est} pct=${(b.pct * 100).toFixed(1)}  ${b.q}`))
+  }
+  /* 100% — только на последнем кадре. Объявить урок законченным раньше времени полоска
+     не имеет права: остаток экранов после «готово» читается как обман, а не как запас. */
+  for (let i = 0; i < bars.length - 1; i++) {
+    assert(bars[i].pct < 1 - 1e-9,
+      `[${tag}] полоска дошла до 100% на кадре ${i + 1} из ${bars.length} — до конца урока`)
+  }
+
+}
+
 // ---- сценарии ------------------------------------------------------------
 
 let passed = 0
 function scenario(tag: string, deck: CardView[], opts: DayOpts): void {
-  const shows = runSession(deck, opts)
+  const run = runDay(deck, opts)
+  const shows = run.lessons[0]
   const byFloor = checkAll(shows, tag)
+  checkProgress(run.bars[0], tag)
   console.log(`  ✓ ${tag}: ${shows.length} экранов, инвариант держит${byFloor ? ` (по полу 30 c: ${byFloor})` : ''}`)
   passed++
 }
@@ -418,8 +526,9 @@ function progressScenario(tag: string, deck: CardView[], opts: DayOpts): void {
   // сколько уроков обязаны быть содержательными: пока в колоде есть чем вводить.
   // Дальше пустой урок законен — это честное «на сегодня всё», а не тупик.
   const required = Math.min(3, Math.max(1, Math.ceil(newCount / Math.max(1, opts.budget))))
-  const { lessons } = runDay(deck, { ...opts, lessons: 3 })
+  const { lessons, bars } = runDay(deck, { ...opts, lessons: 3 })
   const byFloor = lessons.reduce((a, shows, i) => a + checkAll(shows, `${tag}/урок${i + 1}`), 0)
+  bars.forEach((b, i) => { if (b.length) checkProgress(b, `${tag}/урок${i + 1}`) })
   const rated = new Set<string>()
   let prev = 0
   lessons.forEach((shows, i) => {
@@ -1009,6 +1118,199 @@ function leechFlagChecks(): void {
   passed++
 }
 
+/**
+ * Верхняя отсечка «медленного» ответа (21.08.2026).
+ *
+ * У порога `slowThresholdMs` не было потолка: ответ через две минуты (отвлёкся,
+ * отложил телефон, вернулся) приходил в FSRS как Hard — «трудно, но вспомнил».
+ * Потолок в проекте уже есть — `cardTimeCap` (60 c обычная карточка, 180 c
+ * математика), и означает он ровно это: выше него замера нет. Журнал режет по
+ * нему минуты и само поле `elapsed_ms`, а путь оценки получал сырое время прямо
+ * с экрана.
+ *
+ * Числа сетапа — из живого журнала на 21.08.2026: медиана словарного ответа
+ * 8 204 мс (490 оценок), 28 строк из 523 длиннее минуты, самая длинная — 1 526 090 мс
+ * (25 минут). Именно эти 28 строк раньше становились «трудно».
+ */
+function afkCapChecks(): void {
+  const МЕДИАНА_VOCAB = 8_204
+  const порог = slowThresholdMs('vocab', МЕДИАНА_VOCAB)
+  assert(порог === Math.round(МЕДИАНА_VOCAB * SLOW_FACTOR), `сетап: порог «медленно» = 2,5 медианы, получили ${порог}`)
+  assert(порог < CARD_TIME_CAP_MS, 'сетап: окно честного «медленно» лежит ВНУТРИ замера, иначе проверять нечего')
+
+  // внутри замера ничего не изменилось: медленный, но настоящий ответ остаётся Hard
+  assert(suggestedGrade('mc', 'correct', порог + 1, 'vocab', МЕДИАНА_VOCAB) === Rating.Hard,
+    'ответ чуть медленнее порога — по-прежнему Hard')
+  assert(suggestedGrade('mc', 'correct', CARD_TIME_CAP_MS, 'vocab', МЕДИАНА_VOCAB) === Rating.Hard,
+    'ровно потолок — ещё замер (граница включительно, как Math.min в journalElapsedMs)')
+
+  // регресс задачи: выше потолка латентность не имеет права понижать оценку
+  for (const ms of [CARD_TIME_CAP_MS + 1, 120_000, 1_526_090]) {
+    assert(suggestedGrade('mc', 'correct', ms, 'vocab', МЕДИАНА_VOCAB) === Rating.Good,
+      `${ms} мс — не медленный ответ, а отсутствие замера; Hard тут сообщал бы о трудности, которой не измеряли`)
+  }
+
+  // у математики потолок свой — 180 c, и правка его не сдвинула
+  assert(suggestedGrade('type', 'correct', 150_000, 'math', МЕДИАНА_VOCAB) === Rating.Hard,
+    'математика: 150 c — ещё замер (потолок 180 c), и это честное «медленно»')
+  assert(suggestedGrade('type', 'correct', 180_001, 'math', МЕДИАНА_VOCAB) === Rating.Good,
+    'математика: выше 180 c замера нет')
+
+  // исход важнее секундомера в обе стороны
+  assert(suggestedGrade('mc', 'wrong', 600_000, 'vocab', МЕДИАНА_VOCAB) === Rating.Again,
+    'провал остаётся провалом, сколько бы времени ни прошло')
+  assert(suggestedGrade('type', 'twin', 600_000, 'vocab', МЕДИАНА_VOCAB) === Rating.Hard,
+    'синоним (C10) оценивается по смыслу, а не по времени')
+
+  console.log('  ✓ верхняя отсечка латентности: ответ дольше cardTimeCap — не «трудно», а отсутствие замера')
+  passed++
+}
+
+/** Карточка в Learning с заданным сроком — для проверки границ «сегодня/завтра». */
+function learningCard(word: string, dueAt: number): CardView {
+  const v = newCard(word)
+  v.fsrs = { ...v.fsrs, state: State.Learning, reps: 1, due: new Date(dueAt), last_review: new Date(BASE - 7200_000) }
+  return v
+}
+
+/**
+ * «Завтра» на главном экране — это завтрашний учебный день, а не всё подряд.
+ *
+ * Нижняя граница стояла только у повторов (`due >= конец учебного дня`), а
+ * learning-половина счёта считалась от `now + LEARN_AHEAD_MS` — момента внутри
+ * СЕГОДНЯШНЕГО дня. Слово, которое предстоит доучить сегодня вечером, попадало в
+ * плашку «завтра».
+ */
+function tomorrowCountChecks(): void {
+  const now = new Date(BASE)                       // 24.07.2026, 10:00
+  const eod = endOfStudyDay(now).getTime()         // 25.07.2026, 04:00 — граница учебного дня
+  const колода = [
+    learningCard('вечером', BASE + 12 * 3600_000),   // сегодня 22:00 — это СЕГОДНЯШНЯЯ работа
+    learningCard('завтра-днём', eod + 6 * 3600_000), // 25.07, 10:00 — завтрашняя
+    tomorrowCard('повтор-завтра'),                   // due BASE+20 ч = 25.07, 06:00
+    reviewCard('просрочен', 1, -3 * 86400_000)       // просрочка позавчерашняя
+  ]
+
+  const c = homeCounts(колода, 0, now)
+  assert(c.revTomorrow === 2,
+    `завтра — только «завтра-днём» и «повтор-завтра», получили ${c.revTomorrow}: вечерняя сегодняшняя карточка снова приписана к завтрашнему дню`)
+  assert(c.revDue === 1, `сегодняшний долг — один просроченный повтор, получили ${c.revDue}`)
+  assert(c.learnDue === 0, 'вечерняя карточка ещё не созрела: до неё больше LEARN_AHEAD_MS')
+
+  // вторая половина диагноза не воспроизводится, и это фиксируется тестом:
+  // просрочка в «завтра» не попадала и раньше — нижняя граница у повторов была.
+  const однаПросрочка = homeCounts([reviewCard('старый', 1, -10 * 86400_000)], 0, now)
+  assert(однаПросрочка.revTomorrow === 0 && однаПросрочка.revDue === 1,
+    'просроченный повтор считается сегодняшним долгом и никогда — завтрашним планом')
+
+  console.log('  ✓ «завтра» на главном: окно [конец учебного дня; +24 ч) для повторов и learning одинаково')
+  passed++
+}
+
+/** Повтор, уже сделанный сегодня: срок уехал вперёд, last_review — этот учебный день. */
+function doneTodayCard(word: string): CardView {
+  const v = reviewCard(word, 1, 3 * 86400_000)
+  v.fsrs = { ...v.fsrs, last_review: new Date(BASE - 3600_000) }
+  return v
+}
+
+/**
+ * Дневной потолок повторов.
+ *
+ * Ограничение стояло на одном уроке: ученик, начавший второй урок, получал ещё
+ * до 60 повторов, третий — ещё, и защиты от лавины просрочки на уровне суток не
+ * было. Потолок дня — 3 урочных (180), см. MAX_REVIEW_PER_DAY.
+ */
+function dailyReviewCapChecks(): void {
+  const now = new Date(BASE)
+  const ОСТАТОК = 20
+  const ДОЛГ = 40
+  const колода: CardView[] = []
+  for (let i = 0; i < ДОЛГ; i++) колода.push(reviewCard(`долг${i}`, 1, -(i + 1) * 3600_000))
+  // столько повторов раздел уже сделал сегодня (в прошлых уроках этого же дня)
+  for (let i = 0; i < MAX_REVIEW_PER_DAY - ОСТАТОК; i++) колода.push(doneTodayCard(`сделано${i}`))
+
+  const повторов = buildQueue(колода, 0, now).filter(i => i.fsrs.state === State.Review).length
+  assert(повторов === ОСТАТОК,
+    `дневной потолок: сегодня осталось ${ОСТАТОК} повторов, урок выдал ${повторов} — потолок дня не действует`)
+
+  // урочный потолок никуда не делся: он про длину одного захода
+  const свежий = Array.from({ length: MAX_REVIEW_PER_LESSON + 40 }, (_, i) => reviewCard(`свежий${i}`, 1, -(i + 1) * 3600_000))
+  assert(buildQueue(свежий, 0, now).length === MAX_REVIEW_PER_LESSON,
+    'урочный потолок остаётся: первый заход дня берёт ровно MAX_REVIEW_PER_LESSON')
+
+  // и главное: потолок не съедает просрочку молча — счётчик главного экрана показывает весь долг
+  assert(homeCounts(колода, 0, now).revDue === ДОЛГ,
+    `просрочка обязана остаться видимой: «повторить» показывает ${homeCounts(колода, 0, now).revDue} вместо ${ДОЛГ}`)
+
+  // новый день — потолок дня чист (вчерашние оценки его не занимают)
+  const завтра = new Date(BASE + 86400_000)
+  const завтраПовторов = buildQueue(колода, 0, завтра).filter(i => i.fsrs.state === State.Review).length
+  assert(завтраПовторов === Math.min(ДОЛГ, MAX_REVIEW_PER_LESSON),
+    `со сменой учебного дня потолок обнуляется, получили ${завтраПовторов}`)
+
+  console.log('  ✓ дневной потолок повторов: урок ограничен остатком суток, долг остаётся в счётчике')
+  passed++
+}
+
+/**
+ * Пиявка изымается из уроков на время переработки.
+ *
+ * Флаг ставился и снимался, но состав урока не менял: карточка, про которую уже
+ * доказано, что повторение её не лечит, крутилась в очереди наравне со всеми.
+ * Замер живой колоды 21.08.2026: 11 помеченных карточек съели 185 показов из 637
+ * за всю историю и 57 из 153 за последние две недели.
+ *
+ * Контур замыкается через колоду: `tools/пиявки.mjs` отбирает карточки по полю
+ * `leech`, переписывает материал и СНИМАЕТ поле, а слияние берёт за базу
+ * удалённый фронтматтер (yamlfm.ts::mergeCard) — снятая метка доезжает до
+ * приложения. Обе стороны контура здесь и проверяются.
+ */
+function leechQuarantineChecks(): void {
+  const now = new Date(BASE)
+  const сегодня = dayKey(now)
+  const пиявка = reviewCard('corroborate', 1, -3600_000)
+  пиявка.fsrs = { ...пиявка.fsrs, reps: 22, stability: 1.4 }  // живой corroborate на 21.08.2026
+  пиявка.leech = сегодня
+  assert(isLeech(пиявка.fsrs), 'сетап: карточка обязана быть пиявкой по общему предикату (metrics.ts::isLeech)')
+  const сосед = reviewCard('сосед', 1, -3600_000)
+  const колода = [пиявка, сосед]
+
+  const очередь = buildQueue(колода, 0, now).map(i => i.view.slug)
+  assert(!очередь.includes('corroborate'), 'помеченная пиявка не выдаётся уроку: она ждёт переработки, а не ещё одной встречи')
+  assert(очередь.includes('сосед'), 'изъятие касается только помеченной карточки')
+  assert(homeCounts(колода, 0, now).revDue === 1,
+    'счётчик «повторить» тоже не обещает изъятую карточку — экран и урок обязаны сходиться')
+  assert(!earlyFillers(колода, now, new Set()).some(i => i.view.slug === 'corroborate'),
+    'и заполнителем пиявку не подбираем — иначе изъятие обходится с чёрного хода')
+
+  // карточка не тронута: изъятие — фильтр очереди, а не правка колоды
+  assert(пиявка.fsrs.reps === 22 && пиявка.leech === сегодня && !пиявка.suspended,
+    'ни история, ни расписание, ни флаг карточки не меняются')
+
+  // после переработки (пиявки.mjs снимает поле leech) слово возвращается в урок
+  const переработана: CardView = { ...пиявка, leech: '' }
+  assert(buildQueue([переработана, сосед], 0, now).some(i => i.view.slug === 'corroborate'),
+    'снятая метка возвращает карточку в очередь — с той же историей и тем же сроком')
+
+  // карантин не бессрочен: инструмент берёт только словарные карточки (у error/grammar/math
+  // ответ в choices, и правку контракт колоды запрещает) и может не запускаться вовсе
+  const забытая: CardView = { ...пиявка, leech: addDaysKey(сегодня, -LEECH_QUARANTINE_DAYS) }
+  assert(buildQueue([забытая, сосед], 0, now).some(i => i.view.slug === 'corroborate'),
+    `через ${LEECH_QUARANTINE_DAYS} дней карточка возвращается сама: молча выбросить слово из подготовки нельзя`)
+  const внутриНедели: CardView = { ...пиявка, leech: addDaysKey(сегодня, -(LEECH_QUARANTINE_DAYS - 1)) }
+  assert(!buildQueue([внутриНедели, сосед], 0, now).some(i => i.view.slug === 'corroborate'),
+    'внутри срока карантин держится')
+
+  // мусор вместо даты карантина не открывает: бессрочное изъятие хуже пиявки
+  const кривая: CardView = { ...пиявка, leech: 'true' }
+  assert(buildQueue([кривая, сосед], 0, now).some(i => i.view.slug === 'corroborate'),
+    'нечитаемая дата в leech не должна прятать слово навсегда')
+
+  console.log('  ✓ пиявка изъята из уроков на время переработки и возвращается снятием метки (или по сроку карантина)')
+  passed++
+}
+
 function main(): void {
   console.log('SRS session simulation — A2/A3/A4-bis/A6/B4/C1/C2')
 
@@ -1081,11 +1383,14 @@ function main(): void {
     if (rng() < 0.5 && deck.length) failWords.add(deck[Math.floor(rng() * deck.length)].word)
     const budget = Math.floor(rng() * 4)
     const introLimit = 1 + Math.floor(rng() * 3)
-    const { lessons } = runDay(deck, { budget, introLimit, failWords, lessons: 2 })
+    const { lessons, bars } = runDay(deck, { budget, introLimit, failWords, lessons: 2 })
     lessons.forEach((shows, i) => checkAll(shows, `rand#${t}/урок${i + 1}`))
+    bars.forEach((b, i) => { if (b.length) checkProgress(b, `rand#${t}/урок${i + 1}`) })
   }
-  console.log(`  ✓ рандомизированный батч: ${N} дней по 2 урока, инвариант держит везде`)
+  console.log(`  ✓ рандомизированный батч: ${N} дней по 2 урока, инвариант и полоска держат везде`)
   passed++
+
+  progressBarChecks()
 
   sectionBudgetChecks()
   fillerChecks()
@@ -1094,8 +1399,74 @@ function main(): void {
   newStopChecks()
   ptPriorityChecks()
   leechFlagChecks()
+  afkCapChecks()
+  tomorrowCountChecks()
+  dailyReviewCapChecks()
+  leechQuarantineChecks()
 
   console.log(`\nВсе проверки пройдены (${passed} групп).`)
+}
+
+/**
+ * Полоска прогресса урока: доходит до конца и не врёт по дороге (репро 21.08.2026).
+ *
+ * Монотонность проверяется во всех сценариях выше (`checkProgress` в `scenario`,
+ * `progressScenario` и рандомизированном батче). Здесь — два свойства, которые монотонность
+ * не ловит: урок, доработавший свою очередь, обязан закончиться ровно на 100%, а призрачный
+ * шаг (знакомство, которое урок показать не смог) обязан оставить числитель на месте.
+ */
+function progressBarChecks(): void {
+  // 1. Урок, который доводит очередь до конца: последний экран — ровно 100%.
+  //    Раньше текущая карточка всегда сидела в знаменателе и никогда в числителе, и урок
+  //    из четырёх экранов навсегда заканчивался на 75%.
+  const наборы: { tag: string; deck: CardView[]; opts: DayOpts }[] = [
+    { tag: 'только повторы', opts: { budget: 0, introLimit: 3 },
+      deck: [reviewCard('p1'), reviewCard('p2'), reviewCard('p3'), reviewCard('p4'), reviewCard('p5')] },
+    { tag: 'повторы и новые', opts: { budget: 2, introLimit: 2, dayNew: 2 },
+      deck: [reviewCard('q1'), reviewCard('q2'), reviewCard('q3'), reviewCard('q4'),
+             reviewCard('q7'), reviewCard('q8'), reviewCard('q9'), reviewCard('q10'),
+             newCard('q5'), newCard('q6'), newCard('q11'), newCard('q12')] },
+    { tag: 'один повтор', opts: { budget: 0, introLimit: 0 }, deck: [reviewCard('s1')] }
+  ]
+  for (const { tag, deck, opts } of наборы) {
+    const { lessons, bars } = runDay(deck, opts)
+    const кадры = bars[0]
+    assert(кадры.length > 0, `[полоска/${tag}] урок не дал ни одного кадра`)
+    checkProgress(кадры, `полоска/${tag}`)
+    const последний = кадры[кадры.length - 1]
+    assert(Math.abs(последний.pct - 1) < 1e-9,
+      `[полоска/${tag}] урок из ${lessons[0].length} экранов закончился на ` +
+      `${(последний.pct * 100).toFixed(1)}%, а не на 100%`)
+  }
+
+  /* 2. Призрачный шаг — кадр знакомства, которого урок показать не может.
+        Условие достижимо на старте урока: `buildQueue` кладёт знакомство первым, ещё не
+        спрашивая правил показа, а Review рисует голову очереди сразу. При newPerLesson = 1
+        на колоде из одних новых разделителя A6 нет (второе новое слово потребовало бы
+        второго окна), знакомство не выдаётся — и раньше числитель полоски на этом кадре
+        всё равно двигался: урок «проходил» экран, которого ученик не видел.
+
+        Здесь проверяется само условие на боевом `buildQueue`; ответ Review на него —
+        `proceed(..., counted = false)` — живёт в экране и в этот стенд не импортируется:
+        `runDay` начинает урок тем же `proceed`, что и продолжает, поэтому голова очереди
+        у него всегда уже одобрена `pickNext` и призрачному кадру взяться неоткуда.
+        Правило «кадр пропуска не двигает числитель» сторожит `checkProgress` во всех
+        сценариях, а сам пропуск на живой колоде прогоняется отдельным стендом. */
+  const призракКолода = [newCard('g1'), newCard('g2'), newCard('g3'), newCard('g4')]
+  const стартовая = buildQueue(призракКолода, 2, new Date(BASE), new Set())
+  const стартCtx: OrderCtx = {
+    deck: призракКолода, introduced: new Set(), lapsed: new Set(), reintroAllowed: true,
+    introsLeft: 1, shownTimes: new Map(), drilled: new Map(), introPending: new Set(),
+    now: BASE, lastPath: '', lastWasIntro: false, sinceIntro: Number.MAX_SAFE_INTEGER,
+    batchIntros: 0, hasFiller: false
+  }
+  assert(стартовая.length > 0 && screenFormat(стартовая[0], стартCtx) === 'intro',
+    'предпосылка призрачного шага: первым в очереди урока стоит знакомство')
+  assert(!hasSeparator(стартовая, 0, стартCtx),
+    'предпосылка призрачного шага: это знакомство урок выдать не может (нет разделителя A6)')
+
+  console.log(`  ✓ полоска: доходит до 100% (${наборы.length} набора), кадр непоказанного знакомства достижим и числитель не двигает`)
+  passed++
 }
 
 /**

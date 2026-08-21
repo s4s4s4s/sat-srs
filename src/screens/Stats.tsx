@@ -1,16 +1,19 @@
 import { useApp, views, setScreen } from '../lib/store'
-import { homeCounts, loadForecast, sectionOf, newBudgetTotal } from '../lib/scheduler'
+import { homeCounts, loadForecast, sectionOf, newBudgetTotal, SECTIONS } from '../lib/scheduler'
 import { streak, trueRetention30, minutesToday, retentionByFormat, minutesByDay, emptyDays, isDayDone } from '../lib/journal'
 import {
   pace, maturity, retentionByInterval, retentionByLevel, retentionByDomain,
-  speedStats, enoughForPct, ddmm, PRIMARY_DATE, NEW_STOP_DATE,
-  TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS, INTERVAL_LABELS,
-  type Bucketed, type IntervalBucket, type MetricSnapshot
+  retentionBySection, maturityBySection, speedStats, typoSplit, gaveUpShare, planVsFact,
+  orphanedLines, enoughForPct, ddmm, PRIMARY_DATE, NEW_STOP_DATE,
+  TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS, INTERVAL_LABELS, SECTION_LABELS, SLOW_MS,
+  type Bucketed, type IntervalBucket, type MetricSnapshot, type PlanVsFactDay
 } from '../lib/metrics'
+import { NEW_PER_DAY } from '../lib/norms'
 import { dayKey, addDaysKey } from '../lib/daytime'
 import { ChevronLeft, Flame } from '../components/Icon'
 
 const FMT_NAMES: Record<string, string> = { mc: 'Выбор (MC)', type: 'Ввод', prep: 'Предлоги', reveal: 'Показ' }
+const KIND_NAMES: Record<string, string> = { vocab: 'Слово', grammar: 'Грамматика', math: 'Математика', error: 'Разбор ошибки' }
 const DOW = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс']
 
 /** Мини-график тренда: полилиния по ряду значений (null = пропуск дня). */
@@ -65,6 +68,56 @@ function RetTable({ rows }: { rows: { label: string; b: Bucketed }[] }) {
   )
 }
 
+/**
+ * Строки «часть из целого» без порога n>=20 (в отличие от RetTable): это не оценка по выборке,
+ * а точный счёт по всей колоде — сколько карточек раздела уже в review или уже зрелых. Малая
+ * колода (например, математика) — не шум, а факт: у неё правда мало карточек.
+ */
+function CountRows({ rows }: { rows: { label: string; part: number; total: number }[] }) {
+  const shown = rows.filter(r => r.total > 0)
+  if (!shown.length) return <div className="syncline">пока нет карточек</div>
+  return (
+    <>
+      {shown.map(r => (
+        <div key={r.label} className="fmt-row">
+          <span className="fmt-name">{r.label}</span>
+          <div className="fmt-track"><div className="fmt-fill" style={{ width: `${Math.round((r.part / r.total) * 100)}%` }} /></div>
+          <span className="fmt-pct">{r.part} <span className="fmt-n">из {r.total}</span></span>
+        </div>
+      ))}
+    </>
+  )
+}
+
+/** План vs факт за последние 7 дней: доля повторов, сделанных в срок, и средняя просрочка остальных. */
+function PlanFactRows({ week, pvf, dowOf }: { week: string[]; pvf: Map<string, PlanVsFactDay>; dowOf: (k: string) => string }) {
+  const rows = week.map(d => {
+    const v = pvf.get(d)
+    const done = v?.done ?? 0
+    const onTime = v?.onTime ?? 0
+    const avgDelay = v && v.done ? v.delaySum / v.done : 0
+    return { d, done, onTime, avgDelay }
+  })
+  if (!rows.some(r => r.done > 0)) return <div className="syncline">пока нет данных</div>
+  return (
+    <>
+      {rows.map(r => {
+        const pct = r.done ? Math.round((r.onTime / r.done) * 100) : null
+        return (
+          <div key={r.d} className="fmt-row">
+            <span className="fmt-name">{dowOf(r.d)}</span>
+            <div className="fmt-track"><div className={`fmt-fill${pct !== null && pct < 70 ? ' low' : ''}`} style={{ width: pct !== null ? `${pct}%` : 0 }} /></div>
+            <span className="fmt-pct">
+              {r.done ? `${r.onTime}/${r.done} вовремя` : '—'}
+              {r.avgDelay > 0 ? <span className="fmt-n"> · +{r.avgDelay.toFixed(1)}дн</span> : null}
+            </span>
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
 /** Ряд значений из истории снимков. Поля, добавленные позже (inReview, readMinutes),
  *  в старых строках отсутствуют — там разрыв графика, а не ноль: нуля в тот день не было,
  *  его просто не измеряли. */
@@ -79,7 +132,7 @@ export default function Stats() {
   const app = useApp()
   const today = dayKey()
   const all = views()
-  const budget = newBudgetTotal(all, app.settings.newPerDay, app.journal, today)
+  const budget = newBudgetTotal(all, NEW_PER_DAY.norm, app.journal, today)
   const c = homeCounts(all, budget)
   const pause = app.settings.pauseFrom && app.settings.pauseTo ? { from: app.settings.pauseFrom, to: app.settings.pauseTo } : null
   const st = streak(app.journal, undefined, pause)
@@ -107,7 +160,14 @@ export default function Stats() {
   const ri = retentionByInterval(app.journal)
   const rl = retentionByLevel(all, app.journal)
   const rd = retentionByDomain(app.journal)
+  const rs = retentionBySection(all, app.journal)
+  const orph = orphanedLines(all, app.journal)
+  const ms = maturityBySection(all)
   const sp = speedStats(app.journal)
+  const ts = typoSplit(app.journal)
+  const gu = gaveUpShare(app.journal)   // за всю историю; на графике трендов — дневной срез
+  const week7 = Array.from({ length: 7 }, (_, i) => addDaysKey(today, -6 + i))
+  const pvf = planVsFact(app.journal, today)
   const hist: MetricSnapshot[] = app.metricsHistory
   const paceVerdict = pc.verdict === 'ahead'
     ? 'идёшь с опережением'
@@ -115,6 +175,9 @@ export default function Stats() {
   const intervalRows = (Object.keys(ri) as IntervalBucket[]).map(k => ({ label: INTERVAL_LABELS[k], b: ri[k] }))
   const levelRows = [...rl.entries()].sort((a, b) => a[0] - b[0]).map(([lv, b]) => ({ label: app.levelNames[String(lv)] ?? `Уровень ${lv}`, b }))
   const domainRows = [...rd.entries()].sort((a, b) => b[1].n - a[1].n).map(([d, b]) => ({ label: d, b }))
+  const sectionRetRows = SECTIONS.map(s => ({ label: SECTION_LABELS[s], b: rs.get(s) ?? { pct: null, n: 0, pass: 0 } }))
+  const sectionReviewRows = SECTIONS.map(s => ({ label: SECTION_LABELS[s], part: ms[s].reviewCount, total: ms[s].total }))
+  const sectionMatureRows = SECTIONS.map(s => ({ label: SECTION_LABELS[s], part: ms[s].matureCount, total: ms[s].total }))
 
   return (
     <div className="screen s-stats">
@@ -153,6 +216,7 @@ export default function Stats() {
           <Spark values={series(hist, s => s.medianStability)} label="медиана стабильности" />
           <Spark values={series(hist, s => s.minutes)} label="минут карточек" />
           <Spark values={series(hist, s => s.readMinutes)} label="минут чтения" />
+          <Spark values={series(hist, s => typeof s.gaveUpShare === 'number' ? s.gaveUpShare * 100 : undefined)} label="«не помню», % за день" />
         </div>
       )}
 
@@ -160,6 +224,21 @@ export default function Stats() {
         <h2 className="sec">Retention по интервалу</h2>
         <div className="syncline" style={{ marginBottom: 6 }}>общий retention смешивает короткие и длинные интервалы — здесь они разведены</div>
         <RetTable rows={intervalRows} />
+      </div>
+
+      <div className="card" style={{ marginBottom: 14 }}>
+        <h2 className="sec">Retention по разделам</h2>
+        <div className="syncline" style={{ marginBottom: 6 }}>слова, грамматика и математика отдельно — видно, какой раздел проседает</div>
+        <RetTable rows={sectionRetRows} />
+        {orph.n > 0 ? (
+          <div className="syncline" style={{ marginTop: 6 }}>
+            осиротевших строк журнала (слаг карточки пропал из колоды): <b>{orph.n}</b> из {orph.total} ({Math.round(orph.share * 100)}%) — {
+              orph.slugs.slice(0, 5).map(s => `${s.slug} ×${s.n}`).join(', ')
+            }{orph.slugs.length > 5 ? ` и ещё ${orph.slugs.length - 5}` : ''}
+          </div>
+        ) : orph.total > 0 ? (
+          <div className="syncline" style={{ marginTop: 6 }}>все строки журнала привязаны к карточкам колоды</div>
+        ) : null}
       </div>
 
       {levelRows.some(r => r.b.n > 0) && (
@@ -189,6 +268,38 @@ export default function Stats() {
               <span className="fmt-pct">{(v.medianMs / 1000).toFixed(1)} c <span className="fmt-n">n={v.n}</span></span>
             </div>
           ))}
+          {Object.keys(sp.byKind).length > 0 && (
+            <>
+              <div className="syncline" style={{ margin: '10px 0 6px' }}>по видам карточек (медиана)</div>
+              {Object.entries(sp.byKind).map(([k, v]) => (
+                <div key={k} className="fmt-row">
+                  <span className="fmt-name">{KIND_NAMES[k] ?? k}</span>
+                  <div className="fmt-track"><div className={`fmt-fill${v.medianMs > SLOW_MS ? ' low' : ''}`} style={{ width: `${Math.min(100, (v.medianMs / SLOW_MS) * 100)}%` }} /></div>
+                  <span className="fmt-pct">{(v.medianMs / 1000).toFixed(1)} c <span className="fmt-n">n={v.n}</span></span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
+      {(gu.n > 0 || ts.typos + ts.realMisses > 0) && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <h2 className="sec">Не помню и опечатки</h2>
+          <div className="syncline" style={{ marginBottom: 6 }}>
+            «не помню» — нажата кнопка вместо попытки вспомнить (по всем показам); опечатка — при вводе слова угадано, но набрано с ошибкой
+          </div>
+          <RetTable rows={[
+            { label: '«Не помню»', b: { pct: gu.n ? Math.round((gu.gaveUp / gu.n) * 100) : null, n: gu.n, pass: gu.gaveUp } },
+            {
+              label: 'Опечатка',
+              b: {
+                pct: (ts.typos + ts.realMisses) ? Math.round((ts.typos / (ts.typos + ts.realMisses)) * 100) : null,
+                n: ts.typos + ts.realMisses,
+                pass: ts.typos
+              }
+            }
+          ]} />
         </div>
       )}
 
@@ -220,6 +331,12 @@ export default function Stats() {
             )
           })}
         </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 14 }}>
+        <h2 className="sec">План vs факт (7 дней)</h2>
+        <div className="syncline" style={{ marginBottom: 6 }}>сколько повторов из плана FSRS сделано в срок и насколько просрочены остальные</div>
+        <PlanFactRows week={week7} pvf={pvf} dowOf={dowOf} />
       </div>
 
       {Object.keys(retF).length > 0 && (
@@ -254,6 +371,12 @@ export default function Stats() {
         </div>
         <div className="syncline" style={{ marginTop: 10 }}>
           слова: {all.filter(v => sectionOf(v) === 'rw').length} · грамматика: {all.filter(v => sectionOf(v) === 'grammar').length} · математика: {all.filter(v => sectionOf(v) === 'math').length}
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <div className="syncline" style={{ marginBottom: 6 }}>в review — по разделам</div>
+          <CountRows rows={sectionReviewRows} />
+          <div className="syncline" style={{ margin: '10px 0 6px' }}>зрелых (стаб. ≥ {MATURE_STABILITY_DAYS} дн) — по разделам</div>
+          <CountRows rows={sectionMatureRows} />
         </div>
       </div>
     </div>

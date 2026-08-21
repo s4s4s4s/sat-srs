@@ -10,8 +10,6 @@ const isIosBrowserTab = /iP(hone|ad|od)/.test(navigator.userAgent) && !window.ma
 export default function SettingsScreen() {
   const app = useApp()
   const [s, setS] = useState({ ...app.settings })
-  const [newPerDayStr, setNewPerDayStr] = useState(String(app.settings.newPerDay))
-  const [newPerLessonStr, setNewPerLessonStr] = useState(String(app.settings.newPerLesson || 3))
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -31,16 +29,10 @@ export default function SettingsScreen() {
       setErr('Укажите папку карточек.')
       return
     }
-    const n = Number(newPerDayStr.trim())
-    if (!newPerDayStr.trim() || !Number.isFinite(n) || n < 0) {
-      setErr('«Новых в день» — число от 0 до 100.')
-      return
-    }
-    const nl = Number(newPerLessonStr.trim())
-    if (!newPerLessonStr.trim() || !Number.isFinite(nl) || nl < 1) {
-      setErr('«Новых за урок» — число от 1 до 20.')
-      return
-    }
+    /* Полей «Новых в день» и «Новых за урок» здесь больше нет: норм три, они
+       заданы в norms.ts и показаны засечками на полосе дня на главном экране.
+       Свободное число превращало норму в невидимую настройку, а её единственный
+       уровень — в стену посреди подготовки. */
     const next = {
       ...s,
       pat: s.pat.trim(),
@@ -49,12 +41,6 @@ export default function SettingsScreen() {
       repo: s.repo.trim(),
       branch: s.branch.trim(),
       basePath,
-      newPerDay: Math.min(100, Math.round(n)),
-      /* Потолок был 5, и он молча срезал введённое: поле принимало любое
-         число, показывало его сохранённым, а на деле в урок уходило пять.
-         Дневная норма 15 при потолке 5 означала три обязательных запуска
-         приложения — ритуал вместо занятия. */
-      newPerLesson: Math.min(20, Math.round(nl)),
       requestRetention: s.requestRetention || DEFAULT_SETTINGS.requestRetention
     }
     if (!next.pat) {
@@ -157,16 +143,6 @@ export default function SettingsScreen() {
         <div className="field">
           <label>Папка карточек</label>
           <input value={s.basePath} onChange={set('basePath')} />
-        </div>
-      </div>
-      <div className="row">
-        <div className="field">
-          <label>Новых в день</label>
-          <input inputMode="numeric" value={newPerDayStr} onChange={e => setNewPerDayStr(e.target.value)} />
-        </div>
-        <div className="field">
-          <label>Новых за урок</label>
-          <input inputMode="numeric" value={newPerLessonStr} onChange={e => setNewPerLessonStr(e.target.value)} />
         </div>
       </div>
       {/* Ввод по буквам выключен по умолчанию: SAT проверяет словарь выбором из

@@ -4,7 +4,7 @@
  */
 import * as db from './db'
 import { dayKey } from './daytime'
-import { DEFAULT_SETTINGS, type CardRec, type JournalRec } from './types'
+import { type CardRec, type JournalRec } from './types'
 
 const day = (off: number) => new Date(Date.now() + off * 86400000)
 
@@ -140,9 +140,9 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
       // 'demo' вместо ключей: демо показывает приложение настроенным, а не пустым;
       // настоящих запросов из демо не уходит — GitHub и очередь разборов отвечают отказом
       pat: 'demo', coachToken: 'demo', owner: 's4s4s4s', repo: 'second-brain', branch: 'master',
-      // норму берём из дефолта, а не литералом: копия уже разъехалась с ним
-      // (в демо оставались прежние 15, когда рабочая норма стала 8)
-      basePath: 'Учёба/Карточки', newPerDay: DEFAULT_SETTINGS.newPerDay, requestRetention: 0.9
+      // норм ввода здесь нет: они больше не настройка, а константы norms.ts —
+      // копия в демо разъезжалась с рабочей нормой ровно потому, что была копией
+      basePath: 'Учёба/Карточки', requestRetention: 0.9
     }))
   } else {
     localStorage.removeItem('sat-srs-settings')

@@ -1,6 +1,7 @@
 import { fsrs, generatorParameters, State, type FSRS } from 'ts-fsrs'
 import type { CardView, JournalLine } from './types'
-import { isLevelled, PRIMARY_DATE, NEW_STOP_DATE } from './scheduler'
+import { isLevelled, sectionOf, PRIMARY_DATE, NEW_STOP_DATE } from './scheduler'
+import type { Section } from './scheduler'
 import { addDaysKey, dayKey } from './daytime'
 import { byTime, minutesByDay, readMinutesByDay } from './journal'
 
@@ -318,6 +319,86 @@ export function retentionByDomain(journal: JournalLine[]): Map<string, Bucketed>
   return bucketByKey(journal, l => (l.domain ? l.domain : undefined))
 }
 
+export interface OrphanSlug { slug: string; n: number }
+export interface OrphanedLines { n: number; total: number; share: number; slugs: OrphanSlug[] }
+
+/**
+ * Строки журнала со slug, которого в колоде уже нет. Все join'ы выше (retentionByLevel,
+ * retentionByDomain, retentionBySection) делают `Map.get(slug)`, и при промахе строка молча
+ * выпадает из расчёта — ни ошибки, ни счётчика, цифра просто становится меньше и выглядит
+ * нормально.
+ *
+ * Замерено 21.08.2026 на живой колоде: из 653 строк со slug 87 (13%) ссылались на 6 слагов,
+ * которых в колоде больше нет — 4 пиявки пережили переработку (`bolster`, `deter`,
+ * `scrutinize`, `yield` → `*-2.md` с `source: releech`, историю переработка обнуляет
+ * осознанно) и 2 старых имени математических карточек. Восстанавливать историю или
+ * дописывать `fsrs` здесь нельзя — контракт колоды прямо запрещает править `fsrs` руками.
+ * Задача этой функции — сделать потерю видимой, а не заменить её починку.
+ *
+ * `total` — все строки журнала со slug (знаменатель доли), `n` — из них осиротевшие,
+ * `slugs` — по убыванию числа строк на slug. Пустой список — обычное состояние, не ошибка.
+ */
+export function orphanedLines(cards: CardView[], journal: JournalLine[]): OrphanedLines {
+  const slugsInDeck = new Set(cards.map(v => v.slug))
+  let total = 0
+  const bySlug = new Map<string, number>()
+  for (const l of journal) {
+    if (!l.slug) continue
+    total++
+    if (slugsInDeck.has(l.slug)) continue
+    bySlug.set(l.slug, (bySlug.get(l.slug) ?? 0) + 1)
+  }
+  const slugs = [...bySlug.entries()]
+    .map(([slug, n]) => ({ slug, n }))
+    .sort((a, b) => b.n - a.n || a.slug.localeCompare(b.slug))
+  const n = slugs.reduce((a, s) => a + s.n, 0)
+  return { n, total, share: total ? Math.round((n / total) * 100) / 100 : 0, slugs }
+}
+
+// ---- ретеншн и зрелость по разделам (слова/грамматика/математика) --------
+
+/** Человеческие подписи разделов (см. `Section`/`sectionOf` в scheduler.ts) — одно определение
+ *  на экран и отчёт, тем же приёмом, что и у INTERVAL_LABELS выше. */
+export const SECTION_LABELS: Record<Section, string> = { rw: 'Слова', grammar: 'Грамматика', math: 'Математика' }
+
+/**
+ * Retention по разделам — прямой ответ на «какой раздел проседает», которого раньше не было
+ * нигде: общий retention и retention по ступеням/домену смешивают слова, грамматику и математику
+ * в одну цифру. Раздел карточки в журнал построчно не пишется (в отличие от level/domain),
+ * поэтому берём его join'ом по текущей колоде через `sectionOf` — так же, как retentionByLevel
+ * берёт level по frontmatter для старых строк без явного поля.
+ */
+export function retentionBySection(cards: CardView[], journal: JournalLine[]): Map<Section, Bucketed> {
+  const sectionBySlug = new Map<string, Section>()
+  for (const v of cards) sectionBySlug.set(v.slug, sectionOf(v))
+  return bucketByKey(journal, l => (l.slug ? sectionBySlug.get(l.slug) : undefined))
+}
+
+export interface SectionMaturity { total: number; reviewCount: number; matureCount: number }
+
+/**
+ * Зрелость по разделам: сколько карточек раздела дошло до review и сколько зрелых
+ * (стабильность >= MATURE_STABILITY_DAYS). В отличие от `maturity`/`reviewCount` НЕ ограничена
+ * словарём (`isCandidate` = только kind vocab, не связка) — раздел «грамматика» и «математика»
+ * почти целиком состоит из карточек kind error/grammar/math, которые `isCandidate` не видит
+ * вовсе, а именно они здесь и есть смысл. Приостановленные карточки исключены, как и везде.
+ */
+export function maturityBySection(cards: CardView[]): Record<Section, SectionMaturity> {
+  const out: Record<Section, SectionMaturity> = {
+    rw: { total: 0, reviewCount: 0, matureCount: 0 },
+    grammar: { total: 0, reviewCount: 0, matureCount: 0 },
+    math: { total: 0, reviewCount: 0, matureCount: 0 }
+  }
+  for (const v of cards) {
+    if (v.suspended) continue
+    const o = out[sectionOf(v)]
+    o.total++
+    if (v.fsrs.state === State.Review) o.reviewCount++
+    if (v.fsrs.stability >= MATURE_STABILITY_DAYS) o.matureCount++
+  }
+  return out
+}
+
 export interface SpeedStats {
   medianMs: number
   p90Ms: number
@@ -396,6 +477,53 @@ export function gaveUpShare(journal: JournalLine[], day?: string): GaveUp {
   const rev = journal.filter(l => l.type === 'review' && l.format !== 'intro' && (day === undefined || l.day === day))
   const g = rev.filter(l => l.gave_up === true).length
   return { share: rev.length ? Math.round((g / rev.length) * 100) / 100 : 0, gaveUp: g, n: rev.length }
+}
+
+// ---- план vs факт ---------------------------------------------------------
+
+export interface PlanVsFactDay { done: number; onTime: number; delaySum: number }
+
+function dueDayKey(iso: string): string {
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? '' : dayKey(d)
+}
+
+/**
+ * План vs факт: по каждой паре соседних ревью одного (слово×навык) — планировался день X,
+ * случился день Y. До 17.08.2026 реконструкция жила только внутри report.ts как локальная
+ * функция; экрану статистики те же числа были не нужны формально, но нужны фактически —
+ * поэтому единственное определение теперь здесь, и report.ts, и Stats.tsx берут его отсюда,
+ * а не пишут вторую копию join-логики.
+ *
+ * Учебные шаги внутри дня (learning) не считаются планом/просрочкой — интересуют только
+ * межднёвные интервалы. Окно — последние `daysBack + 1` дней, включая `today`.
+ */
+export function planVsFact(journal: JournalLine[], today: string, daysBack = 6): Map<string, PlanVsFactDay> {
+  const from = addDaysKey(today, -daysBack)
+  const byItem = new Map<string, JournalLine[]>()
+  for (const l of journal) {
+    if (l.type !== 'review' || !l.slug) continue
+    const key = `${l.slug}#${l.skill ?? 'recall'}`
+    if (!byItem.has(key)) byItem.set(key, [])
+    byItem.get(key)!.push(l)
+  }
+  const perDay = new Map<string, PlanVsFactDay>()
+  for (const seq of byItem.values()) {
+    seq.sort(byTime)
+    for (let i = 1; i < seq.length; i++) {
+      const planned = seq[i - 1].due ? dueDayKey(seq[i - 1].due!) : ''
+      const actual = seq[i].day
+      if (!planned || !actual || actual < from || actual > today) continue
+      if (planned === seq[i - 1].day && actual === planned) continue
+      const delay = Math.round((Date.parse(actual) - Date.parse(planned)) / 86400_000)
+      const d = perDay.get(actual) ?? { done: 0, onTime: 0, delaySum: 0 }
+      d.done++
+      if (delay <= 0) d.onTime++
+      d.delaySum += Math.max(0, delay)
+      perDay.set(actual, d)
+    }
+  }
+  return perDay
 }
 
 // ---- снимок истории ------------------------------------------------------

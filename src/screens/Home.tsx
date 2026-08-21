@@ -1,6 +1,7 @@
 import { useApp, views, setScreen, startSync, startLesson, logReading, unsyncedCount } from '../lib/store'
 import { homeCounts, sectionOf, newBudgetFor, levelStats, activeLevel, isLevelled, type Section } from '../lib/scheduler'
-import { streak, minutesToday, readMinutesToday, floorDays, MIN_MINUTES, READ_MIN_MINUTES, RUN_MIN_REVIEWS, type PauseRange } from '../lib/journal'
+import { streak, minutesToday, readMinutesToday, floorDays, reviewsByDay, MIN_MINUTES, READ_MIN_MINUTES, RUN_MIN_REVIEWS, type PauseRange } from '../lib/journal'
+import { DAY_NORMS, NEW_PER_DAY, NORM_LEVELS, NORM_TITLE_GENITIVE, dayNormFill, dayNormStatus } from '../lib/norms'
 import { examReady, maturity, PRIMARY_DATE } from '../lib/metrics'
 import { State } from 'ts-fsrs'
 import { dayKey } from '../lib/daytime'
@@ -9,21 +10,39 @@ import FlameBuddy from '../components/FlameBuddy'
 import FjordScene from '../components/FjordScene'
 import type { CardView } from '../lib/types'
 
-function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart, onReview, levelLine, onPath }: {
+/** «1 упражнение · 3 упражнения · 12 упражнений» — подпись читается вслух, а не как счётчик. */
+function упражнений(n: number): string {
+  const ten = n % 100
+  const one = n % 10
+  const слово = ten >= 11 && ten <= 14 ? 'упражнений'
+    : one === 1 ? 'упражнение'
+    : one >= 2 && one <= 4 ? 'упражнения'
+    : 'упражнений'
+  return `${n} ${слово}`
+}
+
+function SectionBlock({ title, icon, badge, glyph, cards, budget, extraBudget, onStart, onReview, onExtra, levelLine, onPath }: {
   title: string
   icon: React.ReactNode
   badge: string
   glyph: string
   cards: CardView[]
   budget: number
+  /** Остаток новых до МАКСИМУМА дня — запас сверх оптимума (norms.ts::NEW_PER_DAY). */
+  extraBudget: number
   onStart: () => void
   onReview: () => void
+  onExtra: () => void
   levelLine?: string
   onPath?: () => void
 }) {
   const c = homeCounts(cards, budget)
   const reviewDue = c.learnDue + c.revDue
   const due = reviewDue + c.newAvail
+  /* Стена «Всё повторено» при выбранном оптимуме — простой, а не отдых: до экзамена
+     недели. Пока до максимума дня есть запас и есть что вводить, раздел предлагает
+     урок сверх нормы. Честная стена остаётся ровно одна — взятый максимум. */
+  const extraAvail = due === 0 ? homeCounts(cards, extraBudget).newAvail : 0
   return (
     <div className="card section-card">
       <span className="sec-glyph" style={{ ['--rune-shape' as string]: glyph } as React.CSSProperties} />
@@ -46,9 +65,15 @@ function SectionBlock({ title, icon, badge, glyph, cards, budget, onStart, onRev
           <div style={{ width: `${Math.round((c.byState.review / c.total) * 100)}%` }} />
         </div>
       )}
-      <button className="btn btn-green section-btn" onClick={onStart} disabled={due === 0}>
-        {due === 0 ? <><Check size={18} /> Всё повторено</> : `Учить · ${due}`}
-      </button>
+      {extraAvail > 0 ? (
+        <button className="btn btn-green section-btn" onClick={onExtra}>Ещё · {extraAvail}</button>
+      ) : (
+        <button className="btn btn-green section-btn" onClick={onStart} disabled={due === 0}>
+          {due === 0
+            ? <><Check size={18} /> {extraBudget === 0 ? 'Максимум дня взят' : 'Всё повторено'}</>
+            : `Учить · ${due}`}
+        </button>
+      )}
       {c.newAvail > 0 && reviewDue > 0 && (
         <button className="section-review" onClick={onReview}>Только повторить · {reviewDue}</button>
       )}
@@ -66,14 +91,23 @@ export default function Home() {
   /* Бюджет новых — свой у каждого раздела (`newBudgetFor`). Общий на колоду
      доставался тому, кого открывали первым, и остальные стояли с погашенной
      кнопкой «Всё повторено» поверх нетронутых карточек. */
-  const budgetRw = newBudgetFor(rw, app.settings.newPerDay, app.journal, today)
-  const budgetGrammar = newBudgetFor(grammar, app.settings.newPerDay, app.journal, today)
-  const budgetMath = newBudgetFor(math, app.settings.newPerDay, app.journal, today)
+  const budgetRw = newBudgetFor(rw, NEW_PER_DAY.norm, app.journal, today)
+  const budgetGrammar = newBudgetFor(grammar, NEW_PER_DAY.norm, app.journal, today)
+  const budgetMath = newBudgetFor(math, NEW_PER_DAY.norm, app.journal, today)
+  // запас сверх оптимума — им живёт кнопка «Ещё» (урок сверх нормы)
+  const extraRw = newBudgetFor(rw, NEW_PER_DAY.max, app.journal, today)
+  const extraGrammar = newBudgetFor(grammar, NEW_PER_DAY.max, app.journal, today)
+  const extraMath = newBudgetFor(math, NEW_PER_DAY.max, app.journal, today)
   const pause: PauseRange | null = app.settings.pauseFrom && app.settings.pauseTo
     ? { from: app.settings.pauseFrom, to: app.settings.pauseTo } : null
   const st = streak(app.journal, today, pause)
   const mins = minutesToday(app.journal)
-  const minsDone = mins >= MIN_MINUTES || st.todayDone
+  /* Полоса дня считается в УПРАЖНЕНИЯХ, а не в минутах: минутный порог за 41 сессию
+     не был взят ни разу и работал как приговор. Число берём той же картой, по
+     которой день зачитывается (`reviewsByDay` → `isDayDone`), а не отдельным
+     подсчётом: два независимых счёта одного и того же разъезжаются. */
+  const reviewsToday = reviewsByDay(app.journal).get(today) ?? 0
+  const norm = dayNormStatus(reviewsToday)
   // Вторая половина защищённого минимума. До сих пор её не было видно нигде,
   // и в «Метриках» семь недель подряд стоит «0/7 (не трекается)».
   const readMins = readMinutesToday(app.journal)
@@ -107,6 +141,19 @@ export default function Home() {
     : ''
 
   const go = (s: Section, reviewOnly = false) => () => startLesson(s, reviewOnly)
+  const goExtra = (s: Section) => () => startLesson(s, false, true)
+
+  /* Подпись полосы дня. Число упражнений впереди всегда: это то, что человек
+     сделал сегодня. Дальше — состояние дня (пауза или зачёт) и следующая цель;
+     когда взят максимум, подпись так и говорит — дальше идти незачем. */
+  const dayGoal = norm.next
+    ? `до ${NORM_TITLE_GENITIVE[norm.next.level]} ${norm.next.target - reviewsToday}`
+    : 'максимум дня взят'
+  const dayLabel = st.pausedToday
+    ? `${упражнений(reviewsToday)} · пауза до ${app.settings.pauseTo.slice(5).split('-').reverse().join('.')}`
+    : st.todayDone
+      ? `${упражнений(reviewsToday)} · ${norm.next ? `зачтён · ${dayGoal}` : dayGoal}`
+      : `${упражнений(reviewsToday)} · ${dayGoal}`
 
   // строка активного уровня для блока «Слова»
   const rwStats = levelStats(rw)
@@ -177,13 +224,28 @@ export default function Home() {
       <div className="card hero hero-slim">
         <div className="hero-head" style={{ marginBottom: 10 }}>
           <span className="hero-title">Сегодня</span>
-          <span className="hero-sub">до SAT: {daysToExam} дн <span className="rsep">·</span> завтра: {cAll.revTomorrow}</span>
+          {/* Минуты не выброшены — они переехали сюда: время остаётся полезной
+              справкой, но перестало быть шкалой дня. */}
+          <span className="hero-sub">
+            до SAT: {daysToExam} дн <span className="rsep">·</span> завтра: {cAll.revTomorrow}
+            <span className="rsep">·</span> {Math.floor(mins)}/{MIN_MINUTES} мин
+          </span>
         </div>
         <div className="minbar-row" style={{ marginTop: 0 }}>
-          <div className="minbar"><div style={{ width: `${Math.min(100, (mins / MIN_MINUTES) * 100)}%` }} /></div>
-          <span className={`minbar-label${minsDone ? ' done' : ''}`}>
-            {st.pausedToday ? `пауза до ${app.settings.pauseTo.slice(5).split('-').reverse().join('.')}` : st.todayDone ? 'день зачтён' : `${Math.floor(mins)}/${MIN_MINUTES} мин`}
-          </span>
+          <div className="minbar minbar-day">
+            <div style={{ width: `${dayNormFill(reviewsToday) * 100}%` }} />
+            {/* Три нормы дня видны сразу: взятая засечка гаснет в зелёное, за
+                невзятой видно, сколько осталось. */}
+            {NORM_LEVELS.map(l => (
+              <span
+                key={l}
+                className={`minbar-tick${reviewsToday >= DAY_NORMS[l] ? ' is-hit' : ''}`}
+                style={{ left: l === 'max' ? 'calc(100% - 2px)' : `calc(${(DAY_NORMS[l] / DAY_NORMS.max) * 100}% - 1px)` }}
+                title={`${NORM_TITLE_GENITIVE[l]} — ${DAY_NORMS[l]}`}
+              />
+            ))}
+          </div>
+          <span className={`minbar-label${st.todayDone ? ' done' : ''}`}>{dayLabel}</span>
         </div>
         {/* Чтение — вторая половина минимума. Отдельной полосой, а не в общем
             зачёте: подменять тридцать минут чтения пятнадцатью минутами
@@ -209,9 +271,9 @@ export default function Home() {
         {st.freezeSpentYesterday && <div className="freeze-note">❄ Заморозка спасла серию — осталось {st.freezes}</div>}
       </div>
 
-      <SectionBlock title="Слова" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budgetRw} onStart={go('rw')} onReview={go('rw', true)} levelLine={levelLine} onPath={() => setScreen('path')} />
-      <SectionBlock title="Грамматика" icon={<span className="sec-x">¶</span>} badge="badge-green" glyph="var(--rune-ansuz)" cards={grammar} budget={budgetGrammar} onStart={go('grammar')} onReview={go('grammar', true)} />
-      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budgetMath} onStart={go('math')} onReview={go('math', true)} />
+      <SectionBlock title="Слова" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budgetRw} extraBudget={extraRw} onStart={go('rw')} onReview={go('rw', true)} onExtra={goExtra('rw')} levelLine={levelLine} onPath={() => setScreen('path')} />
+      <SectionBlock title="Грамматика" icon={<span className="sec-x">¶</span>} badge="badge-green" glyph="var(--rune-ansuz)" cards={grammar} budget={budgetGrammar} extraBudget={extraGrammar} onStart={go('grammar')} onReview={go('grammar', true)} onExtra={goExtra('grammar')} />
+      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budgetMath} extraBudget={extraMath} onStart={go('math')} onReview={go('math', true)} onExtra={goExtra('math')} />
 
       <div className="home-actions">
         <div className="row">

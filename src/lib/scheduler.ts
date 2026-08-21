@@ -1,7 +1,7 @@
 import { fsrs, generatorParameters, Rating, State, type Grade, type Card as FsrsCard, type FSRS } from 'ts-fsrs'
 import type { CardView, Format, StudyItem, JournalLine } from './types'
 import { endOfStudyDay, dayKey, addDaysKey } from './daytime'
-import { TYPO_MIN_LEN, TYPO_MAX_EDITS, newIntroducedOn } from './journal'
+import { TYPO_MIN_LEN, TYPO_MAX_EDITS, newIntroducedOn, cardTimeCap } from './journal'
 
 export function makeScheduler(requestRetention: number): FSRS {
   // fuzz разводит одновременно выученные карточки по разным дням — меньше комков и MC-соседей
@@ -42,7 +42,7 @@ export const DUE_CAP = new Date(2026, 8, 26)       // 26.09.2026
    не растёт, только дозревает то, что уже введено.
 
    Решения этого класса раньше не существовало в коде вовсе — оно держалось на
-   памяти владельца: «не забыть зайти в настройки и обнулить newPerDay». Запрещённый
+   памяти владельца: «не забыть зайти в настройки и обнулить норму новых». Запрещённый
    класс — правило, которое человек обязан помнить, а не код. Здесь константа.
 
    Граница включает саму дату: с 00:00 19.09.2026 бюджет новых уже нулевой, последний
@@ -103,7 +103,7 @@ export const SECTIONS: readonly Section[] = ['rw', 'grammar', 'math']
 /**
  * Дневной остаток новых карточек ДЛЯ РАЗДЕЛА.
  *
- * `newPerDay` — норма ввода по ПРЕДМЕТУ, а не общий котёл на колоду. Общий котёл
+ * `perDay` (norms.ts::NEW_PER_DAY) — норма ввода по ПРЕДМЕТУ, а не общий котёл на колоду. Общий котёл
  * доставался тому разделу, который открыли первым: за четырнадцать дней «Слова»
  * забирали его каждый день целиком, и «Грамматика» (20 карточек) с «Математикой»
  * (4 карточки) не ввели ни одной — их блоки показывали «Всё повторено» и гасили
@@ -228,6 +228,67 @@ export const NEW_GAP = 2
  */
 export const MAX_REVIEW_PER_LESSON = 60
 
+/**
+ * Потолок повторов за учебный ДЕНЬ (в разделе).
+ *
+ * Урочный потолок ограничивал один заход внутри одного раздела и на этом
+ * заканчивался: ученик, начавший второй урок, получал ещё до 60 повторов,
+ * третий — ещё, и так сколько угодно раз. Защиты от лавины просрочки на уровне
+ * суток не существовало.
+ *
+ * Сейчас это не жмёт (42 карточки в Review, 7–30 повторов в день), но выстрелит
+ * в сентябре. Прикидка на живой колоде 21.08.2026 — настоящий ts-fsrs, оценки
+ * разыграны по живому распределению журнала (Again 145 · Hard 35 · Good 342 ·
+ * Easy 1), ввод 8 новых в день до NEW_STOP_DATE, срок зажат DUE_CAP, — даёт к
+ * 03.10 те самые 273 введённых карточки (TARGET_REVIEW = 275) и такую дневную
+ * нагрузку повторов: медиана 31, 20.09 — 53, 21.09 — 74, 23.09 — 102, 24.09 —
+ * 135, пик 208 на 25.09 (в этот день упирается в потолок DUE_CAP всё, что
+ * планировщик успел на него сдвинуть), 26.09 — 181, дальше 90–100 в день до
+ * экзамена. Неделя пропуска в сентябре даёт 202 в первый же день возвращения.
+ *
+ * Откуда 180. Это три урочных потолка — три захода по 12–15 минут, около 25
+ * минут чистых ответов при медиане 8,2 c. Число сходится с потолком, который
+ * ученик уже показал: за 14 учебных дней медиана дня — 34 оценки, а рекорд —
+ * 187 (27.07.2026), и это единственный день выше сотни. Выше рекорда потолок
+ * ставить не на чем: доказательств, что такой день бывает, нет, а 200+ повторов
+ * подряд — это уже зубрёжка, чей сигнал FSRS всё равно испортит.
+ *
+ * Потолок кусается ровно там, где нужно: из всей сентябрьской прикидки его
+ * задевают только 25.09 (208 → 28 переносится) и 26.09, а 27.09 нагрузка сама
+ * падает до 57 и долг рассасывается за сутки. То есть это ограничитель стены, а
+ * не дроссель на нормальной работе.
+ *
+ * ПО РАЗДЕЛУ, А НЕ ОДНИМ КОТЛОМ. Разделы — разные предметы, и норма ввода уже
+ * считается по предмету (newBudgetFor; общий котёл однажды оставил грамматику и
+ * математику без единой введённой карточки). Дневной потолок повторов идёт тем
+ * же правилом. Словарь — 95% колоды, так что вся описанная выше арифметика
+ * относится именно к нему.
+ */
+export const MAX_REVIEW_PER_DAY = 3 * MAX_REVIEW_PER_LESSON
+
+/**
+ * Сколько повторов дневной потолок ещё разрешает.
+ *
+ * Сделанное сегодня считается по состоянию самих карточек, а не по журналу:
+ * очередь и так собирается из состояний, и они уже содержат ответ — единица,
+ * которую сегодня оценили, несёт `last_review` этого учебного дня. Второй
+ * источник о том же (журнал) пришлось бы тянуть через все вызовы очереди и
+ * держать в согласии с первым.
+ *
+ * Считаем Review и Relearning: и то и другое — повтор созревшей карточки
+ * (в Relearning попадают ТОЛЬКО из Review). Learning не в счёт — это сегодняшнее
+ * знакомство и его отработка, у них свой лимит (norms.ts::NEW_PER_DAY, NEW_PER_LESSON) и своя
+ * задача. Выпуск вчерашнего слова в Review учтётся как повтор — это тоже
+ * извлечение из памяти, и на фоне 180 единичные карточки ничего не решают.
+ */
+function reviewsLeftToday(items: StudyItem[], now: Date): number {
+  const сегодня = dayKey(now)
+  const сделано = items.filter(i =>
+    (i.fsrs.state === State.Review || i.fsrs.state === State.Relearning) &&
+    i.fsrs.last_review && dayKey(i.fsrs.last_review) === сегодня).length
+  return Math.max(0, MAX_REVIEW_PER_DAY - сделано)
+}
+
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
   for (let i = a.length - 1; i > 0; i--) {
@@ -238,14 +299,72 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 /**
+ * Сколько дней карточка ждёт переработки, прежде чем вернуться в уроки без неё.
+ *
+ * Контур замкнут через колоду, и обе его половины видны в коде: приложение
+ * ставит `leech: ДАТА` (store.ts::leechTransition), инструмент колоды
+ * `tools/пиявки.mjs` отбирает карточки ровно по этому полю, переписывает
+ * примеры/мнемонику/ловушки и СНИМАЕТ поле (`{ ключ: 'leech' }` в `применить`),
+ * проставляя `reformulated`. Слияние при синхронизации берёт за базу удалённый
+ * фронтматтер (yamlfm.ts::mergeCard — наш вклад только fsrs-блоки и
+ * my_sentence), поэтому снятая метка доезжает до приложения и карточка
+ * возвращается в очередь сама, со своей историей и своим расписанием: `fsrs`
+ * инструмент не трогает принципиально.
+ *
+ * Но у контура есть дыра, и карантин обязан её учитывать. Инструмент берёт
+ * только словарные карточки: у error/grammar/math ответ лежит в `choices`, и
+ * менять предложение отдельно от вариантов контракт колоды запрещает — такие
+ * пиявки он называет вслух и оставляет тьютору. Плюс инструмент вообще может не
+ * запускаться неделями. Бессрочный карантин означал бы, что слово молча
+ * выпадает из подготовки навсегда, — а это худшее из всего, что здесь можно
+ * сделать: за 43 дня до экзамена (21.08 → 03.10) из практики исчезли бы именно
+ * те слова, которые не выучены.
+ *
+ * Семь дней — передышка самого инструмента (`ПЕРЕДЫШКА_ДНЕЙ` в пиявки.mjs:
+ * переработанную карточку он не трогает неделю, давая новой формулировке
+ * показать себя). Столько же ждёт и приложение: не забрали за неделю — значит
+ * машина эту карточку не возьмёт, и слово возвращается в уроки как есть, а не
+ * пропадает. Флаг при этом остаётся: отчёт и метрики продолжают её показывать.
+ */
+export const LEECH_QUARANTINE_DAYS = 7
+
+/**
+ * Карточка изъята из уроков и ждёт переработки.
+ *
+ * Флаг пиявки ставился и снимался, но на состав урока не влиял никак: слово,
+ * про которое уже доказано, что повторение его не лечит, крутилось в очереди
+ * наравне со всеми. Замер живой колоды 21.08.2026: 11 карточек с флагом
+ * (attribute, concise, corroborate, derive, facilitate, implication, imply,
+ * infer, plausible, substantial, undermine) съели 185 показов из 637 за всю
+ * историю и 57 из 153 за последние две недели — 37% работы уходило в слова,
+ * которым нужна не ещё одна встреча, а другой материал.
+ *
+ * Дата в поле — начало карантина. Нечитаемая или пустая дата карантина не
+ * открывает: без опоры на календарь срок не ограничить, а бессрочно вынимать
+ * слово из подготовки нельзя (см. LEECH_QUARANTINE_DAYS).
+ */
+export function inRework(v: CardView, now: Date = new Date()): boolean {
+  const день = (v.leech || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(день)) return false
+  return dayKey(now) < addDaysKey(день, LEECH_QUARANTINE_DAYS)
+}
+
+/**
  * Развёртка колоды в учебные единицы (карточка × навык).
  * prep-навык подключается, когда слово уже знакомо (recall в Review) —
  * или сразу, если prep-график уже начат (не бросаем начатое).
+ *
+ * Карточка в переработке (`inRework`) единиц не даёт вовсе — ни уроку, ни
+ * счётчикам, ни прогнозу нагрузки. Изъятие живёт именно здесь, а не в
+ * `buildQueue`: убери её только из очереди — и главный экран продолжил бы
+ * обещать повтор, которого урок не даст. Из колоды и из отчётности карточка при
+ * этом никуда не девается: `metrics.leeches`, списки `report.ts` и разбивка
+ * `byState` считают по карточкам, а не по учебным единицам.
  */
-export function expandItems(cards: CardView[]): StudyItem[] {
+export function expandItems(cards: CardView[], now: Date = new Date()): StudyItem[] {
   const items: StudyItem[] = []
   for (const c of cards) {
-    if (c.suspended) continue
+    if (c.suspended || inRework(c, now)) continue
     items.push({ view: c, skill: 'recall', fsrs: c.fsrs })
     if (c.prep && c.fsrsPrep) {
       const started = c.fsrsPrep.state !== State.New
@@ -292,7 +411,7 @@ export function freshItems(items: StudyItem[]): StudyItem[] {
  */
 export function nextNewItems(cards: CardView[], exclude: Set<string>, limit = 1, now: Date = new Date()): StudyItem[] {
   if (!newIntroAllowed(now)) return []
-  return freshItems(expandItems(cards))
+  return freshItems(expandItems(cards, now))
     .filter(i => i.skill === 'recall' && !exclude.has(itemKey(i)))
     .slice(0, Math.max(0, limit))
 }
@@ -303,7 +422,7 @@ export function nextNewItems(cards: CardView[], exclude: Set<string>, limit = 1,
  */
 export function buildQueue(cards: CardView[], newBudget: number, now: Date = new Date(), forced?: Set<string>): StudyItem[] {
   const eod = endOfStudyDay(now)
-  const items = expandItems(cards)
+  const items = expandItems(cards, now)
 
   const learning = items
     .filter(i => isLearning(i.fsrs.state) && i.fsrs.due.getTime() <= now.getTime() + LEARN_AHEAD_MS)
@@ -324,7 +443,12 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
   const overdue = items
     .filter(i => i.fsrs.state === State.Review && i.fsrs.due.getTime() < eod.getTime())
     .sort((a, b) => a.fsrs.due.getTime() - b.fsrs.due.getTime())
-  const review = shuffle(overdue.slice(0, MAX_REVIEW_PER_LESSON))
+  /* Урочный и дневной потолки решают разные задачи, поэтому их два.
+     Урочный (MAX_REVIEW_PER_LESSON) — про длину одного захода: 60 повторов ≈
+     12–15 минут, урок такой длины начинают. Дневной (MAX_REVIEW_PER_DAY) — про
+     сутки целиком: без него второй урок выдавал ещё до 60 повторов, третий ещё,
+     и защиты от лавины просрочки на уровне дня не было вовсе. */
+  const review = shuffle(overdue.slice(0, Math.min(MAX_REVIEW_PER_LESSON, reviewsLeftToday(items, now))))
 
   // выбор новых: сначала error/grammar (закрывают доказанные пробелы), потом pt-разбор, потом
   // math, потом словарь; словарь идёт уровнями (Duolingo-путь): level ASC, внутри уровня —
@@ -378,7 +502,7 @@ export const MAX_EARLY_FILLERS = 12
  * Насколько урок может превысить свой лимит новых слов, когда иначе ему нечего показать.
  * Урочный лимит — про комфортный темп, и он уступает пустому экрану, но не безгранично:
  * без потолка урок на тонком пуле вводил всю дневную норму за один присест.
- * Дневной лимит (`newPerDay`) не превышается никогда.
+ * Дневной лимит (norms.ts::NEW_PER_DAY) не превышается никогда.
  */
 export const MAX_INTRO_BONUS = 2
 
@@ -386,7 +510,7 @@ export function earlyFillers(cards: CardView[], now: Date, exclude: Set<string>,
   const eod = endOfStudyDay(now)
   const horizon = now.getTime() + FILLER_LOOKAHEAD_MS
   const сегодня = dayKey(now)
-  return expandItems(cards)
+  return expandItems(cards, now)
     .filter(i => {
       if (i.fsrs.state === State.New) return false
       /* Спрошенное сегодня в заполнители не берём. Память «что уже показано» жила
@@ -979,6 +1103,49 @@ export function medianForKind(speed: { medianMs: number; byKind: Record<string, 
 }
 
 /**
+ * Замер это или его отсутствие.
+ *
+ * У порога «медленно» не было верхней границы: всё, что дольше
+ * `slowThresholdMs`, приходило в FSRS как Hard — «трудно, но вспомнил».
+ * Ответ через две минуты (отвлёкся, отложил телефон, вернулся) — не трудный
+ * ответ, а отсутствие ответа, и Hard про него не сообщает ничего, кроме лишней
+ * difficulty.
+ *
+ * Потолок здесь не новый — это `cardTimeCap` из journal.ts (60 c обычная
+ * карточка, 180 c математика). Он уже означает ровно это: дальше замер
+ * недействителен. Тем же потолком журнал режет зачётные минуты
+ * (`minutesByDay`) и само поле `elapsed_ms` на записи (`journalElapsedMs`,
+ * store.ts) — с формулировкой «это не медленный ответ, а отсутствие замера».
+ * Путь оценки был единственным местом, куда потолок не доехал: `suggestedGrade`
+ * получает сырой `answeredMs` прямо с экрана (Review.tsx), а не из журнала.
+ * Второй истины о том же не заводим — берём ту, что уже есть.
+ *
+ * Числа живого журнала на 21.08.2026 (523 оценки, format ≠ intro): медиана
+ * словарного ответа 8 204 мс, p90 27,6 c, p95 65,5 c, максимум 25 минут.
+ * Порог «медленно» для словаря = 20,5 c, потолок замера = 60 c, то есть 7,3
+ * медианы; между ними и живёт честное «медленно». Выше потолка 28 строк из 523
+ * (5,4%) — и это ровно те 28 строк, ради которых в store.ts появился
+ * `journalElapsedMs`.
+ *
+ * ПОЧЕМУ ВЫШЕ ПОТОЛКА — Good, А НЕ Again. Соблазн назвать такой ответ провалом
+ * данные не подтверждают: среди 25 ответов дольше минуты с объективным исходом
+ * верных 18 (72%). Провалом их объявить значит выписать карточке lapse и
+ * поднять difficulty за верно вспомненное слово — та самая порча модели,
+ * от которой колода уже пострадала (медиана difficulty 9,08 из 10 при нуле
+ * зрелых карточек). Поэтому латентность просто перестаёт участвовать в решении,
+ * а исход остаётся: верно — Good, неверно — Again (ветка выше).
+ *
+ * Побочное следствие, названное вслух: у карточек разбора (kind error) медиана
+ * ответа 24,3 c, порог «медленно» = 60,8 c, а потолок замера — 60 c. Окно Hard
+ * по латентности у них схлопывается почти в ноль, и оценку определяет
+ * объективный исход. Для карточки, где ответ — это чтение таблицы и четырёх
+ * длинных вариантов, это верно: минута там измеряет чтение, а не память.
+ */
+function isMeasured(elapsedMs: number, kind: string): boolean {
+  return Number.isFinite(elapsedMs) && elapsedMs <= cardTimeCap(kind)
+}
+
+/**
  * Оценка, предложенная по объективному исходу. Вердикт приходит целиком, а не
  * парой булевых: `correct`/`typo` допускали комбинацию, которой не бывает, и
  * четвёртый исход (`twin`, C10) в эту пару уже не помещался.
@@ -988,7 +1155,7 @@ export function suggestedGrade(format: Format, verdict: TypeVerdict, elapsedMs =
   if (verdict === 'wrong') return Rating.Again
   // синоним: значение вспомнено, форма — нет; скорость тут уже ничего не решает
   if (verdict === 'twin') return Rating.Hard
-  if (elapsedMs > slowThresholdMs(kind, medianMs)) return Rating.Hard
+  if (isMeasured(elapsedMs, kind) && elapsedMs > slowThresholdMs(kind, medianMs)) return Rating.Hard
   return Rating.Good
 }
 
@@ -997,7 +1164,7 @@ export function loadForecast(cards: CardView[], days = 7, now: Date = new Date()
   const out = new Array(days).fill(0)
   const today = dayKey(now)
   const dayKeys = Array.from({ length: days }, (_, k) => addDaysKey(today, k))
-  for (const i of expandItems(cards)) {
+  for (const i of expandItems(cards, now)) {
     if (i.fsrs.state === State.New) continue
     let d = dayKey(i.fsrs.due)
     if (d < today) d = today
@@ -1011,17 +1178,38 @@ export function loadForecast(cards: CardView[], days = 7, now: Date = new Date()
  * Счётчики для главного экрана (в учебных единицах: карточка × навык).
  * newAvail тоже гасится NEW_STOP_DATE — иначе плашка «N новых» на Home обещала бы
  * ввод, которого buildQueue уже не даст, и расходилась бы с настоящим уроком.
+ *
+ * А вот потолки урока и дня (MAX_REVIEW_PER_LESSON / MAX_REVIEW_PER_DAY) здесь
+ * сознательно НЕ применяются: `revDue` — это долг, а не порция. Потолок
+ * растягивает выдачу во времени и не отменяет ни одной карточки, поэтому
+ * просрочка, не влезшая в сегодняшний лимит, обязана остаться в счётчике
+ * «повторить» — иначе она молча исчезнет с экрана, а вместе с ней и повод
+ * заниматься завтра. Ровно по этой причине потолок дня считается по разделу и
+ * живёт в buildQueue: этот же счётчик вызывается и на всю колоду сразу
+ * (Home.tsx, Stats.tsx), где потолок раздела ничего не значит.
  */
 export function homeCounts(cards: CardView[], newBudget: number, now: Date = new Date()) {
   const eod = endOfStudyDay(now)
-  const items = expandItems(cards)
+  const items = expandItems(cards, now)
   const learnDue = items.filter(i => isLearning(i.fsrs.state) && i.fsrs.due.getTime() <= now.getTime() + LEARN_AHEAD_MS).length
   const revDue = items.filter(i => i.fsrs.state === State.Review && i.fsrs.due.getTime() < eod.getTime()).length
   const newAvail = Math.min(items.filter(i => i.fsrs.state === State.New).length, Math.max(0, newIntroAllowed(now) ? newBudget : 0))
+  /* «Завтра» — это срок внутри ЗАВТРАШНЕГО учебного дня: окно [конец сегодняшнего
+     дня; +24 часа). Обе половины счёта — и повторы, и learning — считаются по
+     одному окну, потому что нижняя граница у них общая и она одна: конец
+     учебного дня (daytime.ts::endOfStudyDay, rollover 04:00).
+
+     Так было не всегда. У повторов нижняя граница стояла (`t >= eod`), а у
+     learning — `due > now + LEARN_AHEAD_MS`, то есть момент внутри СЕГОДНЯШНЕГО
+     дня. Карточка, которую ещё предстоит доучить сегодня вечером, попадала в
+     плашку «завтра»: в 20:00 слово со сроком 23:00 обещалось на завтра, хотя
+     приходило через три часа. Число на главном экране складывалось из
+     сегодняшнего долга и завтрашнего плана, и планировать по нему было нельзя. */
+  const завтра = eod.getTime() + 86400_000
   const revTomorrow = items.filter(i => {
     const t = i.fsrs.due.getTime()
-    return i.fsrs.state === State.Review && t >= eod.getTime() && t < eod.getTime() + 86400_000
-  }).length + items.filter(i => isLearning(i.fsrs.state) && i.fsrs.due.getTime() > now.getTime() + LEARN_AHEAD_MS && i.fsrs.due.getTime() < eod.getTime() + 86400_000).length
+    return i.fsrs.state !== State.New && t >= eod.getTime() && t < завтра
+  }).length
   const active = cards.filter(c => !c.suspended)
   const byState = {
     new: active.filter(c => c.fsrs.state === State.New).length,
