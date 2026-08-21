@@ -1,8 +1,12 @@
 import { State } from 'ts-fsrs'
-import type { CardRec, CardView, JournalRec, JournalLine } from './types'
-import { cardView } from './yamlfm'
+import type { CardRec, CardView, JournalRec, JournalLine, ReadingRec } from './types'
+import { cardView, readingView } from './yamlfm'
 import { addDaysKey, dayKey, isoLocal } from './daytime'
-import { minutesByDay, readMinutesByDay, streak, trueRetention30, retentionByFormat, READ_MIN_MINUTES, type PauseRange } from './journal'
+import {
+  minutesByDay, readMinutesByDay, streak, trueRetention30, retentionByFormat, READ_MIN_MINUTES,
+  markDigest, markCount, readingSrc, readingPassed, readTextSlugs, normWord,
+  READING_UNKNOWN_SHARE_MAX, type PauseRange
+} from './journal'
 import { activeLevel, levelStats, isLevelled, EXAM_DATE, SECTIONS } from './scheduler'
 import {
   examReady, maturity, pace, retentionByInterval, retentionBySection, maturityBySection,
@@ -25,7 +29,22 @@ function pct(part: number, total: number): string {
   return total ? `${Math.round((part / total) * 100)}% (n=${total})` : '—'
 }
 
-export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date = new Date(), pause?: PauseRange | null): string {
+/**
+ * Значение в ячейку markdown-таблицы.
+ *
+ * В ячейку попадает предложение из журнала — чужой текст, про который ничего не
+ * обещано. Перевод строки закрывает таблицу на середине, вертикальная черта режет
+ * строку на лишние столбцы: и то и другое ломает весь отчёт молча, а не в этой ячейке.
+ */
+const cell = (s: string, max = 120): string => {
+  const one = s.replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim()
+  return one.length > max ? one.slice(0, max - 1) + '…' : one
+}
+
+/** Сколько кандидатов в карточки печатать таблицей: дальше это уже не список, а свалка. */
+const CANDIDATE_CAP = 60
+
+export function buildReport(cards: CardRec[], journal: JournalRec[], readings: ReadingRec[], now: Date = new Date(), pause?: PauseRange | null): string {
   const today = dayKey(now)
   const views = cards.filter(c => !c.broken).map(cardView)
   const active = views.filter(v => !v.suspended)
@@ -171,6 +190,52 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], now: Date =
   out.push(`- «Не помню» вместо попытки вспомнить (вся история, интро не считается): ${pct(gu.gaveUp, gu.n)}`)
   const typoTotal = ts.typos + ts.realMisses
   out.push(`- Ошибки ввода слова: опечаток ${ts.typos} · настоящих незнаний ${ts.realMisses}${typoTotal ? ` (доля опечаток ${Math.round((ts.typos / typoTotal) * 100)}%, n=${typoTotal})` : ''}`)
+  out.push('')
+
+  /* Чтение и отметки незнакомых слов появились в приложении 22.08.2026, а в отчёте
+     их не было: тьютор видел одну строку про минуты чтения и ни одного слова, о
+     которое владелец споткнулся. Отметка существует ради того, чтобы слово стало
+     карточкой; отметка, которой никто не читает, карточкой не станет никогда и
+     остаётся строкой в ndjson. */
+  const deckWords = new Set(views.map(v => normWord(v.word)))
+  const md = markDigest(lines, deckWords)
+  const readSlugs = readTextSlugs(lines)
+  const texts = readings
+    .map(readingView)
+    .filter(t => !t.broken)
+    .sort((a, b) => a.level - b.level || a.order - b.order || a.slug.localeCompare(b.slug))
+
+  out.push('## Чтение текстов', '')
+  if (!texts.length) {
+    out.push('- Текстов нет: каталог `Учёба/Чтение` пуст или ещё не синхронизирован.', '')
+  } else {
+    out.push(`> Порог понятности: отмеченных незнакомыми слов не больше ${Math.round(READING_UNKNOWN_SHARE_MAX * 100)}% объёма. Не взят — текст рано засчитывать прочитанным, а ступень рано повышать.`, '')
+    out.push('| текст | ур. | слов | прочитан | отмечено сейчас | порог понятности |', '|---|---|---|---|---|---|')
+    for (const t of texts) {
+      const marks = markCount(lines, readingSrc(t.slug))
+      const done = readSlugs.has(t.slug)
+      const share = t.words ? ` (${((marks / t.words) * 100).toFixed(1)}%)` : ''
+      const verdict = !done ? '—' : readingPassed(marks, t.words) ? '✅ взят' : '⚠️ не взят'
+      out.push(`| ${cell(t.title, 60)} | ${t.level >= 999 ? '⚠' : t.level} | ${t.words} | ${done ? 'да' : '—'} | ${marks}${share} | ${verdict} |`)
+    }
+    out.push('')
+  }
+
+  out.push('## Незнакомые слова — отметки владельца', '')
+  out.push('> Владелец отмечает слово касанием прямо в тексте или в условии задания. Кандидаты — те, которых в колоде сейчас нет: именно они должны стать карточками. Снятие отметки — отдельная строка журнала, а не удаление предыдущей.', '')
+  const candidates = md.entries.filter(e => !e.inDeck)
+  const alreadyInDeck = md.entries.filter(e => e.inDeck)
+  out.push(`- Отмечено сейчас: **${md.total}** (в текстах ${md.fromReading} · в заданиях ${md.fromCards}) · разных слов ${md.entries.length}`)
+  out.push(`- **Кандидаты в карточки (в колоде нет): ${candidates.length}**`)
+  if (candidates.length) {
+    out.push('', '| слово | отметок | где встретилось |', '|---|---|---|')
+    for (const e of candidates.slice(0, CANDIDATE_CAP)) {
+      out.push(`| ${e.lemma} | ${e.marks} | ${e.sample ? cell(e.sample) : '—'} |`)
+    }
+    if (candidates.length > CANDIDATE_CAP) out.push(`| … ещё ${candidates.length - CANDIDATE_CAP} | | |`)
+    out.push('')
+  }
+  out.push(`- Отмечены при живой карточке (карточка есть, а слово не узнаётся — ПЕРЕФОРМУЛИРОВАТЬ, а не добавлять): ${alreadyInDeck.length ? alreadyInDeck.map(e => `${e.lemma}${e.marks > 1 ? ` ×${e.marks}` : ''}`).join(', ') : '—'}`)
   out.push('')
 
   out.push('## Нагрузка на 7 дней (план из FSRS)', '')

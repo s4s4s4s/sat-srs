@@ -5,6 +5,7 @@ import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
   pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, typedTwin, suggestedGrade, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP,
+  blankPhrase, blankSentence,
   type TypeVerdict,
   newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
 } from '../lib/scheduler'
@@ -49,14 +50,17 @@ function shuffleOnce<T>(arr: T[]): T[] {
  * Границы отметки — ТОЛЬКО текст условия: в вариантах ответа, в разборе и в формуле касание
  * означает ответ, а не отметку, и разметке там делать нечего.
  */
-function Sentence({ context, word, revealed, marked, onWord }: {
+function Sentence({ context, word, revealed, marked, onWord, variant = 'bubble' }: {
   context: string
   word: string
   revealed: boolean
   marked: ReadonlySet<string>
   onWord: (seg: Extract<Segment, { kind: 'word' }>) => void
+  /* `phrase` — оборот вокруг пропуска ВНУТРИ пузыря значения (режим «слово по значению»).
+     Своего пузыря он не получает: вопрос один, и двумя карточками выглядеть не должен. */
+  variant?: 'bubble' | 'phrase'
 }) {
-  const cls = `rev-sentence${context.length > 140 ? ' long' : ''}`
+  const cls = variant === 'phrase' ? 'rev-cue-phrase' : `rev-sentence${context.length > 140 ? ' long' : ''}`
   return (
     <div className={cls}>
       <Markable
@@ -824,6 +828,21 @@ export default function Review() {
   const sentenceRu = card.contextsRu[card.contexts.indexOf(sentence)] ?? ''
   const answerWord = isPrep ? card.prep : task.format === 'mc' && card.choices.length >= 2 ? task.answer : card.word
 
+  /* Режим «слово по значению» без единого слова контекста неразрешим для целого куста
+     синонимов: «подкреплять, укреплять» — это и bolster, и buttress, и reinforce, и
+     substantiate сразу. Оборот вокруг пропуска возвращает признак, по которому слово
+     выбирают («______ the alibi» против «______ morale»), и берётся из ТОГО ЖЕ
+     контекста, который выдала ротация pickContext, — значит меняется вместе с ним.
+     Целым предложением он не становится (см. PHRASE_BEFORE/PHRASE_AFTER: медиана —
+     треть предложения), поэтому опасение C8 «ученик заучит предложение» он не
+     возвращает: подлежащее и придаточные остаются за срезом.
+     Карточки с единственным контекстом исключения не просят: копией знакомства
+     был бы полный пример, обрывок в четыре слова — нет. */
+  const cuePhrase = task.cue === 'meaning' ? blankPhrase(sentence, card.word) : ''
+  /* Отметка незнакомого слова обязана записать в журнал ЦЕЛОЕ предложение, а не
+     показанный обрывок: строка отметки самодостаточна (см. `sentence` в JournalLine). */
+  const cueSentence = cuePhrase ? blankSentence(sentence) : ''
+
   /* Что спросить у модели по кнопке «Почему?»: показанное предложение, верный
      ответ и то, что выбрал ученик. Без выбора (сдался, «показать ответ») строка
      пустая — запрос тогда объясняет, почему подходит верный вариант. */
@@ -941,10 +960,20 @@ export default function Review() {
             )}
           </div>
         ) : task.cue === 'meaning' && !revealed ? (
-          /* пример уже показан на знакомстве — вспоминаем слово по значению, а не по нему же */
+          /* вспоминаем слово по значению плюс оборот вокруг пропуска — предложения целиком нет */
           <div className="rev-cue">
             <div className="rev-cue-ru">{card.meaning_ru}</div>
             {card.meaning_en && <div className="rev-cue-en">{card.meaning_en}</div>}
+            {cuePhrase && (
+              <Sentence
+                context={cuePhrase}
+                word={card.word}
+                revealed={false}
+                marked={marked}
+                onWord={seg => markWord({ ...seg, sentence: cueSentence || seg.sentence })}
+                variant="phrase"
+              />
+            )}
           </div>
         ) : (
           <>

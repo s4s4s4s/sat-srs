@@ -430,11 +430,16 @@ function markLater(a: JournalLine, b: JournalLine): boolean {
  * по каждому ключу, а не сумма событий: три постановки и одно снятие после них дают «снято»
  * независимо от их числа. Строка без `on` читается как поставленная отметка (D3: старые и
  * чужие строки не должны становиться невидимыми из-за поля, которого в них не было).
+ *
+ * `src` опущен — берутся отметки ВСЕХ источников сразу (нужно отчёту: он собирает
+ * кандидатов в карточки по всей работе, а не по одному тексту). Ключ отметки уже
+ * включает источник (`markKey`), поэтому одно и то же слово, отмеченное в двух
+ * текстах, остаётся двумя отметками и не схлопывается в одну.
  */
-export function activeMarks(lines: JournalLine[], src: string): JournalLine[] {
+export function activeMarks(lines: JournalLine[], src?: string): JournalLine[] {
   const last = new Map<string, JournalLine>()
   for (const l of lines) {
-    if (l.type !== 'mark' || l.src !== src) continue
+    if (l.type !== 'mark' || (src !== undefined && l.src !== src)) continue
     const key = markKey(l)
     if (!key) continue
     const prev = last.get(key)
@@ -464,4 +469,72 @@ export function readTextSlugs(lines: JournalLine[]): Set<string> {
   const s = new Set<string>()
   for (const l of lines) if (l.type === 'reading' && l.slug) s.add(l.slug)
   return s
+}
+
+/** Одно отмеченное слово, сведённое по всем источникам. */
+export interface MarkDigestEntry {
+  lemma: string          // словарная форма — под ней слово и пойдёт в карточку
+  marks: number          // в скольких источниках отмечено сейчас
+  fromReading: number    // из них текстов
+  fromCards: number      // из них заданий
+  inDeck: boolean        // есть ли слово в колоде СЕЙЧАС
+  sample: string         // предложение из первой отметки — готовый контекст для карточки
+}
+
+/** Сводка отметок: сколько их и какие слова просятся в колоду. */
+export interface MarkDigest {
+  total: number
+  fromReading: number
+  fromCards: number
+  entries: MarkDigestEntry[]
+}
+
+/**
+ * Что владелец отметил как незнакомое — сведённое по всем источникам.
+ *
+ * Отметки копятся в журнале с 22.08.2026, но не показывались нигде: ни на экране, ни
+ * в отчёте тьютору. Смысл отметки в том, чтобы слово попало в колоду, а невидимая
+ * отметка не попадёт туда никогда — она просто лежит строкой в ndjson.
+ *
+ * Принадлежность к колоде считается ПО ТЕКУЩЕЙ колоде, а не по полю `in_deck` строки:
+ * там записана историческая правда на момент отметки, и слово, добавленное после,
+ * так и осталось бы «кандидатом» навсегда.
+ *
+ * Слово, отмеченное при живой карточке, — не кандидат, а сигнал: карточка есть, а
+ * слово не узнаётся. Такое лечится переформулировкой, поэтому эти два случая
+ * разведены, а не сложены в один список.
+ */
+export function markDigest(lines: JournalLine[], deck: ReadonlySet<string>): MarkDigest {
+  const byLemma = new Map<string, MarkDigestEntry>()
+  let fromReading = 0
+  let fromCards = 0
+  for (const l of activeMarks(lines)) {
+    const lemma = normWord(String(l.lemma || l.word || ''))
+    if (!lemma) continue
+    const isReading = (l.src ?? '').startsWith('reading:')
+    const isCard = (l.src ?? '').startsWith('card:')
+    if (isReading) fromReading++
+    if (isCard) fromCards++
+    const prev = byLemma.get(lemma)
+    if (prev) {
+      prev.marks++
+      if (isReading) prev.fromReading++
+      if (isCard) prev.fromCards++
+      if (!prev.sample && l.sentence) prev.sample = l.sentence
+    } else {
+      byLemma.set(lemma, {
+        lemma,
+        marks: 1,
+        fromReading: isReading ? 1 : 0,
+        fromCards: isCard ? 1 : 0,
+        inDeck: deckHasWord(deck, l.lemma, l.word),
+        sample: l.sentence ?? '',
+      })
+    }
+  }
+  /* Сначала то, чего в колоде нет, — это рабочий список на добавление; внутри — по
+     числу отметок: слово, споткнувшее владельца дважды, важнее споткнувшего однажды. */
+  const entries = [...byLemma.values()].sort((a, b) =>
+    Number(a.inDeck) - Number(b.inDeck) || b.marks - a.marks || a.lemma.localeCompare(b.lemma))
+  return { total: entries.reduce((n, e) => n + e.marks, 0), fromReading, fromCards, entries }
 }

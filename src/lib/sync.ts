@@ -148,7 +148,11 @@ async function doSync(settings: Settings): Promise<SyncResult> {
 
       // отчёт для тьютора — перегенерируется при каждом push-е
       const pause = settings.pauseFrom && settings.pauseTo ? { from: settings.pauseFrom, to: settings.pauseTo } : null
-      files.push({ path: `${settings.basePath}/_отчёт.md`, content: buildReport(cards, journal, new Date(), pause) })
+      /* Тексты берутся из базы, а не из аргументов: push-ветка их не трогает, но отчёт
+         сводит отметки по текстам и без списка текстов покажет пустую таблицу вместо
+         прочитанного. Список обязателен параметром именно поэтому — забыть его молча нельзя. */
+      const readings = await db.getAllReadings()
+      files.push({ path: `${settings.basePath}/_отчёт.md`, content: buildReport(cards, journal, readings, new Date(), pause) })
 
       // история метрик: одна строка в день (граница учебного дня 04:00). Снимок агрегатов слоёв 1–3;
       // exam-ready и медианная стабильность задним числом не восстановить — состояние карт перезаписывается.

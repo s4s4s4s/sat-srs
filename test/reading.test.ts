@@ -32,7 +32,8 @@ import path from 'node:path'
 import { parseMd, readingView, countWords } from '../src/lib/yamlfm'
 import {
   toNdjson, parseNdjson, activeMarks, isMarked, markCount, markKey, normWord, deckHasWord,
-  cardSrc, readingSrc, readingPassed, readTextSlugs, READING_UNKNOWN_SHARE_MAX, MARK_SENTENCE_MAX
+  cardSrc, readingSrc, readingPassed, readTextSlugs, READING_UNKNOWN_SHARE_MAX, MARK_SENTENCE_MAX,
+  markDigest
 } from '../src/lib/journal'
 import { readingsDeletionPlan } from '../src/lib/db'
 import { isCardPath, isReadingPath, readingBase } from '../src/lib/sync'
@@ -332,6 +333,61 @@ function mergeChecks(): void {
   const shuffled = [...merged].reverse()
   assert(markCount(shuffled, SRC_REEF) === markCount(merged, SRC_REEF), 'порядок строк в памяти не влияет на состояние отметок')
   group('порядок строк не решает: спор в одну миллисекунду разрешается детерминированно')
+}
+
+// ---- сводка отметок для отчёта ----------------------------------------------
+
+/**
+ * `markDigest` сводит отметки всех источников в рабочий список для тьютора.
+ *
+ * Проверяется ровно то, ради чего сводка и заведена: снятое не предлагается, одно
+ * слово из двух текстов не задваивается в списке слов, принадлежность к колоде
+ * берётся из текущей колоды, а не из поля `in_deck` строки — иначе слово, добавленное
+ * после отметки, навсегда остаётся «кандидатом».
+ */
+function digestChecks(): void {
+  const lines = [
+    markLine({ id: 'd1', word: 'moratorium', ts: '2026-08-24T10:00:00+04:00', sentence: 'The moratorium held.' }),
+    markLine({ id: 'd2', word: 'Moratoriums', lemma: 'moratorium', src: SRC_OTHER, ts: '2026-08-24T10:01:00+04:00' }),
+    markLine({ id: 'd3', word: 'kelp', ts: '2026-08-24T10:02:00+04:00' }),
+    markLine({ id: 'd4', word: 'kelp', on: false, ts: '2026-08-24T10:03:00+04:00' }),
+    markLine({ id: 'd5', word: 'bolster', src: cardSrc('bolster'), ts: '2026-08-24T10:04:00+04:00' })
+  ]
+  // колода знает bolster (карточка живая) и не знает moratorium
+  const d = markDigest(lines, new Set(['bolster']))
+
+  assert(d.total === 3, `снятое не считается: ожидалось 3 живых отметки, получено ${d.total}`)
+  assert(d.fromReading === 2 && d.fromCards === 1,
+    `источники разведены: тексты ${d.fromReading}, задания ${d.fromCards}`)
+  assert(d.entries.length === 2, `разных слов должно быть 2, получено ${d.entries.length}`)
+
+  const mora = d.entries.find(e => e.lemma === 'moratorium')
+  assert(!!mora, 'слово, отмеченное в двух текстах, не потерялось')
+  assert(mora!.marks === 2 && mora!.fromReading === 2,
+    `одно слово из двух текстов — одна строка списка с двумя отметками, получено ${mora!.marks}`)
+  assert(mora!.sample === 'The moratorium held.', 'предложение первой отметки уехало в сводку как контекст для карточки')
+  assert(!mora!.inDeck, 'слова нет в колоде — оно кандидат')
+
+  const bol = d.entries.find(e => e.lemma === 'bolster')
+  assert(bol!.inDeck && bol!.fromCards === 1, 'слово с живой карточкой помечено как уже в колоде')
+  assert(d.entries[0].lemma === 'moratorium',
+    'кандидаты идут первыми: список читают ради того, что надо добавить')
+  assert(!d.entries.some(e => e.lemma === 'kelp'), 'снятая отметка не предлагается в карточки')
+  group('сводка отметок: снятое отброшено, источники разведены, кандидаты впереди')
+
+  // принадлежность к колоде — по текущей колоде, а не по историческому полю строки
+  const later = markDigest(lines, new Set(['bolster', 'moratorium']))
+  assert(later.entries.find(e => e.lemma === 'moratorium')!.inDeck,
+    'слово, добавленное в колоду ПОСЛЕ отметки, перестаёт быть кандидатом')
+  assert(lines[0].in_deck === false,
+    'историческое поле строки при этом не переписано — журнал append-only')
+  group('принадлежность к колоде считается по текущей колоде, а не по полю отметки')
+
+  assert(activeMarks(lines).length === 3,
+    'activeMarks без источника отдаёт отметки всех источников сразу')
+  assert(activeMarks(lines, SRC_REEF).length === 1,
+    'с источником — по-прежнему только его отметки')
+  group('activeMarks: без источника — вся работа, с источником — один текст')
 }
 
 // ---- восстановление состояния ----------------------------------------------
@@ -722,6 +778,7 @@ function main(): void {
   roundtripChecks()
   brokenLineChecks()
   mergeChecks()
+  digestChecks()
   markStateChecks()
   thresholdChecks()
   pathChecks()

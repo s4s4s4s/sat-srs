@@ -42,7 +42,13 @@ function baseView(word: string, level: number, kind: string): CardView {
     path: `deck/${word}.md`, slug: word, word, pos: 'adj',
     context: `The ___ moment defined ${word}.`,
     contexts: [`The ___ moment defined ${word}.`, `A second ___ line about ${word}.`],
-    meaning_en: `meaning of ${word}`, meaning_ru: `значение ${word}`, roots: '',
+    /* Глосс обязан быть РАЗНЫМ у разных слов — как в живой колоде. Раньше здесь стояло
+       «значение ${word}», и главным словом у всех карточек оказывалось одно и то же
+       «значение»: правило двойников (meaningTwin) объявляло синонимами всю фикстуру,
+       выборка дистракторов оставалась без колоды и откатывалась на авторские варианты.
+       Фикстура, в которой все слова значат одно, не моделирует колоду, а ломает то,
+       что на ней проверяют. */
+    meaning_en: `meaning of ${word}`, meaning_ru: `${word} по-русски`, roots: '',
     source: 'test', added: '2026-07-20', level, kind,
     domain: '', confusables: [], leech: '', choices: [], answerText: '', answerNum: '',
     desmos: false, explain: '', suspended: false,

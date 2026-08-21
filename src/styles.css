@@ -521,6 +521,14 @@ body::before {
 }
 .rev-cue-ru { font-size: 24px; font-weight: 800; color: var(--text-strong); line-height: 1.35; }
 .rev-cue-en { font-size: 15px; color: var(--text2); margin-top: 8px; font-style: italic; }
+/* Оборот вокруг пропуска: строка ВНУТРИ пузыря значения, отделённая линией, а не
+   второй пузырь — вопрос один. Кегль ниже значения: значение здесь главное, оборот
+   лишь различает синонимы под ним. */
+.rev-cue-phrase {
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line);
+  font-size: 18px; font-weight: 700; color: var(--text); line-height: 1.55;
+}
+.rev-cue-phrase .rev-blank { min-width: 64px; border-bottom-width: 2px; }
 
 .sync-wait { font-size: 16px; font-weight: 800; color: var(--text2); animation: waitpulse 1.2s ease-in-out infinite; }
 @keyframes waitpulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
