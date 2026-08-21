@@ -105,6 +105,15 @@ export function Lock({ size = 18 }: { size?: number }) {
   )
 }
 
+export function Book({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...S}>
+      <path d="M4 4.5h5.5a2.5 2.5 0 0 1 2.5 2.5v12a2 2 0 0 0-2-2H4z" />
+      <path d="M20 4.5h-5.5a2.5 2.5 0 0 0-2.5 2.5v12a2 2 0 0 1 2-2H20z" />
+    </svg>
+  )
+}
+
 export function Timer({ size = 18 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" {...S}>

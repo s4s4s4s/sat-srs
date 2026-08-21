@@ -1,14 +1,15 @@
-import { useApp, views, setScreen, startSync, startLesson, logReading, unsyncedCount } from '../lib/store'
+import { useApp, views, readingViews, setScreen, startSync, startLesson, logReading, unsyncedCount } from '../lib/store'
 import { homeCounts, sectionOf, newBudgetFor, levelStats, activeLevel, isLevelled, type Section } from '../lib/scheduler'
-import { streak, minutesToday, readMinutesToday, floorDays, reviewsByDay, MIN_MINUTES, READ_MIN_MINUTES, RUN_MIN_REVIEWS, type PauseRange } from '../lib/journal'
+import { streak, minutesToday, readMinutesToday, floorDays, reviewsByDay, readTextSlugs, MIN_MINUTES, READ_MIN_MINUTES, RUN_MIN_REVIEWS, type PauseRange } from '../lib/journal'
 import { DAY_NORMS, NEW_PER_DAY, NORM_LEVELS, NORM_TITLE_GENITIVE, dayNormFill, dayNormStatus } from '../lib/norms'
 import { examReady, maturity, PRIMARY_DATE } from '../lib/metrics'
 import { State } from 'ts-fsrs'
 import { dayKey } from '../lib/daytime'
-import { Flame, Gear, Chart, Plus, Check, Bolt } from '../components/Icon'
+import { Flame, Gear, Chart, Plus, Check, Bolt, Book } from '../components/Icon'
+import { readingLevel } from '../lib/reading'
 import FlameBuddy from '../components/FlameBuddy'
 import FjordScene from '../components/FjordScene'
-import type { CardView } from '../lib/types'
+import type { CardView, ReadingView } from '../lib/types'
 
 /** «1 упражнение · 3 упражнения · 12 упражнений» — подпись читается вслух, а не как счётчик. */
 function упражнений(n: number): string {
@@ -77,6 +78,51 @@ function SectionBlock({ title, icon, badge, glyph, cards, budget, extraBudget, o
       {c.newAvail > 0 && reviewDue > 0 && (
         <button className="section-review" onClick={onReview}>Только повторить · {reviewDue}</button>
       )}
+    </div>
+  )
+}
+
+/**
+ * Чтение — четвёртый блок рядом с разделами колоды.
+ *
+ * Вид тот же, что у раздела (`SectionBlock`), и это не косметика: чтение — вторая половина
+ * защищённого минимума, и выглядеть оно должно ровней словам, а не сноской под ними. Числа
+ * другие только потому, что у текста нет FSRS: показывать «повторить» и «новых» нечего,
+ * есть доступное и прочитанное.
+ */
+function ReadingBlock({ texts, read, level, onOpen }: {
+  texts: ReadingView[]
+  read: ReadonlySet<string>
+  level: number
+  onOpen: () => void
+}) {
+  const done = texts.filter(t => read.has(t.slug)).length
+  const left = texts.length - done
+  return (
+    <div className="card section-card">
+      <span className="sec-glyph" style={{ ['--rune-shape' as string]: 'var(--rune-ansuz)' } as React.CSSProperties} />
+      <div className="hero-head">
+        <span className="hero-title section-title">
+          <span className="sec-badge badge-gold"><Book size={18} /></span> Чтение
+        </span>
+        <span className="hero-sub">{texts.length ? `ступень ${level}` : 'пока пусто'}</span>
+      </div>
+      <div className="stats3">
+        <div className={`stat stat-new${left ? '' : ' is-zero'}`}><div className="n">{left}</div><div className="t">доступно</div></div>
+        <div className={`stat stat-due${done ? '' : ' is-zero'}`}><div className="n">{done}</div><div className="t">прочитано</div></div>
+      </div>
+      {texts.length > 0 && (
+        <div className="mastery" title="доля прочитанных текстов">
+          <div style={{ width: `${Math.round((done / texts.length) * 100)}%` }} />
+        </div>
+      )}
+      <button className="btn btn-green section-btn" onClick={onOpen} disabled={texts.length === 0}>
+        {texts.length === 0
+          ? 'Текстов пока нет'
+          : left === 0
+            ? <><Check size={18} /> Все тексты прочитаны</>
+            : `Читать · ${left}`}
+      </button>
     </div>
   )
 }
@@ -156,6 +202,11 @@ export default function Home() {
       : `${упражнений(reviewsToday)} · ${dayGoal}`
 
   // строка активного уровня для блока «Слова»
+  // Чтение: ступень выводится из прочитанного (readingLevel), а не спрашивается настройкой
+  const texts = readingViews()
+  const readSlugs = readTextSlugs(app.journal)
+  const readLevel = readingLevel(texts, readSlugs)
+
   const rwStats = levelStats(rw)
   const rwActive = activeLevel(rw)
   const curStat = rwStats.find(s => s.level === rwActive)
@@ -274,6 +325,7 @@ export default function Home() {
       <SectionBlock title="Слова" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budgetRw} extraBudget={extraRw} onStart={go('rw')} onReview={go('rw', true)} onExtra={goExtra('rw')} levelLine={levelLine} onPath={() => setScreen('path')} />
       <SectionBlock title="Грамматика" icon={<span className="sec-x">¶</span>} badge="badge-green" glyph="var(--rune-ansuz)" cards={grammar} budget={budgetGrammar} extraBudget={extraGrammar} onStart={go('grammar')} onReview={go('grammar', true)} onExtra={goExtra('grammar')} />
       <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budgetMath} extraBudget={extraMath} onStart={go('math')} onReview={go('math', true)} onExtra={goExtra('math')} />
+      <ReadingBlock texts={texts} read={readSlugs} level={readLevel} onOpen={() => setScreen('reading')} />
 
       <div className="home-actions">
         <div className="row">

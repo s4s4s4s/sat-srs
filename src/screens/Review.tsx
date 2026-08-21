@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Rating, State, type Grade } from 'ts-fsrs'
-import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause, markIntroduced, deferItemToNextDay } from '../lib/store'
+import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause, markIntroduced, deferItemToNextDay, toggleWordMark } from '../lib/store'
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
@@ -11,7 +11,9 @@ import {
 import { pickNext, hasSeparator, screenFormat, isGiveUp, type OrderCtx } from '../lib/session'
 import { lessonProgress, DRILL_PER_SESSION } from '../lib/progress'
 import Tex from '../components/Tex'
-import { minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs } from '../lib/journal'
+import Markable from '../components/Markable'
+import { markedLemmas, type Segment } from '../lib/reading'
+import { minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs, cardSrc } from '../lib/journal'
 import { NEW_PER_DAY, NEW_PER_LESSON } from '../lib/norms'
 import { speedStats } from '../lib/metrics'
 import { dayKey } from '../lib/daytime'
@@ -39,20 +41,32 @@ function shuffleOnce<T>(arr: T[]): T[] {
   return a
 }
 
-/** Предложение с пропуском / с подставленным словом; $...$ рендерится KaTeX-ом; длинный текст — мельче */
-function Sentence({ context, word, revealed }: { context: string; word: string; revealed: boolean }) {
-  const parts = context.split(/_{3,}/)
+/**
+ * Предложение с пропуском / с подставленным словом; $...$ рендерится KaTeX-ом; длинный текст — мельче.
+ *
+ * Каждое слово условия — цель для касания: незнакомые слова попадаются и в упражнении, и
+ * отмечаются там тем же действием и той же строкой журнала, что при чтении (`toggleWordMark`).
+ * Границы отметки — ТОЛЬКО текст условия: в вариантах ответа, в разборе и в формуле касание
+ * означает ответ, а не отметку, и разметке там делать нечего.
+ */
+function Sentence({ context, word, revealed, marked, onWord }: {
+  context: string
+  word: string
+  revealed: boolean
+  marked: ReadonlySet<string>
+  onWord: (seg: Extract<Segment, { kind: 'word' }>) => void
+}) {
   const cls = `rev-sentence${context.length > 140 ? ' long' : ''}`
-  if (parts.length === 1) return <div className={cls}><Tex text={context} /></div>
   return (
     <div className={cls}>
-      {parts.map((p, i) => (
-        <span key={i}>
-          <Tex text={p} />
-          {i < parts.length - 1 &&
-            (revealed ? <span className="rev-filled"><Tex text={word} /></span> : <span className="rev-blank">&nbsp;</span>)}
-        </span>
-      ))}
+      <Markable
+        text={context}
+        isMarked={seg => marked.has(seg.lemma)}
+        onWord={onWord}
+        blank={revealed
+          ? <span className="rev-filled"><Tex text={word} /></span>
+          : <span className="rev-blank">&nbsp;</span>}
+      />
     </div>
   )
 }
@@ -237,6 +251,9 @@ export default function Review() {
   const [gradesOpen, setGradesOpen] = useState(false)
   // запись оценки не удалась — ответ не проглатываем, показываем строку и даём повторить
   const [saveError, setSaveError] = useState('')
+  // отдельная строка от saveError: отметка слова и оценка карточки — разные действия,
+  // и провал одного не должен выглядеть провалом другого
+  const [markError, setMarkError] = useState('')
   const pendingAdvance = useRef<{ next: StudyItem; atFront: boolean } | null>(null)
   // слова, уже показанные интро в этой сессии: их New-показы дальше — отработка, не интро
   const introduced = useRef(new Set<string>())
@@ -319,6 +336,7 @@ export default function Review() {
     setNeedConfirm(null)
     setGradesOpen(false)
     setSaveError('')
+    setMarkError('')
     shownAt.current = Date.now()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [head && `${head.view.path}#${head.skill}#${step}`])
@@ -747,6 +765,28 @@ export default function Review() {
     return () => cancelAnimationFrame(id)
   }, [why?.open, why?.busy, why?.err])
 
+  /* Отметка незнакомого слова в условии. Источник — `card:<слаг>` (journal.cardSrc): отметки
+     упражнения не должны попадать в счёт понятности текста, у которого свой порог.
+     Ответ на карточку это не трогает: очередь собрана один раз при входе в урок и на строки
+     журнала не смотрит, а само касание слова не двигает ни оценку, ни счётчик показов.
+     Место — до ранних возвратов, как и эффект выше: порядок хуков не должен зависеть от
+     того, какая ветка экрана отрисовалась. */
+  const markSrc = task ? cardSrc(task.item.view.slug) : ''
+  const marked = useMemo(
+    () => (markSrc ? markedLemmas(app.journal, markSrc) : new Set<string>()),
+    [app.journal, markSrc]
+  )
+  async function markWord(seg: Extract<Segment, { kind: 'word' }>) {
+    if (!markSrc) return
+    setMarkError('')
+    try {
+      await toggleWordMark(markSrc, { word: seg.text, lemma: seg.lemma, sentence: seg.sentence })
+    } catch (e) {
+      // молчать нельзя: человек уверен, что отметил слово, а его нет ни в журнале, ни у тьютора
+      setMarkError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   if (!queue || (head && !task)) {
     return (
       <div className="screen s-review">
@@ -873,7 +913,7 @@ export default function Review() {
               {card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
               {card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
               <div className="intro-label">Пример использования</div>
-              <Sentence context={task.ctx} word={card.word} revealed />
+              <Sentence context={task.ctx} word={card.word} revealed marked={marked} onWord={markWord} />
               {/* на знакомстве предложение открыто сразу — перевод показываем вместе с ним */}
               {sentenceRu && <div className="rev-sentence-ru">{sentenceRu}</div>}
             </div>
@@ -908,10 +948,11 @@ export default function Review() {
           </div>
         ) : (
           <>
-            <Sentence context={sentence} word={answerWord} revealed={revealed} />
+            <Sentence context={sentence} word={answerWord} revealed={revealed} marked={marked} onWord={markWord} />
             {revealed && sentenceRu && <div className="rev-sentence-ru">{sentenceRu}</div>}
           </>
         )}
+        {markError && <div className="why-err">Отметка не сохранилась: {markError}</div>}
         {!revealed && <div className="rev-task">{taskHint}</div>}
         {!revealed && (task.format === 'type' || canTypeAnswer) && (
           // поле ПОД предложением: всегда видно; кнопка «Проверить» — в нижнем листе,

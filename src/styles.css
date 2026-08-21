@@ -371,14 +371,21 @@ body::before {
 
 /* Полоса дня с тремя нормами (norms.ts::DAY_NORMS). Засечки поверх заливки:
    одна шкала показывает и сделанное, и все три цели сразу — раньше цель дня была
-   одна и работала как стена. Взятая засечка зелёная, невзятая — светлая риска на
-   тёмном фоне (тема тёмная, поэтому контраст даём белым, а не чёрным). */
+   одна и работала как стена.
+   Засечка обязана читаться на обоих фонах — на пустой тёмной полосе и на залитой
+   оранжевым (--orange), иначе к концу дня, когда заливка почти полная, нормы
+   исчезают именно тогда, когда важнее всего видеть, какая из них уже взята.
+   Одного цвета для обоих фонов не существует, поэтому контраст держит не цвет
+   риски, а тёмная обводка вокруг неё: светлая риска в тёмной кайме видна и на
+   тёмном, и на оранжевом. Взятая засечка остаётся зелёной, но получает ту же
+   кайму. */
 .minbar-day { position: relative; }
 .minbar-tick {
   position: absolute; top: -1px; bottom: -1px; width: 2px;
-  background: rgba(255, 255, 255, .55); border-radius: 1px; pointer-events: none;
+  background: #fff; border-radius: 1px; pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .55);
 }
-.minbar-tick.is-hit { background: var(--green-text); }
+.minbar-tick.is-hit { background: var(--green-text); box-shadow: 0 0 0 1px rgba(0, 0, 0, .7); }
 
 /* Отметка чтения: цель — одно касание. Половина защищённого минимума не
    трекалась семь недель подряд, и любой лишний шаг здесь означает, что она
@@ -845,6 +852,7 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 .badge-green .sec-x { color: var(--green); }
 .badge-purple { background: var(--purple-soft); color: var(--purple); }
 .badge-purple .sec-x { color: var(--purple); }
+.badge-gold { background: var(--gold-soft); color: var(--gold-text); }
 .stat-cell .freeze { font-size: 13px; color: var(--blue-text); margin-left: 3px; }
 
 /* прогноз нагрузки */
@@ -1149,6 +1157,90 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 }
 .path-sub { margin-top: 3px; font-size: 13px; color: var(--text2); }
 .path-mastery { color: var(--green-text); }
+
+
+/* ── Чтение (тексты) ────────────────────────────────────────────── */
+
+/* Слово как цель для касания — и в тексте, и в условии упражнения.
+   Поля по бокам добирают ширину коротким словам («a», «is»), отрицательные
+   внешние поля возвращают набор на место: подсветка не должна разгонять строку. */
+.mark-word {
+  cursor: pointer;
+  padding: 3px 2px; margin: 0 -2px;
+  border-radius: 7px;
+  transition: background .12s, color .12s;
+}
+.mark-word:active { background: var(--surface2); }
+.mark-word.on {
+  background: var(--yellow-soft);
+  color: var(--amber-text);
+  box-shadow: inset 0 -2px 0 var(--yellow-line);
+}
+@media (hover: hover) { .mark-word:hover { background: var(--surface2); } }
+
+/* список текстов */
+.read-list { display: flex; flex-direction: column; gap: 10px; }
+.read-item {
+  display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;
+  padding: 12px 14px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--r-card);
+  box-shadow: var(--shadow-card); cursor: pointer; font-family: inherit; color: inherit;
+}
+.read-item:active { transform: translateY(1px); filter: brightness(.97); }
+.read-item.is-now { border-color: var(--gold-line); box-shadow: 0 0 0 2px var(--gold-soft), var(--shadow-card); }
+.read-item.is-read { opacity: .7; }
+.read-lv {
+  flex: none; width: 38px; height: 38px; border-radius: 12px;
+  display: grid; place-items: center;
+  background: var(--gold-soft); color: var(--gold-text);
+  font-size: 16px; font-weight: 800;
+}
+.read-item-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.read-item-title {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 15.5px; font-weight: 800; color: var(--text-strong);
+}
+.read-item-sub { font-size: 13px; color: var(--text2); font-weight: 600; }
+.read-item-mark { flex: none; color: var(--text-faint); line-height: 0; }
+.read-item.is-read .read-item-mark { color: var(--green); }
+
+/* сам текст */
+.read-h { font-size: 19px; line-height: 1.25; }
+.read-meta { font-size: 13px; font-weight: 700; color: var(--text2); margin: -6px 0 14px 2px; }
+.read-text { display: flex; flex-direction: column; gap: 14px; }
+/* Ради телефона: крупный кегль, просторный интерлиньяж (он же высота цели касания)
+   и перенос длинных слов — строка не имеет права уехать за край экрана. */
+.read-p {
+  margin: 0;
+  font-size: 19.5px; line-height: 1.95; color: var(--text-strong);
+  overflow-wrap: break-word;
+}
+.read-hint { font-size: 13px; font-weight: 700; color: var(--text2); margin-top: 16px; }
+.read-finish { margin-top: 22px; }
+.read-done { margin-top: 22px; }
+.read-done-sub { font-size: 14.5px; line-height: 1.5; color: var(--text2); margin-top: 6px; }
+
+/* сноска глоссария: видна, пока её не закрыли, и не занимает экран, пока её не звали */
+.read-gloss {
+  position: sticky; bottom: 0; z-index: 2;
+  margin: 18px calc(-1 * var(--pad-x)) calc(-1 * (env(safe-area-inset-bottom) + 18px));
+  padding: 14px var(--pad-x) calc(env(safe-area-inset-bottom) + 16px);
+  background: var(--glass);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-top: 2px solid var(--gold-line);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: 0 -10px 30px rgba(10, 20, 30, .10);
+  animation: sheet-in .22s cubic-bezier(.2, .9, .3, 1.15);
+}
+.read-gloss-x {
+  position: absolute; top: 8px; right: 10px;
+  border: none; background: none; cursor: pointer;
+  font-size: 24px; line-height: 1; color: var(--text2); padding: 6px 10px;
+}
+.read-gloss-word { font-size: 20px; font-weight: 800; color: var(--text-strong); padding-right: 40px; }
+.read-gloss-word .pos { font-size: 14px; font-weight: 700; color: var(--text2); margin-left: 8px; }
+.read-gloss-ru { font-size: 16.5px; font-weight: 700; color: var(--text); margin-top: 4px; }
+.read-gloss-en { font-size: 15px; color: var(--text2); margin-top: 4px; }
 
 /* ── Доступность ────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {

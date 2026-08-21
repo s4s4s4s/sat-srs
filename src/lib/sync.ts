@@ -5,7 +5,7 @@ import { buildReport } from './report'
 import { buildMetricsSnapshot, appendDailySnapshot } from './metrics'
 import { EXAM_DATE } from './scheduler'
 import * as db from './db'
-import type { JournalRec, Settings } from './types'
+import type { JournalRec, ReadingRec, Settings } from './types'
 import { monthOfDay, dayKey } from './daytime'
 
 export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'error' | 'ok'
@@ -16,10 +16,12 @@ export interface SyncResult {
   pulledCards?: number
   pushedFiles?: number
   conflicts?: number // create/create-коллизии: локальная карточка сохранена под -N именем
+  pulledTexts?: number // тексты для чтения, обновлённые в этом цикле
   warning?: string   // не-блокирующее предупреждение (конфликт-маркеры и т.п.)
 }
 
 const JOURNAL_DIR = '_журнал'
+const READING_DIR = 'Чтение'
 
 /* Пути сравниваются в канонической форме Unicode (db.nfcPath), а не как есть.
    Всё, что решают предикаты ниже, держится на кириллице в путях: и базовый каталог колоды,
@@ -43,6 +45,27 @@ export const isJournalPath = (p: string, base: string) => {
 }
 
 /**
+ * Каталог текстов для чтения — сосед каталога колоды: `Учёба/Карточки` → `Учёба/Чтение`
+ * (`_КОНТРАКТ.md`, раздел «Чтение»: тексты живут рядом с колодой, но не в ней).
+ *
+ * Выводится из basePath, а не хранится отдельной настройкой, намеренно: второй путь в
+ * настройках — это второй способ ошибиться при том же самом репозитории, и чинить его
+ * пришлось бы вслепую (ученик не знает, что такое каталог текстов). Репозиторий, ветка и
+ * токен остаются единственным, что настраивается руками.
+ */
+export function readingBase(base: string): string {
+  const clean = base.replace(/\/+$/, '')
+  const cut = clean.lastIndexOf('/')
+  return (cut >= 0 ? clean.slice(0, cut + 1) : '') + READING_DIR
+}
+
+export const isReadingPath = (p: string, base: string) => {
+  const path = db.nfcPath(p)
+  return path.startsWith(db.nfcPath(readingBase(base)) + '/') && path.endsWith('.md')
+    && !path.split('/').pop()!.startsWith('_')
+}
+
+/**
  * Текст предупреждения о массовом удалении.
  *
  * Прежний звал «нажмите Синк ещё раз в течение 10 минут» и не называл ни одного файла: реакция
@@ -62,6 +85,25 @@ export function massDeleteMessage(e: db.MassDeleteError): string {
 
 const metricsPathOf = (base: string) => `${base}/${JOURNAL_DIR}/_метрики.ndjson`
 
+/** Слитый криво файл: писать такой нельзя, показывать — незачем (см. места вызова). */
+const hasConflictMarkers = (text: string) => text.includes('<<<<<<<') || text.includes('>>>>>>>')
+
+/** Сколько блобов качаем параллельно: 150+ файлов по одному — это 150+ round-trip. */
+const CONCURRENCY = 8
+
+/** Пул скачиваний: порядок обхода неважен, важно не вставать в очередь по одному запросу. */
+async function pooled<T>(items: T[], work: (item: T) => Promise<void>): Promise<void> {
+  let next = 0
+  const worker = async () => {
+    for (;;) {
+      const i = next++
+      if (i >= items.length) return
+      await work(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker))
+}
+
 let running: Promise<SyncResult> | null = null
 
 /** Дождаться завершения идущего цикла (или вернуться сразу, если его нет).
@@ -80,7 +122,7 @@ export function sync(settings: Settings): Promise<SyncResult> {
 async function doSync(settings: Settings): Promise<SyncResult> {
   const gh = new GitHubClient(settings.pat, settings.owner, settings.repo)
   try {
-    let { headSha, treeSha, pulled, conflicts, warning } = await pull(gh, settings)
+    let { headSha, treeSha, pulled, texts, conflicts, warning } = await pull(gh, settings)
 
     for (let attempt = 0; attempt < 6; attempt++) {
       const cards = await db.getAllCards()
@@ -88,7 +130,7 @@ async function doSync(settings: Settings): Promise<SyncResult> {
       const dirtyCards = cards.filter(c => c.dirty && !c.broken)
       const unsynced = journal.filter(j => !j.synced)
       if (!dirtyCards.length && !unsynced.length) {
-        return { status: 'ok', pulledCards: pulled, pushedFiles: 0, conflicts, warning }
+        return { status: 'ok', pulledCards: pulled, pulledTexts: texts, pushedFiles: 0, conflicts, warning }
       }
 
       const files: { path: string; content: string }[] = dirtyCards.map(c => ({
@@ -133,6 +175,7 @@ async function doSync(settings: Settings): Promise<SyncResult> {
           const again = await pull(gh, settings)
           headSha = again.headSha
           treeSha = again.treeSha
+          texts += again.texts
           conflicts += again.conflicts
           warning = warning ?? again.warning
           continue
@@ -165,7 +208,7 @@ async function doSync(settings: Settings): Promise<SyncResult> {
       }
       await db.kvSet('lastRemoteCommit', commitSha)
       await db.kvSet('lastSyncAt', Date.now())
-      return { status: 'ok', pulledCards: pulled, pushedFiles: files.length, conflicts, warning }
+      return { status: 'ok', pulledCards: pulled, pulledTexts: texts, pushedFiles: files.length, conflicts, warning }
     }
     return { status: 'error', error: 'Не удалось записать: ветка убегает (6 попыток). Оценки сохранены локально — попробуйте позже.' }
   } catch (e: any) {
@@ -185,7 +228,7 @@ async function doSync(settings: Settings): Promise<SyncResult> {
   }
 }
 
-async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: string; treeSha: string; pulled: number; conflicts: number; warning?: string }> {
+async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: string; treeSha: string; pulled: number; texts: number; conflicts: number; warning?: string }> {
   const headSha = await gh.getHead(settings.branch)
   const { treeSha } = await gh.getCommit(headSha)
   const { entries, truncated } = await gh.getTreeRecursive(treeSha)
@@ -195,10 +238,15 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
   const shaByPath = new Map(local.map(c => [c.path, c.sha]))
   const remoteCards = new Map<string, TreeEntry>()
   const remoteJournals: TreeEntry[] = []
+  const remoteReadings = new Map<string, TreeEntry>()
   for (const e of entries) {
     if (e.type !== 'blob') continue
+    // карточки проверяются первыми: при экзотическом basePath (`Учёба`) каталог текстов попадает
+    // и под isCardPath — тогда файл остаётся карточкой, как было до появления чтения, а не меняет
+    // сущность от одной настройки
     if (isCardPath(e.path, settings.basePath)) remoteCards.set(e.path, e)
     else if (isJournalPath(e.path, settings.basePath)) remoteJournals.push(e)
+    else if (isReadingPath(e.path, settings.basePath)) remoteReadings.set(e.path, e)
   }
 
   // сетевые запросы — ДО транзакции; снапшот используется только для sha-skip.
@@ -207,22 +255,14 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
   const fetched: db.FetchedCard[] = []
   const conflictedFiles: string[] = []
   const toFetch = [...remoteCards].filter(([path, entry]) => shaByPath.get(path) !== entry.sha)
-  const CONCURRENCY = 8
-  let nextIdx = 0
-  const fetchWorker = async () => {
-    for (;;) {
-      const i = nextIdx++
-      if (i >= toFetch.length) return
-      const [path, entry] = toFetch[i]
-      const text = await gh.getBlobText(entry.sha)
-      const remote = parseMd(text)
-      // git-конфликт-маркеры (watcher слил криво) — карантин, даже если YAML случайно распарсился
-      const conflicted = text.includes('<<<<<<<') || text.includes('>>>>>>>')
-      if (conflicted) conflictedFiles.push(path.split('/').pop()!)
-      fetched.push({ path, sha: entry.sha, fm: remote.fm, body: remote.body, broken: conflicted ? 1 : remote.broken })
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, toFetch.length) }, fetchWorker))
+  await pooled(toFetch, async ([path, entry]) => {
+    const text = await gh.getBlobText(entry.sha)
+    const remote = parseMd(text)
+    // git-конфликт-маркеры (watcher слил криво) — карантин, даже если YAML случайно распарсился
+    const conflicted = hasConflictMarkers(text)
+    if (conflicted) conflictedFiles.push(path.split('/').pop()!)
+    fetched.push({ path, sha: entry.sha, fm: remote.fm, body: remote.body, broken: conflicted ? 1 : remote.broken })
+  })
   // подтверждение массового удаления: второй Синк вскоре после предупреждения И тот же состав
   // удаляемого. Проверку состава делает applyPull — только он знает, что удаляется на самом деле.
   const pending = await db.kvGet<db.MassDeletePending>('pendingMassDelete')
@@ -230,8 +270,31 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
   // подтверждение одноразовое: applyPull дошёл до конца, значит либо удаление применено, либо
   // предохранитель не сработал вовсе — в обоих случаях старому разрешению висеть незачем
   if (pending) await db.kvSet('pendingMassDelete', null)
+  /* Тексты для чтения приходят тем же pull-ом и тем же каналом, что карточки: отдельной кнопки
+     «загрузить тексты» нет намеренно — материал, за которым надо ходить отдельно, не читают.
+     Скачиваем только изменившиеся (sha-skip), как карточки.
+
+     Конфликт-маркеры карантинят и текст, но по другой причине, чем у карточки: затирать чужую
+     работу здесь нечем (приложение тексты не пишет), зато показывать <<<<<<< посреди абзаца
+     ученику незачем — пусть лучше текст честно отсутствует до починки. */
+  const localReadings = await db.getAllReadings()
+  const readingSha = new Map(localReadings.map(r => [r.path, r.sha]))
+  const fetchedReadings: ReadingRec[] = []
+  const toFetchReadings = [...remoteReadings].filter(([path, entry]) => readingSha.get(path) !== entry.sha)
+  await pooled(toFetchReadings, async ([path, entry]) => {
+    const text = await gh.getBlobText(entry.sha)
+    const remote = parseMd(text)
+    const conflicted = hasConflictMarkers(text)
+    if (conflicted) conflictedFiles.push(path.split('/').pop()!)
+    fetchedReadings.push({ path, sha: entry.sha, fm: remote.fm, body: remote.body, broken: conflicted ? 1 : remote.broken })
+  })
+  /* Удаление текста из репозитория убирает локальную копию текста — и НИЧЕГО больше:
+     отметки незнакомых слов и строки прочтения лежат в журнале, который эта операция
+     не открывает (db.readingsDeletionPlan, там же цена решения). */
+  await db.applyReadingsPull(fetchedReadings, new Set(remoteReadings.keys()))
+
   const warning = conflictedFiles.length
-    ? `⚠️ Git-конфликт в: ${conflictedFiles.join(', ')} — карточки в карантине, почините <<<<<<< в vault`
+    ? `⚠️ Git-конфликт в: ${conflictedFiles.join(', ')} — файлы в карантине, почините <<<<<<< в vault`
     : undefined
 
   // журнал: объединение по id; невалидные строки сохраняются сырыми и не теряются при перезаписи
@@ -289,5 +352,5 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
 
   await db.kvSet('lastRemoteCommit', headSha)
   await db.kvSet('lastSyncAt', Date.now())
-  return { headSha, treeSha, pulled: fetched.length, conflicts, warning }
+  return { headSha, treeSha, pulled: fetched.length, texts: fetchedReadings.length, conflicts, warning }
 }

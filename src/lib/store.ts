@@ -3,12 +3,15 @@ import { State, type Grade, type Card as FsrsCard } from 'ts-fsrs'
 import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
-import { cardView, fsrsFromKey, fsrsToFm } from './yamlfm'
+import { cardView, fsrsFromKey, fsrsToFm, readingView, slugFromPath } from './yamlfm'
 import { makeScheduler, effectiveRetention, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, DUE_CAP, type Section, type TypeVerdict } from './scheduler'
 import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
-import { newId, matureRetention, sessionAccuracy, cardTimeCap, READ_CAP_MINUTES } from './journal'
-import type { CardRec, CardView, Format, JournalRec, Screen, SessionResult, Settings, StudyItem } from './types'
+import {
+  newId, matureRetention, sessionAccuracy, cardTimeCap, READ_CAP_MINUTES,
+  readingSrc, isMarked, markCount, readingPassed, deckHasWord, normWord, MARK_SENTENCE_MAX
+} from './journal'
+import type { CardRec, CardView, Format, JournalRec, ReadingRec, ReadingView, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS } from './types'
 import { NEW_PER_DAY } from './norms'
 import { setSoundEnabled } from './sound'
@@ -29,6 +32,9 @@ interface AppState {
   sessionOverNorm: boolean
   settings: Settings
   cards: CardRec[]
+  /* Тексты для чтения — отдельный список, а не подмножество cards: у текста нет FSRS-графика
+     и он не участвует ни в очереди, ни в норме ввода (см. ReadingRec в types.ts). */
+  readings: ReadingRec[]
   journal: JournalRec[]
   syncStatus: SyncStatus
   syncError: string
@@ -47,6 +53,7 @@ let state: AppState = {
   sessionOverNorm: false,
   settings: loadSettings(),
   cards: [],
+  readings: [],
   journal: [],
   syncStatus: 'idle',
   syncError: '',
@@ -154,6 +161,7 @@ export async function init() {
   if (navigator.storage?.persist) void navigator.storage.persist().catch(() => {})
   try {
     state.cards = await db.getAllCards()
+    state.readings = await db.getAllReadings()
     state.journal = await db.getAllJournal()
     state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? null
     state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? {}
@@ -188,6 +196,7 @@ export async function startSync(): Promise<void> {
   emit()
   const res = await sync(state.settings)
   state.cards = await db.getAllCards()
+  state.readings = await db.getAllReadings()
   state.journal = await db.getAllJournal()
   state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? state.lastSyncAt
   state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? state.levelNames
@@ -232,6 +241,11 @@ export async function fullResync(): Promise<number> {
 
 export function views(): CardView[] {
   return state.cards.map(cardView)
+}
+
+/** Тексты для чтения — типизированные виды. Битый frontmatter отсеивается: показывать нечего. */
+export function readingViews(): ReadingView[] {
+  return state.readings.map(readingView).filter(v => !v.broken)
 }
 
 /** Актуальный журнал (для чтения после await, минуя снапшот useApp) */
@@ -468,6 +482,93 @@ export async function logReading(minutes: number, what = ''): Promise<void> {
   state.journal = [...state.journal, line]
   emit()
   updateBadge()
+  void startSync()
+}
+
+/**
+ * Слова колоды в нормализованной форме — основа признака `in_deck` у отметки.
+ *
+ * Берём и `word` из frontmatter, и слаг файла: слаг несёт разводящий суффикс (`bolster-2`),
+ * который normWord срезает, а `word` бывает пустым у нестандартных карточек. Считается на
+ * каждую отметку заново и намеренно не кэшируется: колода меняется синхронизацией, а тап по
+ * слову — событие раз в несколько секунд, и устаревший кэш здесь дороже полутысячи строк.
+ */
+function deckWords(): Set<string> {
+  const out = new Set<string>()
+  for (const c of state.cards) {
+    if (c.broken) continue
+    const w = typeof c.fm?.word === 'string' ? normWord(c.fm.word) : ''
+    if (w) out.add(w)
+    const slug = normWord(slugFromPath(c.path))
+    if (slug) out.add(slug)
+  }
+  return out
+}
+
+/**
+ * Отметить незнакомое слово в тексте — или снять отметку, если она уже стоит.
+ * Возвращает НОВОЕ состояние отметки (true = отмечено).
+ *
+ * Снятие пишется строкой `on: false`, а не удалением предыдущей строки, и это не стилистика.
+ * Журнал append-only и сливается объединением по id: строка, удалённая на телефоне, вернулась
+ * бы с ноутбука при первой же синхронизации, и отметка воскресла бы сама. Событие «снял» — это
+ * такой же факт учебной работы, как «отметил»: тьютору видно, что слово сначала не узнали, а
+ * потом узнали, и по паре строк восстанавливается порядок, которого удаление не оставило бы.
+ * Текущее состояние собирается из потока строк (journal.activeMarks) — последнее решение по
+ * каждой лемме, а не сумма событий.
+ *
+ * Синхронизацию отметка не запускает: за урок чтения их десятки, а уезжают они строкой
+ * прочтения (logTextRead) и обычным циклом синка — как оценки внутри урока.
+ *
+ * Источник приходит готовой строкой (`readingSrc` для текста, `cardSrc` для условия карточки),
+ * а не выводится из вида текста: незнакомое слово попадается и в упражнении, и отмечается там
+ * тем же действием и той же строкой журнала. Знать о том, откуда пришло слово, здесь нечего —
+ * это забота экрана, а разделять отметки по видам умеет сам префикс источника.
+ */
+export async function toggleWordMark(src: string, w: { word: string; lemma?: string; sentence?: string }): Promise<boolean> {
+  const word = w.word.trim()
+  const lemma = (w.lemma ?? '').trim() || normWord(word)
+  if (!word || !lemma) return false // нечего отмечать: пустая или бессловесная выделенная строка
+  const on = !isMarked(state.journal, src, word, lemma)
+  const now = new Date()
+  const line: JournalRec = {
+    id: newId(),
+    v: 1, type: 'mark', ts: isoLocal(now), ms: now.getMilliseconds(), day: dayKey(now),
+    src, word, lemma,
+    sentence: (w.sentence ?? '').trim().slice(0, MARK_SENTENCE_MAX),
+    // историческая правда на момент отметки: карточку по этому слову могли завести и позже
+    in_deck: deckHasWord(deckWords(), lemma, word),
+    on, synced: 0
+  }
+  await db.putJournal([line])
+  state.journal = [...state.journal, line]
+  emit()
+  return on
+}
+
+/**
+ * Записать прочтение текста: слаг, сколько слов осталось отмечено и взят ли порог понятности.
+ *
+ * Число отметок берётся из журнала, а не из аргумента: единственный источник правды —
+ * поток строк, и экран не должен иметь возможности разойтись с ним. Повторное чтение того же
+ * текста пишет вторую строку — это второе событие, а не исправление первого; кто читал текст
+ * хоть раз, видно по journal.readTextSlugs.
+ *
+ * Оценок FSRS чтение не пишет НИКОГДА — ни здесь, ни в toggleWordMark. Слово из глоссария
+ * заводится карточкой руками тьютора (`_КОНТРАКТ.md`, «Слово из чтения попадает в колоду»),
+ * и уровень ему назначает тоже тьютор: автоматики здесь нет и не будет.
+ */
+export async function logTextRead(text: ReadingView): Promise<void> {
+  const marks = markCount(state.journal, readingSrc(text.slug))
+  const now = new Date()
+  const line: JournalRec = {
+    id: newId(),
+    v: 1, type: 'reading', ts: isoLocal(now), ms: now.getMilliseconds(), day: dayKey(),
+    slug: text.slug, marks, passed: readingPassed(marks, text.words), synced: 0
+  }
+  await db.putJournal([line])
+  state.journal = [...state.journal, line]
+  emit()
   void startSync()
 }
 

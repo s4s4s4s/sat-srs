@@ -4,7 +4,7 @@
  */
 import * as db from './db'
 import { dayKey } from './daytime'
-import { type CardRec, type JournalRec } from './types'
+import { type CardRec, type JournalRec, type ReadingRec } from './types'
 
 const day = (off: number) => new Date(Date.now() + off * 86400000)
 
@@ -57,6 +57,44 @@ function card(word: string, ru: string, en: string, ctx: string, st: number, rep
     }
   }
 }
+
+/* Тексты для чтения в демо. Без них экран чтения нечем показать: тексты приезжают из
+   колоды синхронизацией, а демо намеренно ходит в сеть только за отказом. Формат — тот же,
+   что у файла колоды (`_КОНТРАКТ.md`, раздел «Чтение»): frontmatter + тело. */
+function readingRec(slug: string, fm: Record<string, any>, body: string): ReadingRec {
+  return { path: `Учёба/Чтение/${slug}.md`, sha: 'demo-' + slug, fm: { type: 'reading', ...fm }, body }
+}
+
+const DEMO_READINGS: ReadingRec[] = [
+  readingRec('1-01-public-libraries', {
+    title: 'What a Library Gives a Town', level: 1, order: 1, words: 62, added: '2026-08-22',
+    glossary: [
+      { word: 'borrow', pos: 'verb', meaning_en: 'to take something and give it back later', meaning_ru: 'брать взаймы' },
+      { word: 'skill', pos: 'noun', meaning_en: 'the ability to do something well', meaning_ru: 'навык, умение' }
+    ]
+  },
+  `A library offers a place where people can read books for free. Most towns have at least one library. People visit a library not only to borrow a book but also to study or meet a friend.
+
+A library is quiet, and that is the point. Readers who learn a new skill there pay nothing for it. Dr. Vance, who runs the branch on Mill Street, says the building is busiest in winter.`),
+  readingRec('1-02-day-and-night', {
+    title: 'Why Day Follows Night', level: 1, order: 2, words: 48, added: '2026-08-22',
+    glossary: [
+      { word: 'shadow', pos: 'noun', meaning_en: 'a dark shape made when something blocks light', meaning_ru: 'тень' }
+    ]
+  },
+  `The Earth turns once a day. Half of the planet faces the Sun and has daylight; the other half lies in shadow and has night.
+
+The turn is steady, so the pattern repeats. People in the U.S. see the Sun rise hours after people in Europe do.`),
+  readingRec('2-01-how-a-rainbow-forms', {
+    title: 'How a Rainbow Forms', level: 2, order: 1, words: 44, added: '2026-08-22',
+    glossary: [
+      { word: 'bend', pos: 'verb', meaning_en: 'to change direction', meaning_ru: 'преломлять(ся), изгибать' }
+    ]
+  },
+  `Sunlight looks white, but it holds every colour at once. A raindrop bends the light that enters it, and each colour bends by a slightly different amount.
+
+The colours leave the drop separated, and the eye reads them as an arc.`)
+]
 
 export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw' | 'grammar' | 'math' } | null> {
   if (!import.meta.env.DEV) return null
@@ -133,6 +171,9 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
   const journal: JournalRec[] = [{
     id: 'demo-s1', type: 'session', ts: day(-1).toISOString(), day: dayKey(day(-1)),
     dur_ms: 960000, reviews: 12, new_seen: 4, acc: 83, queue_empty: true, synced: 1
+  }, {
+    id: 'demo-r1', type: 'reading', ts: day(-1).toISOString(), day: dayKey(day(-1)),
+    slug: '1-01-public-libraries', marks: 1, passed: true, synced: 1
   }]
 
   if (p.get('screen') !== 'settings') {
@@ -148,6 +189,7 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
     localStorage.removeItem('sat-srs-settings')
   }
   await db.putCards(cards)
+  await db.applyReadingsPull(DEMO_READINGS, new Set(DEMO_READINGS.map(r => r.path)))
   await db.putJournal(journal)
   if (v === 'path') {
     await db.kvSet('levelNames', {

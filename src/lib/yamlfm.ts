@@ -1,6 +1,6 @@
 import yaml from 'js-yaml'
 import { createEmptyCard, type Card as FsrsCard, State } from 'ts-fsrs'
-import type { CardRec, CardView } from './types'
+import type { CardRec, CardView, GlossEntry, ReadingRec, ReadingView } from './types'
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
 
@@ -186,4 +186,75 @@ export function mergeCard(remote: { fm: Record<string, any>; body: string }, loc
   // A7: дату первого показа тянем только у оценённого слова — см. hasRatedFsrs в db.ts
   if (local.fm.first_seen && !fm.first_seen && Number(local.fm.fsrs?.reps) > 0) fm.first_seen = local.fm.first_seen
   return { fm, body: remote.body }
+}
+
+/* ---- тексты для чтения (Учёба/Чтение) ------------------------------------ */
+
+const FILENAME_RE = /^(\d+)-(\d+)-/   // <уровень>-<NN>-<слаг>: контракт держит согласованность с fm
+
+/** Число токенов тела — тот же счёт, которым `tools/чтение-проверка.mjs` сверяет поле `words`. */
+export function countWords(body: string): number {
+  const t = body.trim()
+  return t ? t.split(/\s+/).length : 0
+}
+
+function num(v: any, fallback: number): number {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : fallback
+}
+
+/**
+ * Глоссарий текста: пропускаем всё, что не описывает слово.
+ *
+ * Строгость здесь была бы вредна: глоссарий пишет генератор и правит тьютор, и одна кривая
+ * запись не должна лишать ученика текста целиком — тап по неописанному слову покажет, что
+ * сноски нет, и это честнее пустого экрана.
+ */
+function glossary(v: any): GlossEntry[] {
+  if (!Array.isArray(v)) return []
+  const out: GlossEntry[] = []
+  for (const raw of v) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const g = raw as Record<string, any>
+    const word = String(g.word ?? '').trim()
+    if (!word) continue
+    out.push({
+      word,
+      pos: String(g.pos ?? ''),
+      meaning_en: String(g.meaning_en ?? ''),
+      meaning_ru: String(g.meaning_ru ?? '')
+    })
+  }
+  return out
+}
+
+/**
+ * Запись текста → типизированный вид.
+ *
+ * Недостающие поля не роняют текст и не подставляют выдумок: `level`/`order` берутся из
+ * frontmatter, а при его молчании — из имени файла (контракт требует их совпадения, значит
+ * имя файла здесь такой же законный источник), и только потом уходят в 999 — тот же «в хвост»,
+ * что у карточки без уровня. `words` при отсутствии считается по телу: это не догадка,
+ * а ровно та величина, которую поле и обязано содержать.
+ * Лишние поля frontmatter не теряются — они остаются в `ReadingRec.fm` как есть.
+ */
+export function readingView(rec: ReadingRec): ReadingView {
+  const fm = rec.fm ?? {}
+  const slug = slugFromPath(rec.path)
+  const fromName = slug.match(FILENAME_RE)
+  const level = num(fm.level, fromName ? num(fromName[1], 999) : 999)
+  const order = num(fm.order, fromName ? num(fromName[2], 999) : 999)
+  const words = num(fm.words, 0)
+  return {
+    path: rec.path,
+    slug,
+    title: String(fm.title ?? slug),
+    level,
+    order,
+    words: words > 0 ? words : countWords(rec.body),
+    added: String(fm.added ?? ''),
+    glossary: glossary(fm.glossary),
+    text: rec.body.trim(),
+    broken: !!rec.broken
+  }
 }

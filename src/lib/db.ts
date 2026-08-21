@@ -1,16 +1,33 @@
 import { openDB, type IDBPDatabase } from 'idb'
-import type { CardRec, JournalRec } from './types'
+import type { CardRec, JournalRec, ReadingRec } from './types'
 
 let dbp: Promise<IDBPDatabase> | null = null
 
+/**
+ * Версия схемы локальной базы. Поднимается на каждое изменение состава хранилищ.
+ *
+ * Миграция идёт шагами `oldVersion < N`, а не переписыванием тела upgrade: у установленного
+ * PWA база УЖЕ создана первой версией, и повторный createObjectStore('cards') на ней упал бы
+ * с ConstraintError, оставив приложение без базы вовсе. Шаги выполняются подряд, поэтому
+ * устройство любой давности догоняет текущую схему за один open.
+ *
+ * v2 (21.08.2026) — хранилище `readings`: тексты для чтения.
+ */
+const DB_VERSION = 2
+
 function db() {
   if (!dbp) {
-    dbp = openDB('sat-srs', 1, {
-      upgrade(d) {
-        d.createObjectStore('cards', { keyPath: 'path' })
-        const j = d.createObjectStore('journal', { keyPath: 'id' })
-        j.createIndex('by_day', 'day')
-        d.createObjectStore('kv')
+    dbp = openDB('sat-srs', DB_VERSION, {
+      upgrade(d, oldVersion) {
+        if (oldVersion < 1) {
+          d.createObjectStore('cards', { keyPath: 'path' })
+          const j = d.createObjectStore('journal', { keyPath: 'id' })
+          j.createIndex('by_day', 'day')
+          d.createObjectStore('kv')
+        }
+        if (oldVersion < 2) {
+          d.createObjectStore('readings', { keyPath: 'path' })
+        }
       }
     })
     // WebKit иногда фейлит первый open — сбрасываем мемоизацию, чтобы retry был возможен
@@ -59,11 +76,12 @@ export const nfcPath = (p: string) => p.normalize('NFC')
  * в этом смысл функции — сбросить состояние без повторного ввода токена.
  */
 export async function clearLocalData(): Promise<void> {
-  const tx = (await db()).transaction(['cards', 'journal', 'kv'], 'readwrite')
+  const tx = (await db()).transaction(['cards', 'journal', 'kv', 'readings'], 'readwrite')
   await Promise.all([
     tx.objectStore('cards').clear(),
     tx.objectStore('journal').clear(),
-    tx.objectStore('kv').clear()
+    tx.objectStore('kv').clear(),
+    tx.objectStore('readings').clear()
   ])
   await tx.done
 }
@@ -245,6 +263,53 @@ export async function confirmPushed(
     await tx.store.put({ ...cur, sha: p.sha, dirty: unchanged ? 0 : 1 })
   }
   await tx.done
+}
+
+/* ---- тексты для чтения ---------------------------------------------------- */
+
+export async function getAllReadings(): Promise<ReadingRec[]> {
+  return (await db()).getAll('readings')
+}
+
+/**
+ * Что удалить из локального кэша текстов: текст исчез из репозитория.
+ *
+ * В отличие от карточек, здесь нет ни `dirty`, ни предохранителя массового удаления, и это
+ * не упрощение. Текст — материал, который приложение только читает: удалять вместе с ним
+ * нечего, а вернуть его обратно умеет ближайшая синхронизация. Вся история чтения — отметки
+ * незнакомых слов и строки прочтения — живёт в журнале, в другом хранилище, которое эта
+ * транзакция вообще не открывает; строка отметки самодостаточна (слово, лемма, предложение
+ * внутри неё), поэтому переживает исчезновение текста и остаётся читаемой тьютору.
+ */
+export function readingsDeletionPlan(local: { path: string }[], remotePaths: Iterable<string>): string[] {
+  const remote = new Set([...remotePaths].map(nfcPath))
+  return local.filter(r => !remote.has(nfcPath(r.path))).map(r => r.path)
+}
+
+/**
+ * Применение pull-а текстов одной транзакцией. Возвращает число удалённых.
+ * Нормализация Unicode в путях — та же и по той же причине, что у карточек (nfcPath).
+ */
+export async function applyReadingsPull(fetched: ReadingRec[], remotePaths: Set<string>): Promise<number> {
+  const tx = (await db()).transaction('readings', 'readwrite')
+  const localByNorm = new Map<string, ReadingRec>()
+  for (let c = await tx.store.openCursor(); c; c = await c.continue()) {
+    const rec = c.value as ReadingRec
+    localByNorm.set(nfcPath(rec.path), rec)
+  }
+  for (const f of fetched) {
+    const cur = localByNorm.get(nfcPath(f.path))
+    // репозиторий — источник истины для написания пути (см. nfcPath у карточек)
+    if (cur && cur.path !== f.path) await tx.store.delete(cur.path)
+    await tx.store.put(f)
+    localByNorm.set(nfcPath(f.path), f)
+  }
+  const live: ReadingRec[] = []
+  for (let c = await tx.store.openCursor(); c; c = await c.continue()) live.push(c.value as ReadingRec)
+  const toDelete = readingsDeletionPlan(live, [...remotePaths].map(nfcPath))
+  for (const p of toDelete) await tx.store.delete(p)
+  await tx.done
+  return toDelete.length
 }
 
 export async function getAllJournal(): Promise<JournalRec[]> {

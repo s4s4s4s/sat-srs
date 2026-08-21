@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "npm run test:session && npm run test:metrics && npm run test:math && npm run test:sound && npm run test:coach && npm run test:data && npm run test:settings && npm run test:sync-safety",
+    "test": "npm run test:session && npm run test:metrics && npm run test:math && npm run test:sound && npm run test:coach && npm run test:data && npm run test:settings && npm run test:sync-safety && npm run test:reading",
     "test:session": "esbuild test/session-sim.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/session-sim.mjs && node node_modules/.cache/sat-srs/session-sim.mjs",
     "test:metrics": "esbuild test/metrics.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/metrics.mjs && node node_modules/.cache/sat-srs/metrics.mjs",
     "test:data": "esbuild test/data.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/data.mjs && node node_modules/.cache/sat-srs/data.mjs",
@@ -17,6 +17,7 @@
     "test:coach": "esbuild test/coach.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/coach.mjs && node node_modules/.cache/sat-srs/coach.mjs",
     "test:settings": "esbuild test/settings.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/settings.mjs && node node_modules/.cache/sat-srs/settings.mjs",
     "test:sync-safety": "esbuild test/sync-safety.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/sync-safety.mjs && node node_modules/.cache/sat-srs/sync-safety.mjs",
+    "test:reading": "esbuild test/reading.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/reading.mjs && node node_modules/.cache/sat-srs/reading.mjs",
     "sounds": "node scripts/sound-wav.mjs"
   },
   "dependencies": {
