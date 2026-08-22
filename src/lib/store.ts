@@ -4,7 +4,7 @@ import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm, readingView, slugFromPath } from './yamlfm'
-import { makeScheduler, effectiveRetention, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, DUE_CAP, type Section, type TypeVerdict } from './scheduler'
+import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, DUE_CAP, type Section, type TypeVerdict } from './scheduler'
 import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
 import {
@@ -351,6 +351,11 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
   // дня. Само правило и цена ошибки в нём — в holdOnIntroDay (scheduler.ts).
   const introDay = rec.fm.first_seen ?? (prev.state === State.New ? dayKey(now) : null)
   next = holdOnIntroDay(prev, next, now, introDay)
+
+  // Упражнение (разбор, грамматика, математика) не возвращается в тот же учебный день:
+  // повторный показ того же вопроса проверяет память об ответе, а не приём рассуждения.
+  // Правило и цена ошибки в нём — в holdExerciseToNextDay (scheduler.ts).
+  next = holdExerciseToNextDay(next, now, item.view.kind)
 
   // строка журнала строится ДО записи карточки: любой сбой здесь не рассинхронизирует БД и UI
   const line: JournalRec = {

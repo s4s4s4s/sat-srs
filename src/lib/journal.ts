@@ -321,6 +321,23 @@ export function minutesToday(lines: JournalLine[], today: string = dayKey()): nu
  * Пометка снимается, когда слово отработано (не-intro recall) в ДВУХ отдельных сессиях
  * ПОСЛЕ сессии знакомства — сессии разделяются строками type:session. До этого слово
  * принудительно добирается в последующие уроки дня; со сменой учебного дня список пуст.
+ *
+ * ПРАВИЛО КАСАЕТСЯ ТОЛЬКО СЛОВАРЯ (`kind: vocab`). Оно построено на устройстве
+ * знакомства со СЛОВОМ: окно `intro` рейтинга не даёт (A7), поэтому день, в который
+ * слово впервые показано, обязан содержать ещё и отработки — иначе слово уйдёт спать
+ * непроверенным. У упражнения (разбор ошибки, грамматика, математика) окна-знакомства
+ * нет вовсе: первый же показ — полноценный вопрос с оценкой.
+ *
+ * Признак `prev_state:0` этого не различал, и под правило попадало КАЖДОЕ упражнение,
+ * впервые показанное сегодня: урок был обязан вернуть его ещё дважды. Замер по журналу
+ * за 21.08.2026: `log-cs-cel-teksta-ne-tema` показан трижды за восемь минут, а
+ * `log-ii-most-trebuet-cifry` — семь раз за семнадцать часов. Второй показ одного и того
+ * же вопроса через две минуты не проверяет приём рассуждения: ответ помнится, а не
+ * выводится, и в модель уходит «верно», которого не было. Жалоба владельца 22.08.2026
+ * («все упражнения в одном уроке по второму кругу пошли») — ровно этот путь.
+ *
+ * Сколько раз за день показывать упражнение, решает не это правило, а срок:
+ * `holdExerciseToNextDay` (scheduler.ts) не даёт упражнению вернуться в тот же день.
  */
 export function forcedTodaySlugs(lines: JournalLine[], today: string = dayKey()): Set<string> {
   const todays = lines
@@ -332,6 +349,8 @@ export function forcedTodaySlugs(lines: JournalLine[], today: string = dayKey())
   for (const l of todays) {
     if (l.type === 'session') { block++; continue }
     if ((l.skill ?? 'recall') !== 'recall' || !l.slug) continue
+    // вид карточки пишется в строку, только если он не vocab (см. rateItem в store.ts)
+    if ((l.kind ?? 'vocab') !== 'vocab') continue
     const isIntro = l.format === 'intro' || l.prev_state === State.New
     if (isIntro && !introBlock.has(l.slug)) introBlock.set(l.slug, block)
     const intro = introBlock.get(l.slug)

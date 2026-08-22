@@ -18,7 +18,7 @@ import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem, JournalLine } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
-  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, LAST_LEARNING_STEP, sharesMeaning, typedTwin, checkTyped,
+  pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, holdExerciseToNextDay, isExercise, LEARN_AHEAD_MS, LAST_LEARNING_STEP, sharesMeaning, typedTwin, checkTyped,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
   pickTask, meaningDistractors, REVIEW_CYCLE, NEW_STOP_DATE, kindRank, expandItems, freshItems,
   homeCounts, sectionOf, newBudgetFor, newBudgetTotal,
@@ -27,7 +27,7 @@ import {
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
 import { lessonProgress, estimateShowsLeft, DRILL_PER_SESSION, type ProgressInput } from '../src/lib/progress'
 import { endOfStudyDay, dayKey, addDaysKey } from '../src/lib/daytime'
-import { sessionAccuracy, matureRetention, CARD_TIME_CAP_MS } from '../src/lib/journal'
+import { sessionAccuracy, matureRetention, forcedTodaySlugs, CARD_TIME_CAP_MS } from '../src/lib/journal'
 import { isLeech, LEECH_REPS, LEECH_STABILITY_DAYS } from '../src/lib/metrics'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
@@ -130,6 +130,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
   // эмуляция forcedTodaySlugs: slug → { первый урок со знакомством, уроки с отработкой после него }
   const introAt = new Map<string, number>()
   const practiceAt = new Map<string, Set<number>>()
+  const kindOf = new Map(deck.map(v => [v.slug, v.kind]))
 
   for (let lesson = 0; lesson < lessonsN; lesson++) {
     const introduced = new Set<string>()
@@ -157,6 +158,9 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
     const forced = (): Set<string> => {
       const out = new Set<string>()
       for (const [slug, at] of introAt) {
+        // зеркалит forcedTodaySlugs: обязательная отработка — правило про словарное
+        // знакомство. У упражнения окна-знакомства нет, первый показ уже даёт оценку
+        if ((kindOf.get(slug) ?? 'vocab') !== 'vocab') continue
         const later = [...(practiceAt.get(slug) ?? [])].filter(l => l > at).length
         if (later < 2) out.add(slug)
       }
@@ -308,6 +312,8 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       if (rated.state === State.Review && wasIntroState && introToday) {
         rated = { ...rated, state: State.Learning, due: endOfStudyDay(new Date(now)) }
       }
+      // зеркалит store.rateItem: упражнение не возвращается в тот же учебный день
+      rated = holdExerciseToNextDay(rated, new Date(now), head.view.kind)
       head.view.fsrs = rated // зеркалит store.rateItem: обновление состояния карточки в колоде
       sinceIntro++
       batchIntros = 0
@@ -870,6 +876,104 @@ function dontKnowChecks(): void {
       'репро: один верный ответ назавтра выпускает отложенную карточку, а не двигает её на десять минут')
   }
   console.log('  ✓ отложенный выпуск: последняя ступень, ожидание до конца дня, один верный ответ назавтра')
+
+  /* УПРАЖНЕНИЕ НЕ ПОКАЗЫВАЕТСЯ ДВАЖДЫ ЗА ОДИН УЧЕБНЫЙ ДЕНЬ — проверка на целом дне.
+
+     Жалоба владельца 22.08.2026: «все упражнения в одном уроке по второму кругу
+     пошли». Жалоба про день, значит и проверка идёт днём: три урока подряд одной
+     колодой, тем же прогоном, каким проверяются остальные инварианты урока. Правило,
+     проверенное только поштучно, может стоять в планировщике и не доезжать до очереди.
+
+     Эта группа идёт ПЕРЕД поштучной намеренно: она падает первой, если правило снять,
+     и потому доказана отдельно от неё (снятие правила роняло поштучную группу раньше,
+     чем очередь успевала дойти до второго показа). */
+  {
+    const упражнения = ['log-cs-cel-teksta', 'log-cs-dva-teksta', 'log-ii-most-cifry', 'log-ii-minimum']
+      .map(s => baseView(s, 1, 'error'))
+    const словарь = ['candid', 'lucid', 'opaque', 'terse'].map(w => reviewCard(w))
+    const { lessons } = runDay([...упражнения, ...словарь], { budget: 4, introLimit: 3, lessons: 3 })
+
+    const счёт = new Map<string, number>()
+    for (const shows of lessons)
+      for (const s of shows) if (s.graded !== null) счёт.set(s.path, (счёт.get(s.path) ?? 0) + 1)
+
+    const показаны = упражнения.filter(v => (счёт.get(v.path) ?? 0) > 0)
+    assert(показаны.length > 0,
+      'предпосылка проверки: упражнения в уроках всё-таки показывались, иначе проверять нечего')
+    const повторы = упражнения.filter(v => (счёт.get(v.path) ?? 0) > 1)
+    assert(повторы.length === 0,
+      `репро: за учебный день упражнение показано больше одного раза — ` +
+      `${повторы.map(v => `${v.slug}×${счёт.get(v.path)}`).join(', ')}`)
+  }
+  console.log('  ✓ за три урока одного дня ни одно упражнение не показано дважды')
+  passed++
+
+  /* То же правило поштучно: срок, добор и возврат в очередь.
+
+     По журналу за 20–21.08 видно, что путей возврата было три, и лечение
+     одного из них (holdOnIntroDay) остальных не закрывало:
+       — обязательный добор: `forcedTodaySlugs` считал знакомством ЛЮБОЙ первый показ
+         карточки (`prev_state:0`), а у упражнения первый показ — уже полноценный
+         вопрос с оценкой. Урок был обязан вернуть его ещё дважды;
+       — возврат в ту же очередь по learning-шагу (`shouldRequeue`);
+       — подхват следующим уроком того же вечера (`LEARN_AHEAD_MS`).
+     Живые числа: `log-cs-cel-teksta-ne-tema` — три показа за восемь минут,
+     `log-ii-most-trebuet-cifry` — семь показов за семнадцать часов.
+
+     Поэтому правило стоит на СРОКЕ: он закрывает все три пути разом. */
+  {
+    const f = makeScheduler(RETENTION)
+    const вечер = new Date('2026-08-21T23:35:00+04:00')
+
+    assert(isExercise({ kind: 'error' }) && isExercise({ kind: 'math' }) && !isExercise({ kind: 'vocab' }),
+      'упражнение — всё, что не словарная карточка')
+
+    // предпосылка репро: FSRS ставит упражнению learning-шаг внутри того же урока
+    const { card: сырое } = f.next(createEmptyCard(вечер), вечер, Rating.Good)
+    assert(сырое.due.getTime() - вечер.getTime() < LEARN_AHEAD_MS,
+      'репро: без правила срок упражнения лежит внутри урока')
+    assert(shouldRequeue(сырое, вечер),
+      'репро: с таким сроком карточка возвращается в ту же очередь')
+
+    const держим = holdExerciseToNextDay(сырое, вечер, 'error')
+    assert(держим.due.getTime() === endOfStudyDay(вечер).getTime(),
+      'упражнение ждёт следующего учебного дня, а не десяти минут')
+    assert(!shouldRequeue(держим, вечер), 'в тот же урок упражнение уже не вернётся')
+    assert(держим.due.getTime() - вечер.getTime() > LEARN_AHEAD_MS,
+      'и следующий урок этого же вечера его не подхватит')
+
+    // состояние и ступень не трогаем: ошибка не прощается, она откладывается до завтра
+    const { card: провал } = f.next(держим, вечер, Rating.Again)
+    const держимПровал = holdExerciseToNextDay(провал, вечер, 'error')
+    assert(держимПровал.state === провал.state && держимПровал.learning_steps === провал.learning_steps,
+      'правило двигает только срок — состояние и ступень лестницы остаются как их посчитал FSRS')
+
+    // срок только ОТОДВИГАЕТСЯ: назначенный интервал правило не приближает
+    const далёкое = { ...сырое, due: new Date('2026-08-27T10:00:00+04:00') }
+    assert(holdExerciseToNextDay(далёкое, вечер, 'math').due.getTime() === далёкое.due.getTime(),
+      'пятидневный интервал остаётся пятидневным: правило не даёт показать сегодня, а не приближает показ')
+
+    // словарь правилом не задет — у слова ранние повторы и есть механизм обучения
+    assert(holdExerciseToNextDay(сырое, вечер, 'vocab') === сырое,
+      'словарная карточка возвращается той же самой: её learning-шаги правило не трогает')
+
+    // и второй путь — обязательный добор — упражнение больше не подхватывает
+    const журнал: JournalLine[] = [
+      { id: '1', type: 'review', ts: '2026-08-21T22:18:42+04:00', day: '2026-08-21',
+        slug: 'log-cs-cel-teksta-ne-tema', skill: 'recall', format: 'mc', kind: 'error',
+        prev_state: State.New, rating: 2 },
+      { id: '2', type: 'review', ts: '2026-08-21T22:19:10+04:00', day: '2026-08-21',
+        slug: 'buttress', skill: 'recall', format: 'intro', prev_state: State.New, rating: 3 },
+      { id: '3', type: 'session', ts: '2026-08-21T22:30:00+04:00', day: '2026-08-21' }
+    ]
+    const forced = forcedTodaySlugs(журнал, '2026-08-21')
+    assert(!forced.has('log-cs-cel-teksta-ne-tema'),
+      'репро: упражнение больше не требует обязательной отработки в тот же день')
+    assert(forced.has('buttress'),
+      'словарное знакомство по-прежнему обязано быть отработано сегодня — правило A7 не тронуто')
+  }
+  console.log('  ✓ упражнение не возвращается в тот же учебный день: ни добором, ни learning-шагом')
+  passed++
 
   /* C9: у задания с вариантами верный ответ ровно один.
 
