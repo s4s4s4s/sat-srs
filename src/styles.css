@@ -23,7 +23,7 @@
   --blue: #3a86c9;   --blue-sh: #2f6da5;   --blue-soft: #e3eef8;   --blue-line: #b5d1ea;   --blue-text: #275e91;
   --red: #d64545;    --red-sh: #b23636;    --red-soft: #fae5e5;    --red-line: #ecc0c0;    --red-text: #a63030;
   --yellow: #c9962e; --yellow-sh: #a87b22; --yellow-soft: #f8efdb; --yellow-line: #e5d0a2; --amber-text: #7d5c17;
-  --orange: #f28a1c; --streak-ink: #a05a10;
+  --orange: #f28a1c; --streak-ink: #a05a10; --orange-soft: #fdeedd; --orange-text: #9c5a0c;
   --purple: #8e6ac9; --purple-sh: #7355a6; --purple-soft: #eee8f8; --purple-line: #cfc0e8; --purple-text: #5f4494;
   /* CTA = пламя: главный акцент бренда */
   --cta-a: #ffa02b; --cta-b: #ec7508; --cta-sh: #c25f05;
@@ -125,7 +125,7 @@
     --blue: #5a97c4;   --blue-sh: #457ba6;   --blue-soft: rgba(122, 181, 216, .13);  --blue-line: rgba(122, 181, 216, .3);   --blue-text: #9bc9e6;
     --red: #cf6a5a;    --red-sh: #ad5041;    --red-soft: rgba(217, 122, 106, .14);   --red-line: rgba(217, 122, 106, .35);   --red-text: #e2988a;
     --yellow: #cfa040; --yellow-sh: #ad8430; --yellow-soft: rgba(230, 194, 104, .12); --yellow-line: rgba(230, 194, 104, .3); --amber-text: #d9b569;
-    --orange: #f2a04c; --streak-ink: #f2a04c;
+    --orange: #f2a04c; --streak-ink: #f2a04c; --orange-soft: rgba(242, 160, 76, .14); --orange-text: #f2a04c;
     --purple: #9d7fd4; --purple-sh: #8266b3; --purple-soft: rgba(157, 127, 212, .14); --purple-line: rgba(157, 127, 212, .32); --purple-text: #bda6e6;
 
     /* фьорд-шапка */
@@ -861,6 +861,8 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 .badge-purple { background: var(--purple-soft); color: var(--purple); }
 .badge-purple .sec-x { color: var(--purple); }
 .badge-gold { background: var(--gold-soft); color: var(--gold-text); }
+.badge-orange { background: var(--orange-soft); color: var(--orange-text); }
+.badge-orange .sec-x { color: var(--orange-text); }
 .stat-cell .freeze { font-size: 13px; color: var(--blue-text); margin-left: 3px; }
 
 /* прогноз нагрузки */

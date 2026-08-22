@@ -20,15 +20,15 @@ import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
   pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, holdExerciseToNextDay, isExercise, LEARN_AHEAD_MS, LAST_LEARNING_STEP, sharesMeaning, typedTwin, checkTyped,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
-  pickTask, meaningDistractors, REVIEW_CYCLE, NEW_STOP_DATE, kindRank, expandItems, freshItems,
-  homeCounts, sectionOf, newBudgetFor, newBudgetTotal,
+  pickTask, meaningDistractors, REVIEW_CYCLE, ROTATE_FROM_REPS, NEW_STOP_DATE, kindRank, expandItems, freshItems,
+  homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal,
   MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
 import { lessonProgress, estimateShowsLeft, DRILL_PER_SESSION, type ProgressInput } from '../src/lib/progress'
 import { endOfStudyDay, dayKey, addDaysKey } from '../src/lib/daytime'
 import { sessionAccuracy, matureRetention, forcedTodaySlugs, CARD_TIME_CAP_MS } from '../src/lib/journal'
-import { isLeech, LEECH_REPS, LEECH_STABILITY_DAYS } from '../src/lib/metrics'
+import { isLeech, LEECH_REPS, LEECH_STABILITY_DAYS, SECTION_LABELS } from '../src/lib/metrics'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
 const RETENTION = 0.9
@@ -685,19 +685,32 @@ function dontKnowChecks(): void {
     return pickTask({ view: { ...v, fsrs }, skill: 'recall', fsrs }, cycDeck, undefined, undefined, true, typing)
   }
   assert(REVIEW_CYCLE.length === 4, `C8: цикл из четырёх шагов, в коде ${REVIEW_CYCLE.length}`)
-  assert(REVIEW_CYCLE[0].format === 'mc' && REVIEW_CYCLE[0].cue === 'sentence',
-    'C8: первым идёт формат реального экзамена — Words in Context')
   const modes = [0, 1, 2, 3].map(r => atReps(r))
   const sig = (m: { format: string; cue: string }) => `${m.format}/${m.cue}`
-  assert(new Set(modes.map(sig)).size === 4, `C8: четыре подряд показа обязаны дать четыре разных режима: ${modes.map(sig).join(', ')}`)
   assert(modes.filter(m => m.cue === 'sentence').length === 1,
     `C8: предложение показывается ровно на одном шаге из четырёх, иначе оно заучивается: ${modes.map(sig).join(', ')}`)
-  assert(modes.some(m => m.format === 'type'),
-    'C8: производство обязано быть в цикле — это единственный режим, где угадывать не из чего')
+  assert(modes.some(m => sig(m) === 'mc/sentence'),
+    'C8: формат реального экзамена (Words in Context) обязан оставаться в цикле — его надо тренировать')
   assert(modes.some(m => m.cue === 'word'),
     'C8: обратный режим (слово → значение) обязан быть в цикле — в нём узнавание английской формы не помогает')
   assert(sig(atReps(4)) === sig(atReps(0)) && sig(atReps(7)) === sig(atReps(3)),
     'C8: цикл замыкается по числу оценок, фаза не плавает')
+
+  /* C11 (22.08.2026): производство — половина ротации, а не четверть.
+     Репро жалобы того же дня: «в основном это были задания на выбрать из четырёх,
+     и там я легко выбирал нужное, но щас я не могу вспомнить ни одного слова».
+     Замер журнала за 22.08: словарь — 15 показов выбором против 3 вводом. Проверяем
+     не состав массива, а то, что планировщик реально чередует ввод через шаг: при
+     таком чередовании карточка не может набрать интервал, ни разу не пройдя ввод,
+     и отдельные ворота «не выпускать, пока не введено» не нужны. */
+  assert(modes.filter(m => m.format === 'type').length === 2,
+    `C11: половина шагов ротации — производство, иначе слово растит интервал на одном узнавании: ${modes.map(sig).join(', ')}`)
+  assert(!modes.some(m => sig(m) === 'mc/meaning'),
+    'C11: «значение → слово из четырёх» — тот же вопрос, что ввод, только с подпоркой; в цикле его нет')
+  assert(atReps(ROTATE_FROM_REPS).format === 'type',
+    'C11: первым же шагом ротации идёт производство — до него карточка уже дважды опознана')
+  assert(sig(atReps(ROTATE_FROM_REPS)) !== sig(atReps(ROTATE_FROM_REPS + 1)),
+    'C11: два ввода подряд не идут — ввод чередуется с узнаванием, а не вытесняет его')
 
   // деградация: недоступный шаг заменяется ближайшим возможным, а не пропускается
   const noMeaning: CardView = { ...cycDeck[0], meaning_ru: '', meaning_en: '' }
@@ -706,7 +719,7 @@ function dontKnowChecks(): void {
       `C8: без значения шаг ${r} обязан откатиться к предложению, а не спрашивать пустоту`)
   }
   assert(atReps(3, noMeaning).format === 'mc', 'C8: без значения ввод неоднозначен — остаётся выбор')
-  assert(atReps(3, cycDeck[0], false).format === 'mc' && atReps(3, cycDeck[0], false).cue === 'meaning',
+  assert(atReps(2, cycDeck[0], false).format === 'mc' && atReps(2, cycDeck[0], false).cue === 'meaning',
     'C8: при выключенном вводе шаг производства деградирует в выбор с той же целью, а не пропускается')
 
   /* Дистракторы-значения: узнавание по новизне здесь не работает в принципе, но
@@ -716,10 +729,10 @@ function dontKnowChecks(): void {
   assert(md.length === 3, `C8: ожидалось 3 дистрактора-значения, получено ${md.length}`)
   assert(!md.includes(cycDeck[0].meaning_ru), 'C8: правильное значение не попадает в собственные дистракторы')
   assert(new Set(md).size === md.length, 'C8: значения без повторов')
-  assert(atReps(2, cycDeck[0]).cue === 'word', 'C8: на живой колоде обратный режим собирается')
+  assert(atReps(3, cycDeck[0]).cue === 'word', 'C8: на живой колоде обратный режим собирается')
   // колода, где значений на дистракторы не хватает: обратный режим невозможен → откат к значению
   const poorDeck: CardView[] = [cycDeck[0], ...cycDeck.slice(1).map(c => ({ ...c, meaning_ru: '' }))]
-  const poorFsrs = { ...cycDeck[0].fsrs, state: State.Review, reps: 2 }
+  const poorFsrs = { ...cycDeck[0].fsrs, state: State.Review, reps: 3 }
   assert(meaningDistractors(cycDeck[0], poorDeck).length < 3, 'C8 setup: в бедной колоде значений действительно не хватает')
   const poorStep = pickTask(
     { view: { ...cycDeck[0], fsrs: poorFsrs }, skill: 'recall', fsrs: poorFsrs }, poorDeck, undefined, undefined, true, true)
@@ -739,8 +752,10 @@ function dontKnowChecks(): void {
   assert(sig(inLearning(0)) === 'mc/sentence' && sig(inLearning(1)) === 'mc/sentence',
     'C9: до двух опознаний ротации нет — производство раньше срока это гарантированный провал (C1)')
   const learnModes = [2, 3, 4, 5].map(r => inLearning(r))
-  assert(new Set(learnModes.map(sig)).size === 4,
-    `C9: со второго повтора learning идёт по тому же циклу: ${learnModes.map(sig).join(', ')}`)
+  assert([2, 3, 4, 5].every(r => sig(inLearning(r)) === sig(atReps(r))),
+    `C9: со второго повтора learning идёт по тому же циклу, что Review: ${learnModes.map(sig).join(', ')}`)
+  assert(learnModes.some(m => m.format === 'type'),
+    'C9: производство доступно и в learning — иначе застрявшее там слово ни разу не вспоминают само')
   assert(learnModes.some(m => m.format === 'type'),
     'C9: слово, застрявшее в learning, обязано хоть раз спрашиваться без вариантов — иначе оно тренирует только узнавание')
   assert(inLearning(3, false).format === 'mc',
@@ -1502,6 +1517,7 @@ function main(): void {
 
   progressBarChecks()
 
+  logicSectionChecks()
   sectionBudgetChecks()
   fillerChecks()
   summaryChecks()
@@ -1589,6 +1605,49 @@ function progressBarChecks(): void {
  * считал `newAvail = min(новых, 0)`, печатал «Всё повторено» и гасил кнопку поверх
  * нетронутой колоды. Интерфейс не отражал лень владельца — он ему врал.
  */
+/**
+ * Разборы чтения не попадают в урок слов.
+ *
+ * Репро дефекта, названного 22.08.2026 на живом занятии: пятнадцать минут в разделе
+ * «Слова» дали 41 оценку, из которых 22 — карточки kind error (вопросы к тексту), и
+ * только 19 — словарь. Причина была в `sectionOf`: II и CS уезжали в 'rw' к словам,
+ * EOI — в 'grammar' к запятым. Проверка идёт от ТОГО ЖЕ отбора, которым живёт урок
+ * (Review.tsx фильтрует колоду по `sectionOf(v) === section`), поэтому падает ровно
+ * тогда, когда упражнение снова окажется среди слов.
+ */
+function logicSectionChecks() {
+  const разборы = [
+    { ...baseView('log-ii-central-idea', 1, 'error'), domain: 'II' },
+    { ...baseView('log-cs-cel-teksta', 1, 'error'), domain: 'CS' },
+    { ...baseView('log-eoi-cause-not-effect', 1, 'error'), domain: 'EOI' }
+  ]
+  const слова = [newCard('candid'), newCard('lucid')]
+  const грамматика = [{ ...baseView('semicolon', 1, 'grammar'), domain: 'SEC' }]
+  const связка = { ...baseView('nevertheless', 1, 'vocab'), pos: 'transition' }
+  const математика = [{ ...baseView('quadratic', 1, 'math'), domain: 'ALG' }]
+  const колода = [...разборы, ...слова, ...грамматика, связка, ...математика]
+
+  // то, ради чего правка: урок слов состоит из слов
+  const урокСлов = колода.filter(v => sectionOf(v) === 'rw')
+  assert(урокСлов.length === слова.length,
+    `репро: в раздел «Слова» попало лишнее — ${урокСлов.map(v => v.slug).join(', ')}`)
+  const урокГрамматики = колода.filter(v => sectionOf(v) === 'grammar')
+  assert(урокГрамматики.every(v => v.domain !== 'EOI'),
+    'репро: риторический синтез (EOI) остался в разделе «Грамматика»')
+
+  assert(разборы.every(v => sectionOf(v) === 'logic'), 'II, CS и EOI — раздел «Логика»')
+  assert(sectionOf(связка) === 'grammar', 'связка-слово остаётся в грамматике, она не разбор текста')
+  assert(sectionOf(математика[0]) === 'math', 'математика разделом не сдвинулась')
+  assert(SECTIONS.includes('logic'), '«Логика» стоит в перечне разделов — иначе её нет ни в отчёте, ни в «Статистике»')
+  assert(SECTION_LABELS.logic.length > 0, 'у раздела есть человеческая подпись')
+  // у каждого раздела своя дневная норма новых: разбор не отбирает норму у слова
+  assert(newBudgetFor(урокСлов, 3, [], '2026-08-22') === 3, 'норма слов считается по словам')
+  assert(newBudgetFor(разборы, 3, [], '2026-08-22') === 3, 'у разборов своя норма')
+
+  console.log('  ✓ разборы чтения (II/CS/EOI) — отдельный раздел «Логика», в уроке слов их нет')
+  passed++
+}
+
 function sectionBudgetChecks() {
   const день = '2026-08-21'
   const слова = [newCard('alpha'), newCard('beta'), newCard('gamma')]
@@ -1625,8 +1684,13 @@ function sectionBudgetChecks() {
   assert(homeCounts(грамматика, newBudgetFor(грамматика, 3, журнал, день), new Date(BASE)).newAvail === 2,
     'после правки грамматике доступны обе непоказанные карточки')
 
-  // сумма по разделам — ею живут сводка «Статистики» и бейдж на иконке
-  assert(newBudgetTotal(все, 3, журнал, день) === 6, 'общий остаток — сумма остатков разделов')
+  /* Сумма по разделам — ею живут сводка «Статистики» и бейдж на иконке. Остаток раздела
+     ограничен тем, что в разделе есть: словарь свою норму выбрал (0), в грамматике две
+     непоказанные при норме 3 (2), в математике одна (1). Раньше здесь стояло 6 — сумма
+     ГОЛЫХ норм, — и бейдж обещал ввод, которого в колоде нет. */
+  assert(newBudgetTotal(все, 3, журнал, день) === 3, 'общий остаток — сумма остатков разделов, каждый по наличию')
+  assert(newBudgetTotal([...слова, ...грамматика], 3, журнал, день) === 2,
+    'раздел, которого в колоде нет, в общий остаток не добавляет свою норму')
 
   // чужой день чужую норму не занимает
   assert(newBudgetFor(слова, 3, журнал, '2026-08-22') === 3, 'вчерашние вводы не занимают сегодняшнюю норму')

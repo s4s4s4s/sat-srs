@@ -55,14 +55,18 @@ async function maybeGoStraightToLesson(): Promise<void> {
   const p = new URLSearchParams(location.search)
   if (p.get('go') !== '1') return
   const { views: allViews, startLesson, currentJournal, currentSettings } = await import('./lib/store')
-  const { homeCounts, sectionOf } = await import('./lib/scheduler')
-  const { newIntroducedOn } = await import('./lib/journal')
+  const { homeCounts, sectionOf, newBudgetFor } = await import('./lib/scheduler')
   const { NEW_PER_DAY } = await import('./lib/norms')
   const { dayKey } = await import('./lib/daytime')
   const s = currentSettings()
   if (!s.pat && !import.meta.env.DEV) return
   const rw = allViews().filter(v => sectionOf(v) === 'rw')
-  const budget = Math.max(0, NEW_PER_DAY.norm - newIntroducedOn(currentJournal(), dayKey()))
+  /* Норма считается по разделу (`newBudgetFor`), а не по всей колоде: иначе введённая
+     сегодня карточка логики, грамматики или математики списывается с бюджета слов, и
+     заход по уведомлению открывает урок без новых там, где они есть. Тот же дефект
+     чинили 21.08 на главном экране — здесь он остался незамеченным, потому что счёт
+     шёл мимо `newBudgetFor`. С четвёртым разделом («Логика») цена ошибки выросла. */
+  const budget = newBudgetFor(rw, NEW_PER_DAY.norm, currentJournal(), dayKey())
   const c = homeCounts(rw, budget)
   if (c.learnDue + c.revDue + c.newAvail > 0) startLesson('rw', p.get('review') === '1')
 }

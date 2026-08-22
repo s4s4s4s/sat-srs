@@ -132,16 +132,19 @@ export default function Home() {
   const today = dayKey()
   const all = views()
   const rw = all.filter(v => sectionOf(v) === 'rw')
+  const logic = all.filter(v => sectionOf(v) === 'logic')
   const grammar = all.filter(v => sectionOf(v) === 'grammar')
   const math = all.filter(v => sectionOf(v) === 'math')
   /* Бюджет новых — свой у каждого раздела (`newBudgetFor`). Общий на колоду
      доставался тому, кого открывали первым, и остальные стояли с погашенной
      кнопкой «Всё повторено» поверх нетронутых карточек. */
   const budgetRw = newBudgetFor(rw, NEW_PER_DAY.norm, app.journal, today)
+  const budgetLogic = newBudgetFor(logic, NEW_PER_DAY.norm, app.journal, today)
   const budgetGrammar = newBudgetFor(grammar, NEW_PER_DAY.norm, app.journal, today)
   const budgetMath = newBudgetFor(math, NEW_PER_DAY.norm, app.journal, today)
   // запас сверх оптимума — им живёт кнопка «Ещё» (урок сверх нормы)
   const extraRw = newBudgetFor(rw, NEW_PER_DAY.max, app.journal, today)
+  const extraLogic = newBudgetFor(logic, NEW_PER_DAY.max, app.journal, today)
   const extraGrammar = newBudgetFor(grammar, NEW_PER_DAY.max, app.journal, today)
   const extraMath = newBudgetFor(math, NEW_PER_DAY.max, app.journal, today)
   const pause: PauseRange | null = app.settings.pauseFrom && app.settings.pauseTo
@@ -176,7 +179,7 @@ export default function Home() {
      открытии приложения, а не на занятии. Добитая очередь по-прежнему
      засчитывает день, но только через строку session с reviews > 0
      (см. `journal.emptyDays`). */
-  const cAll = homeCounts(all, budgetRw + budgetGrammar + budgetMath)
+  const cAll = homeCounts(all, budgetRw + budgetLogic + budgetGrammar + budgetMath)
 
   const syncText =
     app.syncStatus === 'syncing' ? 'Синхронизация…'
@@ -323,6 +326,7 @@ export default function Home() {
       </div>
 
       <SectionBlock title="Слова" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budgetRw} extraBudget={extraRw} onStart={go('rw')} onReview={go('rw', true)} onExtra={goExtra('rw')} levelLine={levelLine} onPath={() => setScreen('path')} />
+      <SectionBlock title="Логика" icon={<span className="sec-x">∴</span>} badge="badge-orange" glyph="var(--rune-tiwaz)" cards={logic} budget={budgetLogic} extraBudget={extraLogic} onStart={go('logic')} onReview={go('logic', true)} onExtra={goExtra('logic')} />
       <SectionBlock title="Грамматика" icon={<span className="sec-x">¶</span>} badge="badge-green" glyph="var(--rune-ansuz)" cards={grammar} budget={budgetGrammar} extraBudget={extraGrammar} onStart={go('grammar')} onReview={go('grammar', true)} onExtra={goExtra('grammar')} />
       <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budgetMath} extraBudget={extraMath} onStart={go('math')} onReview={go('math', true)} onExtra={goExtra('math')} />
       <ReadingBlock texts={texts} read={readSlugs} level={readLevel} onOpen={() => setScreen('reading')} />

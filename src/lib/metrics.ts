@@ -355,11 +355,11 @@ export function orphanedLines(cards: CardView[], journal: JournalLine[]): Orphan
   return { n, total, share: total ? Math.round((n / total) * 100) / 100 : 0, slugs }
 }
 
-// ---- ретеншн и зрелость по разделам (слова/грамматика/математика) --------
+// ---- ретеншн и зрелость по разделам (слова/логика/грамматика/математика) --------
 
 /** Человеческие подписи разделов (см. `Section`/`sectionOf` в scheduler.ts) — одно определение
  *  на экран и отчёт, тем же приёмом, что и у INTERVAL_LABELS выше. */
-export const SECTION_LABELS: Record<Section, string> = { rw: 'Слова', grammar: 'Грамматика', math: 'Математика' }
+export const SECTION_LABELS: Record<Section, string> = { rw: 'Слова', logic: 'Логика', grammar: 'Грамматика', math: 'Математика' }
 
 /**
  * Retention по разделам — прямой ответ на «какой раздел проседает», которого раньше не было
@@ -386,6 +386,7 @@ export interface SectionMaturity { total: number; reviewCount: number; matureCou
 export function maturityBySection(cards: CardView[]): Record<Section, SectionMaturity> {
   const out: Record<Section, SectionMaturity> = {
     rw: { total: 0, reviewCount: 0, matureCount: 0 },
+    logic: { total: 0, reviewCount: 0, matureCount: 0 },
     grammar: { total: 0, reviewCount: 0, matureCount: 0 },
     math: { total: 0, reviewCount: 0, matureCount: 0 }
   }
