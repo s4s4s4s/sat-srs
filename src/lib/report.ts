@@ -4,7 +4,7 @@ import { cardView, readingView } from './yamlfm'
 import { addDaysKey, dayKey, isoLocal } from './daytime'
 import {
   minutesByDay, readMinutesByDay, streak, trueRetention30, retentionByFormat, READ_MIN_MINUTES,
-  markDigest, markCount, readingSrc, readingPassed, readTextSlugs, normWord,
+  markDigest, markCount, readingSrc, readingPassed, readTextSlugs, readingPaceWpm, normWord,
   READING_UNKNOWN_SHARE_MAX, type PauseRange
 } from './journal'
 import { activeLevel, levelStats, isLevelled, EXAM_DATE, SECTIONS } from './scheduler'
@@ -210,13 +210,16 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
     out.push('- Текстов нет: каталог `Учёба/Чтение` пуст или ещё не синхронизирован.', '')
   } else {
     out.push(`> Порог понятности: отмеченных незнакомыми слов не больше ${Math.round(READING_UNKNOWN_SHARE_MAX * 100)}% объёма. Не взят — текст рано засчитывать прочитанным, а ступень рано повышать.`, '')
-    out.push('| текст | ур. | слов | прочитан | отмечено сейчас | порог понятности |', '|---|---|---|---|---|---|')
+    out.push('| текст | ур. | слов | прочитан | отмечено сейчас | темп | порог понятности |', '|---|---|---|---|---|---|---|')
     for (const t of texts) {
       const marks = markCount(lines, readingSrc(t.slug))
       const done = readSlugs.has(t.slug)
       const share = t.words ? ` (${((marks / t.words) * 100).toFixed(1)}%)` : ''
       const verdict = !done ? '—' : readingPassed(marks, t.words) ? '✅ взят' : '⚠️ не взят'
-      out.push(`| ${cell(t.title, 60)} | ${t.level >= 999 ? '⚠' : t.level} | ${t.words} | ${done ? 'да' : '—'} | ${marks}${share} | ${verdict} |`)
+      /* Прочерк значит «не мерили», а не «медленно»: время над текстом приложение считает
+         только с 22.08.2026, у прочтений до того поля `read_s` нет вовсе. */
+      const wpm = readingPaceWpm(lines, t.slug, t.words)
+      out.push(`| ${cell(t.title, 60)} | ${t.level >= 999 ? '⚠' : t.level} | ${t.words} | ${done ? 'да' : '—'} | ${marks}${share} | ${wpm ? `${wpm} сл/мин` : '—'} | ${verdict} |`)
     }
     out.push('')
   }

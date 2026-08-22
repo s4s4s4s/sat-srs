@@ -41,6 +41,10 @@ import {
   splitSentences, paragraphs, segmentText, markedLemmas, glossFor, lemmaOf,
   readingLevel, orderReadings, type Segment
 } from '../src/lib/reading'
+import { readMinutesToday, readingPaceWpm } from '../src/lib/journal'
+import {
+  startClock, advance, poke, setActive, flush, READ_IDLE_MS, READ_MIN_CREDIT_S
+} from '../src/lib/readclock'
 import type { GlossEntry, JournalLine, ReadingRec, ReadingView } from '../src/lib/types'
 
 let passed = 0
@@ -747,6 +751,111 @@ function paragraphChecks(): void {
 
 // ---- структурные проверки экранов ------------------------------------------
 
+/**
+ * Часы чтения: время над текстом попадает в полосу дня.
+ *
+ * Репро дефекта, названного 22.08.2026: «я читал сегодня, а чтение 0 минут отмечено».
+ * Замер живого журнала за тот день — 22 строки `mark` и одна `reading`, между первой
+ * отметкой и «Я дочитал» четыре с лишним минуты, минут чтения ноль. Строк `read` (а
+ * только по ним считает `readMinutesByDay`) в журнале не было НИ ОДНОЙ за всю историю:
+ * их писала единственная кнопка «+» на главной, где минуты вводятся руками.
+ *
+ * Проверка идёт от конца — от `readMinutesToday`, то есть от той самой цифры на полосе,
+ * а не от внутренностей часов: падать она обязана ровно тогда, когда прочитанное снова
+ * перестанет считаться.
+ */
+function readClockChecks(): void {
+  const T = 1_000_000            // произвольная точка отсчёта: часы работают на разностях
+  const мин = (n: number) => n * 60_000
+
+  /* Первой стоит проверка от полосы дня, а не от арифметики часов: снятие зачёта обязано
+     валить именно её, с формулировкой названного дефекта. Обратный порядок уже подводил —
+     юнит-проверка падала первой, и главная не исполнялась вовсе. */
+  let c = startClock(T)
+  for (let t = T + 30_000; t <= T + мин(15); t += 30_000) c = poke(c, t)
+  const прочитано = flush(c, T + мин(15), true)
+
+  const день = '2026-08-22'
+  const строки: JournalLine[] = [{
+    id: 'r1', type: 'read', ts: `${день}T14:19:00+04:00`, day: день,
+    read_min: прочитано.minutes, what: 'Testing a Hypothesis', src: 'reading:1-01-testing-a-hypothesis'
+  }]
+  assert(readMinutesToday(строки, день) === 15,
+    `репро «читал, а чтение 0 мин»: пятнадцать минут над текстом дали полосе дня ${readMinutesToday(строки, день)} мин вместо 15`)
+  assert(прочитано.minutes === 15, `пятнадцать минут чтения дают 15 минут, вышло ${прочитано.minutes}`)
+  // строки прочтения и отметок минут не дают и давать не должны: это другие события
+  const безВремени: JournalLine[] = [
+    { id: 'm1', type: 'mark', ts: `${день}T14:15:10+04:00`, day: день, src: 'reading:x', word: 'vague' },
+    { id: 'g1', type: 'reading', ts: `${день}T14:19:23+04:00`, day: день, slug: 'x', marks: 4, passed: true }
+  ]
+  assert(readMinutesToday(безВремени, день) === 0,
+    'ровно этот случай и был дефектом: отметки и прочтение сами по себе минут не несут')
+
+  // ушёл от экрана: простой дольше порога не засчитывается
+  let ушёл = startClock(T)
+  ушёл = advance(ушёл, T + READ_IDLE_MS + мин(30))
+  assert(flush(ушёл, T + READ_IDLE_MS + мин(30), true).minutes === 0,
+    'полчаса без единого действия — это не чтение, а забытая открытая вкладка')
+
+  // свернул приложение: скрытое время не идёт в зачёт, видимое идёт
+  let свернул = poke(startClock(T), T + мин(2))
+  свернул = setActive(свернул, T + мин(2), false)
+  свернул = setActive(свернул, T + мин(2) + мин(40), true)
+  свернул = poke(свернул, T + мин(2) + мин(40) + мин(3))
+  assert(flush(свернул, T + мин(2) + мин(40) + мин(3), true).minutes === 5,
+    'сорок минут в фоне не читаются; две минуты до и три после — читаются')
+
+  // возвращение из фона само считается действием, иначе после долгой паузы
+  // короткий текст без касаний не засчитал бы ни секунды
+  let вернулся = setActive(setActive(startClock(T), T, false), T + мин(60), true)
+  вернулся = advance(вернулся, T + мин(62))
+  assert(flush(вернулся, T + мин(62), true).minutes === 2,
+    'после возвращения отсчёт простоя начинается заново')
+
+  // промежуточный съём режет по целым минутам и переносит остаток: три захода по 40 с
+  // дают две минуты, а не три округлённых вверх
+  let дробно = startClock(T)
+  let итого = 0
+  for (let i = 0; i < 3; i++) {
+    дробно = poke(дробно, T + i * 40_000 + 40_000)
+    const f = flush(дробно, T + i * 40_000 + 40_000, false)
+    итого += f.minutes
+    дробно = f.rest
+  }
+  assert(итого === 2, `три захода по сорок секунд — две минуты, вышло ${итого}`)
+
+  // короткий заход не пишется вовсе, а не округляется до минуты
+  const короткий = flush(poke(startClock(T), T + READ_MIN_CREDIT_S * 1000 - 1_000), T + 29_000, true)
+  assert(короткий.minutes === 0, 'меньше получаса секунд — не заход чтения')
+
+  // темп: секунды за весь заход остаются, даже когда минуты уже сняты в журнал
+  let темп = poke(startClock(T), T + мин(3))
+  темп = flush(темп, T + мин(3), false).rest
+  assert(Math.round(темп.total) === 180, `секунды захода не обнуляются съёмом: ${Math.round(темп.total)}`)
+  assert(темп.credited < 1, 'снятое в журнал во второй раз не пишется')
+
+  /* Темп: ради него секунды и кладутся в строку прочтения — ступени текстов иначе двигать
+     не по чему. Прочерк у старых прочтений обязан отличаться от медленного чтения. */
+  const прочтения: JournalLine[] = [
+    { id: 'p0', type: 'reading', ts: `${день}T10:00:00+04:00`, day: день, slug: 'text-a', marks: 9, passed: false },
+    { id: 'p1', type: 'reading', ts: `${день}T12:00:00+04:00`, day: день, slug: 'text-a', marks: 3, passed: true, read_s: 120 },
+    { id: 'p2', type: 'reading', ts: `${день}T13:00:00+04:00`, day: день, slug: 'text-b', marks: 1, passed: true }
+  ]
+  assert(readingPaceWpm(прочтения, 'text-a', 300) === 150,
+    `триста слов за две минуты — 150 сл/мин, вышло ${readingPaceWpm(прочтения, 'text-a', 300)}`)
+  assert(readingPaceWpm(прочтения, 'text-b', 300) === 0,
+    'прочтение без read_s темпа не даёт: отчёт обязан поставить прочерк, а не выдуманное число')
+  assert(readingPaceWpm(прочтения, 'нет-такого', 300) === 0, 'у непрочитанного текста темпа нет')
+  // перечитывание: осмысленно то, как текст читается сейчас, а не как читался впервые
+  const перечитал: JournalLine[] = [
+    ...прочтения,
+    { id: 'p3', type: 'reading', ts: `${день}T18:00:00+04:00`, day: день, slug: 'text-a', marks: 0, passed: true, read_s: 60 }
+  ]
+  assert(readingPaceWpm(перечитал, 'text-a', 300) === 300, 'темп берётся с последнего измеренного прочтения')
+
+  group('часы чтения: время над текстом доходит до полосы дня, фон и простой не засчитываются')
+}
+
 function screenChecks(): void {
   const reading = screenSource('Reading.tsx')
   assert(reading.includes('toggleWordMark'), 'экран чтения ставит отметку общей функцией store, а не своей записью')
@@ -758,6 +867,17 @@ function screenChecks(): void {
     'в момент касания модель не зовут: слово уходит строкой журнала, разбор — за контуром ПК')
   assert(reading.includes('readingPassed'), 'итог чтения считает порог слоя данных, а не своя формула на экране')
   group('структурно: экран чтения пишет через store и не зовёт модель по касанию')
+
+  // часы чтения: проводка событий живёт на экране, зачёт — в чистом модуле
+  assert(reading.includes("from '../lib/readclock'"), 'экран считает время общим модулем часов, а не своим счётчиком')
+  assert(reading.includes('logReading('), 'измеренные минуты уходят той же функцией store, что и введённые руками')
+  assert(reading.includes('visibilitychange') && reading.includes('pagehide'),
+    'сворачивание приложения обязано сдавать накопленное: размонтирования на телефоне может не быть вовсе')
+  assert(/logTextRead\(text,\s*clock\.current\.total\)/.test(reading),
+    'секунды над текстом уходят в строку прочтения — без них темп чтения посчитать не из чего')
+  assert(!/setInterval\([^)]*\b[1-9]\d{0,2}\b\s*\)/.test(reading.replace(/5_000/g, 'ШАГ')),
+    'тик часов не чаще пяти секунд: рендер на каждую секунду ради целых минут не нужен')
+  group('структурно: экран чтения меряет время и сдаёт его при сворачивании')
 
   const review = screenSource('Review.tsx')
   assert(review.includes('cardSrc('), 'отметка в упражнении уходит в источник карточки')
@@ -793,6 +913,7 @@ function main(): void {
   levelChecks()
   orderChecks()
   paragraphChecks()
+  readClockChecks()
   structureChecks()
   screenChecks()
   const live = liveTextsChecks()

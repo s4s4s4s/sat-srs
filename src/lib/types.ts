@@ -163,6 +163,10 @@ export interface JournalLine {
   // reading:
   marks?: number           // сколько слов осталось отмечено в тексте на момент прочтения
   passed?: boolean         // взят ли порог понятности текста (readingPassed в journal.ts)
+  /* Секунды над текстом. Вместе с `words` текста даёт темп чтения — единственный
+     объективный вход для калибровки ступеней. Пишется только у измеренного чтения:
+     у строк до 22.08.2026 поля нет, и это не пропуск, а «не измеряли». */
+  read_s?: number
 }
 
 export interface JournalRec extends JournalLine {

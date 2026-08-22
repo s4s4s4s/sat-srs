@@ -475,13 +475,16 @@ export async function deferItemToNextDay(item: StudyItem): Promise<void> {
  *
  *  Строка пишется в тот же журнал, что и повторы, поэтому попадает в вальт
  *  обычной синхронизацией и оказывается видна разбору наравне с SRS. */
-export async function logReading(minutes: number, what = ''): Promise<void> {
+export async function logReading(minutes: number, what = '', src = ''): Promise<void> {
   const min = Math.round(Math.min(Math.max(minutes, 1), READ_CAP_MINUTES))
   const now = new Date()
   const line: JournalRec = {
     id: newId(),
     v: 1, type: 'read', ts: isoLocal(now), ms: now.getMilliseconds(), day: dayKey(),
-    read_min: min, what: what.trim().slice(0, 120), synced: 0
+    read_min: min, what: what.trim().slice(0, 120), synced: 0,
+    // `src` отличает измеренное чтение в приложении («reading:<слаг>») от введённого руками
+    // кнопкой «+» на главной. Соглашение то же, что у отметок слов (`toggleWordMark`).
+    ...(src ? { src } : {})
   }
   await db.putJournal([line])
   state.journal = [...state.journal, line]
@@ -563,13 +566,18 @@ export async function toggleWordMark(src: string, w: { word: string; lemma?: str
  * заводится карточкой руками тьютора (`_КОНТРАКТ.md`, «Слово из чтения попадает в колоду»),
  * и уровень ему назначает тоже тьютор: автоматики здесь нет и не будет.
  */
-export async function logTextRead(text: ReadingView): Promise<void> {
+export async function logTextRead(text: ReadingView, seconds = 0): Promise<void> {
   const marks = markCount(state.journal, readingSrc(text.slug))
   const now = new Date()
   const line: JournalRec = {
     id: newId(),
     v: 1, type: 'reading', ts: isoLocal(now), ms: now.getMilliseconds(), day: dayKey(),
-    slug: text.slug, marks, passed: readingPassed(marks, text.words), synced: 0
+    slug: text.slug, marks, passed: readingPassed(marks, text.words), synced: 0,
+    /* Секунды над текстом — единственное место, где вообще есть темп чтения: слов в
+       тексте известно, времени до сих пор не знал никто. Правило повышения ступени
+       чтения не откалибровано именно потому, что калибровать было не на чем. Поле
+       добавлено, а не подменено (D3): старые строки без него читаются как прежде. */
+    ...(seconds > 0 ? { read_s: Math.round(seconds) } : {})
   }
   await db.putJournal([line])
   state.journal = [...state.journal, line]

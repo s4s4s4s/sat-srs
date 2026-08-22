@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
-import { useApp, readingViews, setScreen, toggleWordMark, logTextRead, currentJournal } from '../lib/store'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useApp, readingViews, setScreen, toggleWordMark, logTextRead, logReading, currentJournal } from '../lib/store'
 import {
   readingSrc, readTextSlugs, markCount, readingPassed, READING_UNKNOWN_SHARE_MAX
 } from '../lib/journal'
+import { startClock, advance, poke, setActive, flush } from '../lib/readclock'
 import { glossFor, lemmaOf, markedLemmas, orderReadings, paragraphs, readingLevel } from '../lib/reading'
 import Markable from '../components/Markable'
 import { Check, ChevronLeft, Book } from '../components/Icon'
@@ -48,6 +49,55 @@ function TextView({ text, onBack }: { text: ReadingView; onBack: () => void }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
+  /* Часы чтения. Живут в ref, а не в состоянии: пересчёт идёт на каждое касание и на
+     каждый тик, и рендер на каждую секунду не нужен — на экран уходит только целое
+     число минут (`минут`). Сама логика зачёта — в `lib/readclock.ts`, здесь только
+     проводка событий браузера. */
+  const clock = useRef(startClock(Date.now()))
+  const [минут, setМинут] = useState(0)
+
+  /** Записать накопленное строкой журнала. `final` — уход с текста (см. flush). */
+  const сдать = useRef(async (final: boolean) => {})
+  сдать.current = async (final: boolean) => {
+    const { minutes, rest } = flush(clock.current, Date.now(), final)
+    clock.current = rest
+    if (minutes < 1) return
+    // строка пишется в тот же журнал, что и повторы, и уезжает тьютору обычной синхронизацией
+    await logReading(minutes, text.title, src)
+  }
+
+  useEffect(() => {
+    const действие = () => { clock.current = poke(clock.current, Date.now()) }
+    const видимость = () => {
+      const видно = document.visibilityState === 'visible'
+      clock.current = setActive(clock.current, Date.now(), видно)
+      // сворачивание приложения — единственный момент, когда размонтирования может не быть
+      // вовсе (телефон убивает вкладку), поэтому накопленное сдаётся здесь, а не только в конце
+      if (!видно) void сдать.current(false)
+    }
+    const уход = () => { void сдать.current(true) }
+    window.addEventListener('pointerdown', действие, { passive: true })
+    window.addEventListener('keydown', действие)
+    window.addEventListener('scroll', действие, { passive: true })
+    window.addEventListener('wheel', действие, { passive: true })
+    document.addEventListener('visibilitychange', видимость)
+    window.addEventListener('pagehide', уход)
+    const тик = setInterval(() => {
+      clock.current = advance(clock.current, Date.now())
+      setМинут(Math.floor(clock.current.total / 60))
+    }, 5_000)
+    return () => {
+      clearInterval(тик)
+      window.removeEventListener('pointerdown', действие)
+      window.removeEventListener('keydown', действие)
+      window.removeEventListener('scroll', действие)
+      window.removeEventListener('wheel', действие)
+      document.removeEventListener('visibilitychange', видимость)
+      window.removeEventListener('pagehide', уход)
+      void сдать.current(true)
+    }
+  }, [])
+
   async function onWord(seg: { text: string; sentence: string }) {
     setErr('')
     try {
@@ -68,7 +118,12 @@ function TextView({ text, onBack }: { text: ReadingView; onBack: () => void }) {
     setBusy(true)
     setErr('')
     try {
-      await logTextRead(text)
+      /* Часы останавливаются ДО записи: время над карточкой «Текст прочитан» — это уже не
+         чтение. Секунды всего захода уходят в строку прочтения (темп), минуты — отдельной
+         строкой `read` в полосу дня; двойного счёта нет, это разные величины в разных полях. */
+      clock.current = setActive(clock.current, Date.now(), false)
+      await logTextRead(text, clock.current.total)
+      await сдать.current(true)
       // счёт берём из журнала после записи — тем же способом, что и сама строка (logTextRead),
       // чтобы итог на экране не мог разойтись с тем, что уехало тьютору
       const n = markCount(currentJournal(), src)
@@ -87,9 +142,13 @@ function TextView({ text, onBack }: { text: ReadingView; onBack: () => void }) {
         <button className="iconbtn" onClick={onBack} aria-label="К списку текстов"><ChevronLeft /></button>
         <h2 className="read-h">{text.title}</h2>
       </div>
+      {/* Минуты видны прямо здесь: полоса «чтение 0/30» на главной семь недель стояла
+          на нуле, и без счётчика на самом тексте нельзя отличить «не читал» от «читал,
+          а приложение не считает» — ровно эта неразличимость и была дефектом. */}
       <div className="read-meta">
         ступень {text.level} <span className="rsep">·</span> {слов(text.words)}
         {' '}<span className="rsep">·</span> отмечено {marks}
+        {' '}<span className="rsep">·</span> {минут < 1 ? 'меньше минуты' : `${минут} мин`}
       </div>
 
       <div className="read-text">
