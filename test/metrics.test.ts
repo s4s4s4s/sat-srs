@@ -37,7 +37,7 @@ function vocab(slug: string, f: FsrsCard, level = 1, extra: Partial<CardView> = 
   return {
     path: `deck/${slug}.md`, slug, word: slug, pos: 'adj', context: '', contexts: [],
     meaning_en: '', meaning_ru: 'значение', roots: '', source: 'test', added: '2026-07-01',
-    level, kind: 'vocab', domain: '', confusables: [], leech: '', choices: [], answerText: '',
+    level, kind: 'vocab', domain: '', confusables: [], from_mark: [], leech: '', choices: [], answerText: '',
     answerNum: '', desmos: false, explain: '', suspended: false, fsrs: f,
     prep: '', prepContext: '', fsrsPrep: null, ...extra
   }

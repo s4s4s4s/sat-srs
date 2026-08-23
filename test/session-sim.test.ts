@@ -27,7 +27,7 @@ import {
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
 import { lessonProgress, estimateShowsLeft, DRILL_PER_SESSION, type ProgressInput } from '../src/lib/progress'
 import { endOfStudyDay, dayKey, addDaysKey } from '../src/lib/daytime'
-import { sessionAccuracy, matureRetention, forcedTodaySlugs, CARD_TIME_CAP_MS } from '../src/lib/journal'
+import { sessionAccuracy, matureRetention, forcedTodaySlugs, CARD_TIME_CAP_MS, liveMarkedLemmas } from '../src/lib/journal'
 import { isLeech, LEECH_REPS, LEECH_STABILITY_DAYS, SECTION_LABELS } from '../src/lib/metrics'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
@@ -50,7 +50,7 @@ function baseView(word: string, level: number, kind: string): CardView {
        что на ней проверяют. */
     meaning_en: `meaning of ${word}`, meaning_ru: `${word} по-русски`, roots: '',
     source: 'test', added: '2026-07-20', level, kind,
-    domain: '', confusables: [], leech: '', choices: [], answerText: '', answerNum: '',
+    domain: '', confusables: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
     desmos: false, explain: '', suspended: false,
     fsrs: createEmptyCard(new Date(BASE)),
     prep: '', prepContext: '', fsrsPrep: null
@@ -1205,6 +1205,67 @@ function ptPriorityChecks(): void {
 }
 
 /**
+ * Живая отметка владельца — абсолютный приоритет ввода (22.08.2026/уточнение 23.08.2026).
+ *
+ * Живой пример дефекта: `sparse` отмечено 22.08.2026, карточка в колоде есть, level: 4,
+ * а активная ступень — вторая (введено 16 слов из 100) — отметка не влияла ни на что,
+ * потому что `freshItems` вводит словарь строго level ASC.
+ *
+ * Владелец уточнил постановку: отметка перебивает НЕ ТОЛЬКО ступень, но и приоритет вида
+ * карточки (kindRank) — карточка идёт первой из всех New, а не только внутри словаря.
+ * Проверка берёт грамматическую карточку (kindRank выше словаря: error/grammar идут ДО
+ * vocab по прежнему правилу) и слово 4-й ступени с живой отметкой — отмеченное слово
+ * обязано обогнать даже grammar.
+ */
+function markPriorityChecks(): void {
+  const grammarCard: CardView = { ...newCard('comma-rule'), kind: 'grammar' } // kindRank 1 — по старому правилу шла бы первой
+  const lvl1 = newCard('brief', 1)
+  const lvl2 = newCard('candid', 2)
+  const lvl4Marked = newCard('sparse', 4) // ступень выше активной — по level ASC не введётся месяцами
+
+  const markOn: JournalLine = {
+    id: 'mark-on', type: 'mark', ts: '2026-08-22T09:00:00+03:00', day: '2026-08-22',
+    src: 'reading:2-01-reef', word: 'sparse', lemma: 'sparse', on: true
+  }
+
+  const deck = [grammarCard, lvl1, lvl2, lvl4Marked]
+  const marked = liveMarkedLemmas([markOn])
+  const order = freshItems(expandItems(deck), marked).map(i => i.view.slug)
+  assert(order[0] === 'sparse',
+    'живая отметка обязана перебить и kindRank (grammar), и ступень (4 > 1,2) — отмеченное слово идёт первым из всех New')
+  // порядок ОСТАЛЬНЫХ карточек — прежний: kindRank (grammar) раньше словаря, внутри словаря — по ступеням
+  assert(order.indexOf('comma-rule') < order.indexOf('brief'), 'вне отметки kindRank решает по-прежнему: grammar раньше словаря')
+  assert(order.indexOf('brief') < order.indexOf('candid'), 'вне отметки порядок словаря по ступеням не изменился (1 раньше 2)')
+
+  // from_mark: карточка отвечает отметке и без совпадения по word — если лемма отметки есть в from_mark
+  const praiseCard: CardView = { ...newCard('praise', 3), from_mark: ['praised'] }
+  const markPraised: JournalLine = {
+    id: 'mark-praised', type: 'mark', ts: '2026-08-22T09:05:00+03:00', day: '2026-08-22',
+    src: 'card:some-exercise', word: 'praised', on: true
+  }
+  const orderFromMark = freshItems(expandItems([grammarCard, praiseCard]), liveMarkedLemmas([markPraised])).map(i => i.view.slug)
+  assert(orderFromMark[0] === 'praise', 'from_mark: карточка отвечает отметке по форме из from_mark, а не только по своему word')
+
+  // снятая отметка (on: false) приоритета не даёт — карточка идёт как обычная новая словарная
+  const markOff: JournalLine = {
+    id: 'mark-off', type: 'mark', ts: '2026-08-22T10:00:00+03:00', day: '2026-08-22',
+    src: 'reading:2-01-reef', word: 'sparse', lemma: 'sparse', on: false
+  }
+  const markedAfterOff = liveMarkedLemmas([markOn, markOff])
+  assert(markedAfterOff.size === 0, 'снятие отметки убирает лемму из набора живых отметок')
+  const orderAfterOff = freshItems(expandItems(deck), markedAfterOff).map(i => i.view.slug)
+  assert(orderAfterOff[0] === 'comma-rule',
+    'снятая отметка (on:false) приоритета не даёт: первой снова идёт grammar по kindRank, как без отметки вовсе')
+  assert(
+    orderAfterOff.indexOf('brief') < orderAfterOff.indexOf('candid') && orderAfterOff.indexOf('candid') < orderAfterOff.indexOf('sparse'),
+    'снятая отметка: порядок словаря по ступеням (1 → 2 → 4) не нарушен'
+  )
+
+  console.log('  ✓ живая отметка (уточнение 23.08.2026): перебивает kindRank и ступень; from_mark учитывается; on:false приоритета не даёт')
+  passed++
+}
+
+/**
  * Задача 3 (17.08.2026) — починка флага пиявки. Старое условие в store.rateItem
  * (`next.lapses >= leech_lapses + 6`) требовало lapses ≥ 6, а lapses растёт только при
  * провале карточки из состояния Review — по всей колоде максимум был 2. Реальный путь к
@@ -1524,6 +1585,7 @@ function main(): void {
   dontKnowChecks()
   newStopChecks()
   ptPriorityChecks()
+  markPriorityChecks()
   leechFlagChecks()
   afkCapChecks()
   tomorrowCountChecks()

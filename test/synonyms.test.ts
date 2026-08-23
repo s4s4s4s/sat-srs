@@ -66,7 +66,7 @@ function card(word: string, meaning_ru: string, pos = 'verb', over: Partial<Card
     context: '', contexts: [], contextsRu: [],
     meaning_en: '', meaning_ru, roots: '',
     source: 'test', added: '2026-07-20', level: 1, kind: 'vocab',
-    domain: '', confusables: [], leech: '', choices: [], answerText: '', answerNum: '',
+    domain: '', confusables: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
     desmos: false, explain: '', suspended: false,
     fsrs: createEmptyCard(new Date(2026, 7, 22)),
     prep: '', prepContext: '', fsrsPrep: null,

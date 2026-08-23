@@ -2,7 +2,7 @@ import { fsrs, generatorParameters, Rating, State, type Grade, type Card as Fsrs
 import type { CardView, Format, StudyItem, JournalLine } from './types'
 import { endOfStudyDay, dayKey, addDaysKey } from './daytime'
 import { splitSentences, segmentText, type Segment } from './reading'
-import { TYPO_MIN_LEN, TYPO_MAX_EDITS, newIntroducedOn, cardTimeCap } from './journal'
+import { TYPO_MIN_LEN, TYPO_MAX_EDITS, newIntroducedOn, cardTimeCap, normWord } from './journal'
 
 export function makeScheduler(requestRetention: number): FSRS {
   // fuzz разводит одновременно выученные карточки по разным дням — меньше комков и MC-соседей
@@ -405,15 +405,36 @@ export function expandItems(cards: CardView[], now: Date = new Date()): StudyIte
 export const itemKey = (i: StudyItem) => `${i.view.path}#${i.skill}`
 
 /**
- * Новые единицы в порядке ввода: сначала error/grammar (доказанные пробелы), потом math,
- * потом словарь уровнями (Duolingo-путь): level ASC, внутри уровня added ASC.
+ * Отвечает ли карточка ЖИВОЙ отметке владельца («это слово мне встретилось, и я его
+ * не знаю» — см. liveMarkedLemmas в journal.ts). Совпадение по двум признакам:
+ * нормализованное `word` карточки — лемма отметки, либо лемма отметки числится в
+ * `from_mark` карточки (форма, в которой владелец слово встретил — параллельный
+ * инструмент подкладывает это поле при добавлении карточки из отметки).
+ */
+export function matchesLiveMark(v: CardView, marked: ReadonlySet<string>): boolean {
+  if (!marked.size) return false
+  if (marked.has(normWord(v.word))) return true
+  return v.from_mark.some(f => marked.has(normWord(f)))
+}
+
+/**
+ * Новые единицы в порядке ввода. Живая отметка владельца — абсолютный приоритет:
+ * карточка, отвечающая ей, идёт первой независимо от вида (kindRank) и ступени —
+ * иначе отмеченное слово с высокой ступенью не введётся месяцами (живой пример:
+ * `sparse` отмечено 22.08.2026, level 4, активная ступень вторая из шести).
+ * Внутри «отмечено»/«не отмечено» порядок прежний: сначала error/grammar
+ * (доказанные пробелы), потом math, потом словарь уровнями (Duolingo-путь):
+ * level ASC, внутри уровня added ASC.
  * Вынесено из buildQueue, потому что тем же порядком урок добирает лишнее новое слово,
  * когда иначе ему нечего показать (см. Review.tsx::proceed).
  */
-export function freshItems(items: StudyItem[]): StudyItem[] {
+export function freshItems(items: StudyItem[], marked: ReadonlySet<string> = new Set()): StudyItem[] {
   return items
     .filter(i => i.fsrs.state === State.New)
     .sort((a, b) => {
+      const ma = matchesLiveMark(a.view, marked) ? 0 : 1
+      const mb = matchesLiveMark(b.view, marked) ? 0 : 1
+      if (ma !== mb) return ma - mb
       const ka = kindRank(a.view)
       const kb = kindRank(b.view)
       if (ka !== kb) return ka - kb
@@ -435,9 +456,9 @@ export function freshItems(items: StudyItem[]): StudyItem[] {
  * нового слова в урок, помимо основного бюджета buildQueue, и обязан закрываться тем же
  * правилом, иначе «стоп ввода» держится наполовину.
  */
-export function nextNewItems(cards: CardView[], exclude: Set<string>, limit = 1, now: Date = new Date()): StudyItem[] {
+export function nextNewItems(cards: CardView[], exclude: Set<string>, limit = 1, now: Date = new Date(), marked: ReadonlySet<string> = new Set()): StudyItem[] {
   if (!newIntroAllowed(now)) return []
-  return freshItems(expandItems(cards, now))
+  return freshItems(expandItems(cards, now), marked)
     .filter(i => i.skill === 'recall' && !exclude.has(itemKey(i)))
     .slice(0, Math.max(0, limit))
 }
@@ -446,7 +467,7 @@ export function nextNewItems(cards: CardView[], exclude: Set<string>, limit = 1,
  * Очередь сессии: Learning/Relearning → Review (due сегодня) → New (лимит).
  * Review и New перемешаны interleaving-ом, learning — впереди по due.
  */
-export function buildQueue(cards: CardView[], newBudget: number, now: Date = new Date(), forced?: Set<string>): StudyItem[] {
+export function buildQueue(cards: CardView[], newBudget: number, now: Date = new Date(), forced?: Set<string>, marked: ReadonlySet<string> = new Set()): StudyItem[] {
   const eod = endOfStudyDay(now)
   const items = expandItems(cards, now)
 
@@ -482,7 +503,7 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
   // порядок прежний: added DESC.
   // NEW_STOP_DATE: после стопа бюджет нулевой независимо от того, что передал вызывающий —
   // правило живёт здесь, а не в каждом месте, которое считает newBudget снаружи.
-  const fresh = freshItems(items)
+  const fresh = freshItems(items, marked)
   const effectiveBudget = newIntroAllowed(now) ? newBudget : 0
   const newItems = shuffle(fresh.slice(0, Math.max(0, effectiveBudget)))
 

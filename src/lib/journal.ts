@@ -467,6 +467,21 @@ export function activeMarks(lines: JournalLine[], src?: string): JournalLine[] {
   return [...last.values()].filter(l => l.on !== false).sort(byTime)
 }
 
+/**
+ * Леммы всех живых отметок (`on !== false`), по всем источникам сразу — не привязано
+ * к конкретному тексту/карточке (в отличие от `markedLemmas` в reading.ts, которая
+ * фильтрует по одному `src`). Нужно планировщику: живая отметка слова должна поднять
+ * ввод его карточки независимо от того, где слово встретилось — в тексте или в задании.
+ */
+export function liveMarkedLemmas(lines: JournalLine[]): Set<string> {
+  const out = new Set<string>()
+  for (const l of activeMarks(lines)) {
+    const w = normWord(String(l.lemma || l.word || ''))
+    if (w) out.add(w)
+  }
+  return out
+}
+
 /** Отмечено ли сейчас это слово в этом тексте. */
 export function isMarked(lines: JournalLine[], src: string, word: string, lemma?: string): boolean {
   const key = markKey({ src, word, lemma } as JournalLine)

@@ -14,7 +14,7 @@ import { lessonProgress, DRILL_PER_SESSION } from '../lib/progress'
 import Tex from '../components/Tex'
 import Markable from '../components/Markable'
 import { markedLemmas, type Segment } from '../lib/reading'
-import { minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs, cardSrc } from '../lib/journal'
+import { minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs, cardSrc, liveMarkedLemmas } from '../lib/journal'
 import { NEW_PER_DAY, NEW_PER_LESSON } from '../lib/norms'
 import { speedStats } from '../lib/metrics'
 import { dayKey } from '../lib/daytime'
@@ -218,7 +218,7 @@ export default function Review() {
     // point 3: слова, введённые сегодня в прошлых уроках и ещё не отработанные дважды,
     // принудительно добираются в этот урок (buildQueue дотягивает их из Learning с due на завтра)
     const forced = forcedTodaySlugs(currentJournal(), dayKey())
-    setQueue(buildQueue(карточкиРаздела, budget, new Date(), forced))
+    setQueue(buildQueue(карточкиРаздела, budget, new Date(), forced, liveMarkedLemmas(currentJournal())))
     if (app.settings.pat && navigator.onLine) void startSync()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -464,7 +464,7 @@ export default function Review() {
       dayNewLeft.current - freshIntros.current, n)
     if (slots <= 0) return []
     const used = new Set(exclude.map(itemKey))
-    return nextNewItems(deck, used, slots).filter(i => !deferredToday.current.has(i.view.path))
+    return nextNewItems(deck, used, slots, new Date(), liveMarkedLemmas(currentJournal())).filter(i => !deferredToday.current.has(i.view.path))
   }
 
   /**
