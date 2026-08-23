@@ -4,6 +4,7 @@ import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm, readingView, slugFromPath } from './yamlfm'
+import { questionView } from './practice'
 import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, DUE_CAP, type Section, type TypeVerdict } from './scheduler'
 import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
@@ -11,7 +12,7 @@ import {
   newId, matureRetention, sessionAccuracy, cardTimeCap, READ_CAP_MINUTES,
   readingSrc, isMarked, markCount, readingPassed, deckHasWord, normWord, MARK_SENTENCE_MAX
 } from './journal'
-import type { CardRec, CardView, Format, JournalRec, ReadingRec, ReadingView, Screen, SessionResult, Settings, StudyItem } from './types'
+import type { CardRec, CardView, Format, JournalRec, QuestionRec, QuestionView, ReadingRec, ReadingView, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS } from './types'
 import { NEW_PER_DAY } from './norms'
 import { setSoundEnabled } from './sound'
@@ -35,6 +36,9 @@ interface AppState {
   /* Тексты для чтения — отдельный список, а не подмножество cards: у текста нет FSRS-графика
      и он не участвует ни в очереди, ни в норме ввода (см. ReadingRec в types.ts). */
   readings: ReadingRec[]
+  /* Вопросы практики — та же логика раздельного хранения, что у readings (см. её комментарий
+     выше и QuestionRec в types.ts): у вопроса нет FSRS, он не участвует в очереди повторений. */
+  questions: QuestionRec[]
   journal: JournalRec[]
   syncStatus: SyncStatus
   syncError: string
@@ -54,6 +58,7 @@ let state: AppState = {
   settings: loadSettings(),
   cards: [],
   readings: [],
+  questions: [],
   journal: [],
   syncStatus: 'idle',
   syncError: '',
@@ -162,6 +167,7 @@ export async function init() {
   try {
     state.cards = await db.getAllCards()
     state.readings = await db.getAllReadings()
+    state.questions = await db.getAllQuestions()
     state.journal = await db.getAllJournal()
     state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? null
     state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? {}
@@ -197,6 +203,7 @@ export async function startSync(): Promise<void> {
   const res = await sync(state.settings)
   state.cards = await db.getAllCards()
   state.readings = await db.getAllReadings()
+  state.questions = await db.getAllQuestions()
   state.journal = await db.getAllJournal()
   state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? state.lastSyncAt
   state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? state.levelNames
@@ -227,6 +234,8 @@ export async function fullResync(): Promise<number> {
   emit()
   await db.clearLocalData()
   state.cards = []
+  state.readings = []
+  state.questions = []
   state.journal = []
   state.lastSyncAt = null
   emit()
@@ -246,6 +255,11 @@ export function views(): CardView[] {
 /** Тексты для чтения — типизированные виды. Битый frontmatter отсеивается: показывать нечего. */
 export function readingViews(): ReadingView[] {
   return state.readings.map(readingView).filter(v => !v.broken)
+}
+
+/** Вопросы практики — типизированные виды. Битый разбор отсеивается: показывать нечего. */
+export function questionViews(): QuestionView[] {
+  return state.questions.map(questionView).filter(v => !v.broken)
 }
 
 /** Актуальный журнал (для чтения после await, минуя снапшот useApp) */
@@ -578,6 +592,30 @@ export async function logTextRead(text: ReadingView, seconds = 0): Promise<void>
        чтения не откалибровано именно потому, что калибровать было не на чем. Поле
        добавлено, а не подменено (D3): старые строки без него читаются как прежде. */
     ...(seconds > 0 ? { read_s: Math.round(seconds) } : {})
+  }
+  await db.putJournal([line])
+  state.journal = [...state.journal, line]
+  emit()
+  void startSync()
+}
+
+/**
+ * Записать ответ на вопрос практики: выбранную букву, верно ли, сколько секунд ушло.
+ *
+ * Оценок FSRS практика не пишет НИКОГДА — как и logTextRead, по той же причине (см. QuestionRec
+ * в types.ts): вопрос не повторяют, и никакого расписания у него нет. `correct` пишется только
+ * когда у вопроса вообще есть известный ответ (`view.answer`): раздела «## Разбор» может не быть,
+ * и тогда писать заведомо ложное «неверно» на каждый ответ значило бы врать в журнале.
+ */
+export async function logPractice(view: QuestionView, chose: string, seconds = 0): Promise<void> {
+  const now = new Date()
+  const letter = chose.trim().toUpperCase()
+  const line: JournalRec = {
+    id: newId(),
+    v: 1, type: 'practice', ts: isoLocal(now), ms: now.getMilliseconds(), day: dayKey(),
+    qid: view.qid, skill: view.skill, difficulty: view.difficulty, chose: letter, synced: 0,
+    ...(view.answer ? { correct: letter === view.answer } : {}),
+    ...(seconds > 0 ? { sec: Math.round(seconds) } : {})
   }
   await db.putJournal([line])
   state.journal = [...state.journal, line]

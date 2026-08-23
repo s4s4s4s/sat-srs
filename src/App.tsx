@@ -8,6 +8,7 @@ import SettingsScreen from './screens/Settings'
 import Path from './screens/Path'
 import Reading from './screens/Reading'
 import WordList from './screens/WordList'
+import Practice from './screens/Practice'
 
 export default function App() {
   const app = useApp()
@@ -21,6 +22,7 @@ export default function App() {
       case 'path': return <Path />
       case 'reading': return <Reading />
       case 'words': return <WordList />
+      case 'practice': return <Practice />
       case 'settings': return <SettingsScreen />
       default: return <Home />
     }

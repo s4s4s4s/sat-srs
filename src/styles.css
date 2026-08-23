@@ -1283,6 +1283,43 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 .read-gloss-ru { font-size: 16.5px; font-weight: 700; color: var(--text); margin-top: 4px; }
 .read-gloss-en { font-size: 15px; color: var(--text2); margin-top: 4px; }
 
+/* ── Экран «Практика» (настоящие вопросы SAT) ─────────────────────── */
+.prac-meta {
+  font-size: 12px; font-weight: 800; color: var(--text2);
+  text-transform: uppercase; letter-spacing: .6px; margin-bottom: 10px;
+}
+.prac-stem p { margin: 0 0 12px; font-size: 17px; line-height: 1.6; color: var(--text-strong); }
+.prac-stem p:last-child { margin-bottom: 0; }
+.prac-notes { margin: 0 0 12px; padding-left: 20px; font-size: 17px; line-height: 1.6; color: var(--text-strong); }
+.prac-notes:last-child { margin-bottom: 0; }
+.prac-notes li { margin-bottom: 6px; }
+.prac-notes li:last-child { margin-bottom: 0; }
+
+/* Вариант ответа — своя раскладка поверх .mc-option: буква слева отдельным
+   кругом, текст справа во всю ширину. Базовый .mc-option верстает короткое
+   слово по центру, а варианты SAT — это фраза на несколько строк, и буква
+   не должна наезжать на текст ни при каком его объёме. */
+.prac-choice {
+  display: flex; align-items: flex-start; gap: 12px;
+  text-align: left; padding: 13px 15px;
+}
+.prac-letter {
+  flex: none; width: 26px; height: 26px; margin-top: 1px;
+  border-radius: 50%; display: grid; place-items: center;
+  font-size: 13px; font-weight: 800; background: rgba(0, 0, 0, .06);
+}
+.prac-choice-text { flex: 1; font-size: 15.5px; font-weight: 600; line-height: 1.45; }
+.prac-choice.prac-picked { border-color: var(--blue-line); box-shadow: 0 0 0 2px var(--ring); }
+
+.prac-result { margin-top: 4px; }
+.prac-result-title { display: inline-flex; align-items: center; gap: 6px; }
+.prac-rationale { font-size: 15px; line-height: 1.6; color: var(--text2); margin: 10px 0 16px; }
+
+.prac-filter-label {
+  font-size: 12px; font-weight: 800; color: var(--text2);
+  text-transform: uppercase; letter-spacing: .6px; margin-bottom: 10px;
+}
+
 /* ── Доступность ────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

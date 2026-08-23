@@ -488,9 +488,20 @@ function structureChecks(): void {
   group('структурно: запись чтения не касается FSRS и ничего не удаляет')
 
   const db = source('db.ts')
-  assert(db.includes('const DB_VERSION = 2'), 'версия локальной базы поднята под хранилище текстов')
-  assert(db.includes('oldVersion < 1') && db.includes('oldVersion < 2'),
+  // Жёсткое число версии стояло бы здесь ровно до следующей сущности, поэтому проверяется
+  // инвариант, ради которого проверка и написана: объявленная версия совпадает со старшим шагом
+  // миграции, и ни один шаг между первым и старшим не пропущен. Разъедутся — установленное PWA
+  // либо не выполнит новый шаг, либо упадёт на повторном createObjectStore.
+  const declared = db.match(/const DB_VERSION = (\d+)/)
+  assert(declared !== null, 'версия локальной базы объявлена числом')
+  const steps = [...db.matchAll(/oldVersion < (\d+)/g)].map((m) => Number(m[1]))
+  assert(steps.length > 0,
     'миграция схемы идёт шагами oldVersion: без них установленное PWA упало бы на createObjectStore')
+  const latest = Math.max(...steps)
+  assert(Number(declared[1]) === latest,
+    `DB_VERSION = ${declared[1]}, а старший шаг миграции — oldVersion < ${latest}: версия и шаги разъехались`)
+  for (let n = 1; n <= latest; n++)
+    assert(steps.includes(n), `пропущен шаг миграции oldVersion < ${n}: база этой версии останется без своих хранилищ`)
   assert(db.includes("createObjectStore('readings'"), 'хранилище текстов создаётся отдельным шагом')
   const clear = funcBody(db, 'export async function clearLocalData')
   assert(clear.includes('readings'), 'сброс кэша чистит и тексты — иначе они пережили бы «начать заново»')

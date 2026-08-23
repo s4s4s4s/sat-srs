@@ -1,5 +1,5 @@
 import { openDB, type IDBPDatabase } from 'idb'
-import type { CardRec, JournalRec, ReadingRec } from './types'
+import type { CardRec, JournalRec, QuestionRec, ReadingRec } from './types'
 
 let dbp: Promise<IDBPDatabase> | null = null
 
@@ -12,8 +12,9 @@ let dbp: Promise<IDBPDatabase> | null = null
  * устройство любой давности догоняет текущую схему за один open.
  *
  * v2 (21.08.2026) — хранилище `readings`: тексты для чтения.
+ * v3 (24.08.2026) — хранилище `questions`: вопросы практики (см. QuestionRec в types.ts).
  */
-const DB_VERSION = 2
+const DB_VERSION = 3
 
 function db() {
   if (!dbp) {
@@ -27,6 +28,9 @@ function db() {
         }
         if (oldVersion < 2) {
           d.createObjectStore('readings', { keyPath: 'path' })
+        }
+        if (oldVersion < 3) {
+          d.createObjectStore('questions', { keyPath: 'path' })
         }
       }
     })
@@ -76,12 +80,13 @@ export const nfcPath = (p: string) => p.normalize('NFC')
  * в этом смысл функции — сбросить состояние без повторного ввода токена.
  */
 export async function clearLocalData(): Promise<void> {
-  const tx = (await db()).transaction(['cards', 'journal', 'kv', 'readings'], 'readwrite')
+  const tx = (await db()).transaction(['cards', 'journal', 'kv', 'readings', 'questions'], 'readwrite')
   await Promise.all([
     tx.objectStore('cards').clear(),
     tx.objectStore('journal').clear(),
     tx.objectStore('kv').clear(),
-    tx.objectStore('readings').clear()
+    tx.objectStore('readings').clear(),
+    tx.objectStore('questions').clear()
   ])
   await tx.done
 }
@@ -307,6 +312,50 @@ export async function applyReadingsPull(fetched: ReadingRec[], remotePaths: Set<
   const live: ReadingRec[] = []
   for (let c = await tx.store.openCursor(); c; c = await c.continue()) live.push(c.value as ReadingRec)
   const toDelete = readingsDeletionPlan(live, [...remotePaths].map(nfcPath))
+  for (const p of toDelete) await tx.store.delete(p)
+  await tx.done
+  return toDelete.length
+}
+
+/* ---- вопросы практики ------------------------------------------------------ */
+
+export async function getAllQuestions(): Promise<QuestionRec[]> {
+  return (await db()).getAll('questions')
+}
+
+/**
+ * Что удалить из локального кэша вопросов: вопрос исчез из репозитория.
+ *
+ * Та же логика, что у `readingsDeletionPlan`, и по той же причине: приложение вопросы только
+ * читает (нет `dirty`), а ответы на них живут строками журнала (`type: 'practice'`) в другом
+ * хранилище — эта функция их не касается и удаление вопроса историю ответов не стирает.
+ */
+export function questionsDeletionPlan(local: { path: string }[], remotePaths: Iterable<string>): string[] {
+  const remote = new Set([...remotePaths].map(nfcPath))
+  return local.filter(q => !remote.has(nfcPath(q.path))).map(q => q.path)
+}
+
+/**
+ * Применение pull-а вопросов одной транзакцией. Возвращает число удалённых.
+ * Нормализация Unicode в путях — та же и по той же причине, что у карточек (nfcPath).
+ */
+export async function applyQuestionsPull(fetched: QuestionRec[], remotePaths: Set<string>): Promise<number> {
+  const tx = (await db()).transaction('questions', 'readwrite')
+  const localByNorm = new Map<string, QuestionRec>()
+  for (let c = await tx.store.openCursor(); c; c = await c.continue()) {
+    const rec = c.value as QuestionRec
+    localByNorm.set(nfcPath(rec.path), rec)
+  }
+  for (const f of fetched) {
+    const cur = localByNorm.get(nfcPath(f.path))
+    // репозиторий — источник истины для написания пути (см. nfcPath у карточек)
+    if (cur && cur.path !== f.path) await tx.store.delete(cur.path)
+    await tx.store.put(f)
+    localByNorm.set(nfcPath(f.path), f)
+  }
+  const live: QuestionRec[] = []
+  for (let c = await tx.store.openCursor(); c; c = await c.continue()) live.push(c.value as QuestionRec)
+  const toDelete = questionsDeletionPlan(live, [...remotePaths].map(nfcPath))
   for (const p of toDelete) await tx.store.delete(p)
   await tx.done
   return toDelete.length

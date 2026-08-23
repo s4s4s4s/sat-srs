@@ -5,7 +5,7 @@ import { buildReport } from './report'
 import { buildMetricsSnapshot, appendDailySnapshot } from './metrics'
 import { EXAM_DATE } from './scheduler'
 import * as db from './db'
-import type { JournalRec, ReadingRec, Settings } from './types'
+import type { JournalRec, QuestionRec, ReadingRec, Settings } from './types'
 import { monthOfDay, dayKey } from './daytime'
 
 export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'error' | 'ok'
@@ -17,11 +17,13 @@ export interface SyncResult {
   pushedFiles?: number
   conflicts?: number // create/create-коллизии: локальная карточка сохранена под -N именем
   pulledTexts?: number // тексты для чтения, обновлённые в этом цикле
+  pulledQuestions?: number // вопросы практики, обновлённые в этом цикле
   warning?: string   // не-блокирующее предупреждение (конфликт-маркеры и т.п.)
 }
 
 const JOURNAL_DIR = '_журнал'
 const READING_DIR = 'Чтение'
+const QUESTION_DIR = 'Вопросы'
 
 /* Пути сравниваются в канонической форме Unicode (db.nfcPath), а не как есть.
    Всё, что решают предикаты ниже, держится на кириллице в путях: и базовый каталог колоды,
@@ -62,6 +64,23 @@ export function readingBase(base: string): string {
 export const isReadingPath = (p: string, base: string) => {
   const path = db.nfcPath(p)
   return path.startsWith(db.nfcPath(readingBase(base)) + '/') && path.endsWith('.md')
+    && !path.split('/').pop()!.startsWith('_')
+}
+
+/**
+ * Каталог вопросов практики — сосед каталога колоды, тем же приёмом, что `readingBase`:
+ * `Учёба/Карточки` → `Учёба/Вопросы`. Отдельной настройкой не хранится по той же причине —
+ * второй путь в настройках был бы вторым способом ошибиться при том же самом репозитории.
+ */
+export function questionBase(base: string): string {
+  const clean = base.replace(/\/+$/, '')
+  const cut = clean.lastIndexOf('/')
+  return (cut >= 0 ? clean.slice(0, cut + 1) : '') + QUESTION_DIR
+}
+
+export const isQuestionPath = (p: string, base: string) => {
+  const path = db.nfcPath(p)
+  return path.startsWith(db.nfcPath(questionBase(base)) + '/') && path.endsWith('.md')
     && !path.split('/').pop()!.startsWith('_')
 }
 
@@ -122,7 +141,7 @@ export function sync(settings: Settings): Promise<SyncResult> {
 async function doSync(settings: Settings): Promise<SyncResult> {
   const gh = new GitHubClient(settings.pat, settings.owner, settings.repo)
   try {
-    let { headSha, treeSha, pulled, texts, conflicts, warning } = await pull(gh, settings)
+    let { headSha, treeSha, pulled, texts, questions, conflicts, warning } = await pull(gh, settings)
 
     for (let attempt = 0; attempt < 6; attempt++) {
       const cards = await db.getAllCards()
@@ -130,7 +149,7 @@ async function doSync(settings: Settings): Promise<SyncResult> {
       const dirtyCards = cards.filter(c => c.dirty && !c.broken)
       const unsynced = journal.filter(j => !j.synced)
       if (!dirtyCards.length && !unsynced.length) {
-        return { status: 'ok', pulledCards: pulled, pulledTexts: texts, pushedFiles: 0, conflicts, warning }
+        return { status: 'ok', pulledCards: pulled, pulledTexts: texts, pulledQuestions: questions, pushedFiles: 0, conflicts, warning }
       }
 
       const files: { path: string; content: string }[] = dirtyCards.map(c => ({
@@ -180,6 +199,7 @@ async function doSync(settings: Settings): Promise<SyncResult> {
           headSha = again.headSha
           treeSha = again.treeSha
           texts += again.texts
+          questions += again.questions
           conflicts += again.conflicts
           warning = warning ?? again.warning
           continue
@@ -212,7 +232,7 @@ async function doSync(settings: Settings): Promise<SyncResult> {
       }
       await db.kvSet('lastRemoteCommit', commitSha)
       await db.kvSet('lastSyncAt', Date.now())
-      return { status: 'ok', pulledCards: pulled, pulledTexts: texts, pushedFiles: files.length, conflicts, warning }
+      return { status: 'ok', pulledCards: pulled, pulledTexts: texts, pulledQuestions: questions, pushedFiles: files.length, conflicts, warning }
     }
     return { status: 'error', error: 'Не удалось записать: ветка убегает (6 попыток). Оценки сохранены локально — попробуйте позже.' }
   } catch (e: any) {
@@ -232,7 +252,7 @@ async function doSync(settings: Settings): Promise<SyncResult> {
   }
 }
 
-async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: string; treeSha: string; pulled: number; texts: number; conflicts: number; warning?: string }> {
+async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: string; treeSha: string; pulled: number; texts: number; questions: number; conflicts: number; warning?: string }> {
   const headSha = await gh.getHead(settings.branch)
   const { treeSha } = await gh.getCommit(headSha)
   const { entries, truncated } = await gh.getTreeRecursive(treeSha)
@@ -243,14 +263,16 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
   const remoteCards = new Map<string, TreeEntry>()
   const remoteJournals: TreeEntry[] = []
   const remoteReadings = new Map<string, TreeEntry>()
+  const remoteQuestions = new Map<string, TreeEntry>()
   for (const e of entries) {
     if (e.type !== 'blob') continue
-    // карточки проверяются первыми: при экзотическом basePath (`Учёба`) каталог текстов попадает
-    // и под isCardPath — тогда файл остаётся карточкой, как было до появления чтения, а не меняет
-    // сущность от одной настройки
+    // карточки проверяются первыми: при экзотическом basePath (`Учёба`) каталоги текстов и
+    // вопросов попадают и под isCardPath — тогда файл остаётся карточкой, как было до появления
+    // чтения, а не меняет сущность от одной настройки
     if (isCardPath(e.path, settings.basePath)) remoteCards.set(e.path, e)
     else if (isJournalPath(e.path, settings.basePath)) remoteJournals.push(e)
     else if (isReadingPath(e.path, settings.basePath)) remoteReadings.set(e.path, e)
+    else if (isQuestionPath(e.path, settings.basePath)) remoteQuestions.set(e.path, e)
   }
 
   // сетевые запросы — ДО транзакции; снапшот используется только для sha-skip.
@@ -296,6 +318,21 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
      отметки незнакомых слов и строки прочтения лежат в журнале, который эта операция
      не открывает (db.readingsDeletionPlan, там же цена решения). */
   await db.applyReadingsPull(fetchedReadings, new Set(remoteReadings.keys()))
+
+  /* Вопросы практики — тем же каналом и по той же причине, что тексты для чтения (см. выше):
+     материал только читается, отдельной кнопки загрузки нет, скачиваются только изменившиеся. */
+  const localQuestions = await db.getAllQuestions()
+  const questionSha = new Map(localQuestions.map(q => [q.path, q.sha]))
+  const fetchedQuestions: QuestionRec[] = []
+  const toFetchQuestions = [...remoteQuestions].filter(([path, entry]) => questionSha.get(path) !== entry.sha)
+  await pooled(toFetchQuestions, async ([path, entry]) => {
+    const text = await gh.getBlobText(entry.sha)
+    const remote = parseMd(text)
+    const conflicted = hasConflictMarkers(text)
+    if (conflicted) conflictedFiles.push(path.split('/').pop()!)
+    fetchedQuestions.push({ path, sha: entry.sha, fm: remote.fm, body: remote.body, broken: conflicted ? 1 : remote.broken })
+  })
+  await db.applyQuestionsPull(fetchedQuestions, new Set(remoteQuestions.keys()))
 
   const warning = conflictedFiles.length
     ? `⚠️ Git-конфликт в: ${conflictedFiles.join(', ')} — файлы в карантине, почините <<<<<<< в vault`
@@ -356,5 +393,5 @@ async function pull(gh: GitHubClient, settings: Settings): Promise<{ headSha: st
 
   await db.kvSet('lastRemoteCommit', headSha)
   await db.kvSet('lastSyncAt', Date.now())
-  return { headSha, treeSha, pulled: fetched.length, texts: fetchedReadings.length, conflicts, warning }
+  return { headSha, treeSha, pulled: fetched.length, texts: fetchedReadings.length, questions: fetchedQuestions.length, conflicts, warning }
 }

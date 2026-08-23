@@ -1,4 +1,4 @@
-import { useApp, views, readingViews, setScreen, startSync, startLesson, logReading, unsyncedCount } from '../lib/store'
+import { useApp, views, readingViews, questionViews, setScreen, startSync, startLesson, logReading, unsyncedCount } from '../lib/store'
 import { homeCounts, sectionOf, newBudgetFor, levelStats, activeLevel, type Section } from '../lib/scheduler'
 import { streak, minutesToday, readMinutesToday, floorDays, reviewsByDay, readTextSlugs, MIN_MINUTES, READ_MIN_MINUTES, RUN_MIN_REVIEWS, type PauseRange } from '../lib/journal'
 import { DAY_NORMS, NEW_PER_DAY, NORM_LEVELS, NORM_TITLE_GENITIVE, dayNormFill, dayNormStatus } from '../lib/norms'
@@ -7,6 +7,7 @@ import { stageCounts, type WordStage } from '../lib/wordstatus'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt, Book } from '../components/Icon'
 import { readingLevel } from '../lib/reading'
+import { practiceStats, type PracticeStats } from '../lib/practice'
 import FlameBuddy from '../components/FlameBuddy'
 import FjordScene from '../components/FjordScene'
 import type { CardView, ReadingView } from '../lib/types'
@@ -127,6 +128,45 @@ function ReadingBlock({ texts, read, level, onOpen }: {
   )
 }
 
+/**
+ * Практика — пятый блок рядом с разделами колоды и чтением.
+ *
+ * Тот же приём, что у `ReadingBlock`: у вопроса нет FSRS, показывать «повторить» и «новых»
+ * нечего — есть решённые вопросы и точность среди них. Подпись кнопки — счётчик оставшихся,
+ * тем же способом, что у чтения (`left`), а не выдуманное число.
+ */
+function PracticeBlock({ stats, onOpen }: { stats: PracticeStats; onOpen: () => void }) {
+  const left = stats.total - stats.solved
+  return (
+    <div className="card section-card">
+      <span className="sec-glyph" style={{ ['--rune-shape' as string]: 'var(--rune-tiwaz)' } as React.CSSProperties} />
+      <div className="hero-head">
+        <span className="hero-title section-title">
+          <span className="sec-badge badge-blue"><Check size={18} /></span> Практика
+        </span>
+        <span className="hero-sub">{stats.total ? `${stats.correct}/${stats.total} верно` : 'пока пусто'}</span>
+      </div>
+      <div className="stats3">
+        <div className={`stat stat-new${left ? '' : ' is-zero'}`}><div className="n">{left}</div><div className="t">осталось</div></div>
+        <div className={`stat stat-due${stats.solved ? '' : ' is-zero'}`}><div className="n">{stats.solved}</div><div className="t">отвечено</div></div>
+        <div className={`stat stat-learn${stats.correct ? '' : ' is-zero'}`}><div className="n">{stats.correct}</div><div className="t">верно</div></div>
+      </div>
+      {stats.total > 0 && (
+        <div className="mastery" title="доля решённых верно">
+          <div style={{ width: `${Math.round((stats.correct / stats.total) * 100)}%` }} />
+        </div>
+      )}
+      <button className="btn btn-green section-btn" onClick={onOpen} disabled={stats.total === 0}>
+        {stats.total === 0
+          ? 'Вопросов пока нет'
+          : left === 0
+            ? <><Check size={18} /> Все вопросы решены</>
+            : `Практика · ${left}`}
+      </button>
+    </div>
+  )
+}
+
 export default function Home() {
   const app = useApp()
   const today = dayKey()
@@ -216,6 +256,7 @@ export default function Home() {
   const texts = readingViews()
   const readSlugs = readTextSlugs(app.journal)
   const readLevel = readingLevel(texts, readSlugs)
+  const practice = practiceStats(questionViews(), app.journal)
 
   const rwStats = levelStats(rw)
   const rwActive = activeLevel(rw)
@@ -346,6 +387,7 @@ export default function Home() {
       <SectionBlock title="Грамматика" icon={<span className="sec-x">¶</span>} badge="badge-green" glyph="var(--rune-ansuz)" cards={grammar} budget={budgetGrammar} extraBudget={extraGrammar} onStart={go('grammar')} onReview={go('grammar', true)} onExtra={goExtra('grammar')} />
       <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budgetMath} extraBudget={extraMath} onStart={go('math')} onReview={go('math', true)} onExtra={goExtra('math')} />
       <ReadingBlock texts={texts} read={readSlugs} level={readLevel} onOpen={() => setScreen('reading')} />
+      <PracticeBlock stats={practice} onOpen={() => setScreen('practice')} />
 
       <div className="home-actions">
         <div className="row">

@@ -44,6 +44,49 @@ export interface CardView {
   fsrsPrep: FsrsCard | null
 }
 
+/**
+ * Вопрос практики = md-файл в каталоге `Учёба/Вопросы` (сосед `Учёба/Карточки` и `Учёба/Чтение`) —
+ * настоящий вопрос SAT с четырьмя вариантами и разбором, готовит его инструмент пк-контура.
+ *
+ * Отдельная сущность, а не карточка: у вопроса нет и не будет FSRS-графика. Карточка проверяет
+ * ПАМЯТЬ о слове через интервалы; повторный показ уже решённого вопроса проверял бы память
+ * об ответе, а не навык, — FSRS здесь бессмысленен так же, как у текста для чтения
+ * (см. ReadingRec). Формат файла зафиксирован инструментом, который его пишет, и приложением
+ * не меняется.
+ *
+ * `dirty` нет намеренно: приложение вопросы только читает, как и тексты для чтения.
+ */
+export interface QuestionRec {
+  path: string          // repo-относительный путь, напр. "Учёба/Вопросы/rhetorical-synthesis-medium-afec1a70.md"
+  sha: string | null    // blob sha на момент последней синхронизации (null = ещё не в repo)
+  fm: Record<string, any>
+  body: string          // тело файла после frontmatter: разделы «## Вопрос» / «## Варианты» / «## Разбор»
+  broken?: number       // 1 = frontmatter или тело не разобрались; вопрос не показываем
+}
+
+/** Один вариант ответа вопроса практики. */
+export interface QuestionChoice {
+  letter: 'A' | 'B' | 'C' | 'D'
+  text: string
+}
+
+/** Типизированное представление вопроса практики для UI/статистики. */
+export interface QuestionView {
+  path: string
+  qid: string
+  assessment: string
+  test: string
+  domain: string
+  skill: string
+  difficulty: string
+  stem: string                // условие (проза); может содержать строки списка "- "
+  choices: QuestionChoice[]   // ровно 4 варианта A–D у целого вопроса
+  answer: 'A' | 'B' | 'C' | 'D' | '' // правильный вариант; пусто, если раздела «## Разбор» нет
+  rationale: string           // разбор; пусто, если раздела не было
+  added: string
+  broken: boolean
+}
+
 /** Словарная сноска текста: только трудные леммы (вне частотного ядра и вне колоды уровня ≤ level). */
 export interface GlossEntry {
   word: string
@@ -114,15 +157,15 @@ export interface JournalLine {
      чего угодно (защищённый минимум дня), а `reading` относится к конкретному
      тексту колоды. Смешать их в одном типе нельзя — минуты суммируются по дню,
      прочтения считаются поштучно по слагу. */
-  type: 'review' | 'session' | 'read' | 'mark' | 'reading'
+  type: 'review' | 'session' | 'read' | 'mark' | 'reading' | 'practice'
   ts: string   // ISO с локальным смещением
   ms?: number  // миллисекунды внутри секунды ts — тайбрейк хронологии (D1); в старых строках нет = 0
   day: string  // локальный день с rollover 04:00, YYYY-MM-DD — фиксируется при записи
   // review:
   slug?: string
-  skill?: string       // recall | prep (отсутствует в старых строках = recall)
+  skill?: string       // recall | prep (отсутствует в старых строках = recall); у practice — навык вопроса (fm.skill)
   format?: string      // intro | reveal | mc | type | prep
-  correct?: boolean    // объективный результат (mc/type/prep); у reveal отсутствует
+  correct?: boolean    // объективный результат (mc/type/prep, а также practice); у reveal отсутствует
   typo?: boolean       // ошибка ввода = опечатка (Левенштейн), а не незнание — исключается из retention
   twin?: boolean       // введён синоним из колоды (C10): значение вспомнено, форма — нет; из retention исключается
   gave_up?: boolean    // C3/C4: пользователь сам признал незнание («не помню» / пустой ввод), не ошибка ввода
@@ -169,6 +212,15 @@ export interface JournalLine {
      объективный вход для калибровки ступеней. Пишется только у измеренного чтения:
      у строк до 22.08.2026 поля нет, и это не пропуск, а «не измеряли». */
   read_s?: number
+  // practice:
+  /* Ответ на настоящий вопрос SAT (`Учёба/Вопросы`). Отдельный тип, не `review`: у вопроса нет
+     FSRS-графика (см. QuestionRec), и оценка здесь не двигает никакого расписания — это просто
+     факт «ответил на вопрос X так-то», нужный для очереди practice.ts (pickPractice) и сводки
+     (practiceStats). */
+  qid?: string         // qid вопроса (fm.qid из файла)
+  difficulty?: string  // сложность вопроса на момент ответа (fm.difficulty)
+  chose?: string       // буква, которую выбрал ученик (A|B|C|D)
+  sec?: number         // секунды над вопросом; отсутствует у неизмеренных ответов
 }
 
 export interface JournalRec extends JournalLine {
@@ -238,7 +290,7 @@ export const DEFAULT_SETTINGS: Settings = {
   coachToken: '',
 }
 
-export type Screen = 'home' | 'review' | 'summary' | 'add' | 'stats' | 'settings' | 'path' | 'reading' | 'words'
+export type Screen = 'home' | 'review' | 'summary' | 'add' | 'stats' | 'settings' | 'path' | 'reading' | 'words' | 'practice'
 
 export interface SessionResult {
   day: string       // учебный день, зафиксированный на старте сессии (не в момент финиша)
