@@ -1205,6 +1205,44 @@ function ptPriorityChecks(): void {
 }
 
 /**
+ * Карточка из отметки владельца (source: `отметка` или `чтение-<slug>`) — тот же класс
+ * доказанного пробела, что pt-слово (23.08.2026). Живая отметка уже поднимает карточку
+ * в абсолютный приоритет (markPriorityChecks), но снимается касанием — после снятия
+ * карточка должна остаться наверху за счёт kindRank, а не провалиться обратно в порядок
+ * по ступеням, как это чинит pt-ветка.
+ */
+function fromMarkPriorityChecks(): void {
+  const grammarCard: CardView = { ...newCard('comma-rule'), kind: 'grammar' }
+  const mathCard: CardView = { ...newCard('quad-setup'), kind: 'math' }
+  const routineWord = newCard('adhere', 1) // рутинный словарь, низкая ступень
+  const markedWord = { ...newCard('paucity', 6), source: 'отметка' }
+  const readingWord = { ...newCard('surmise', 6), source: 'чтение-2-01-reef' }
+  const routineSourceWord = { ...newCard('buttress', 6), source: 'expand-400' }
+
+  assert(kindRank(grammarCard) < kindRank(markedWord), 'kindRank: отметка идёт ПОСЛЕ grammar')
+  assert(kindRank(markedWord) < kindRank(mathCard), 'kindRank: отметка идёт ДО math')
+  assert(kindRank(markedWord) < kindRank(routineWord), 'kindRank: отметка опережает рутинный словарь независимо от уровня')
+  assert(kindRank(readingWord) < kindRank(routineWord), 'kindRank: чтение-<slug> опережает рутинный словарь независимо от уровня')
+  assert(kindRank(routineSourceWord) === kindRank(routineWord), 'kindRank: рутинный словарь (expand-400) приоритета не получает')
+  assert(kindRank(markedWord) === kindRank(readingWord), 'kindRank: отметка и чтение-<slug> дают одинаковый ранг')
+
+  const deck = [grammarCard, mathCard, routineWord, markedWord, readingWord, routineSourceWord]
+  const order = freshItems(expandItems(deck)).map(i => i.view.slug)
+  assert(order.indexOf('comma-rule') < order.indexOf('paucity'), 'freshItems: paucity (отметка) идёт после grammar')
+  assert(order.indexOf('paucity') < order.indexOf('quad-setup'), 'freshItems: paucity (отметка) идёт до math')
+  assert(order.indexOf('paucity') < order.indexOf('adhere'),
+    'freshItems: paucity (отметка, level 6) обязан опередить рутинный словарь level 1 (adhere) — иначе слово не введётся никогда после снятия отметки')
+  assert(order.indexOf('surmise') < order.indexOf('adhere'),
+    'freshItems: surmise (чтение-2-01-reef, level 6) обязан опередить рутинный словарь level 1 (adhere)')
+  assert(order.indexOf('adhere') < order.indexOf('buttress'),
+    'freshItems: buttress (expand-400, level 6) приоритета не получает и идёт позже рутинного словаря низкой ступени (adhere)')
+  assert(markedWord.level === 6 && readingWord.level === 6, 'приоритет из отметки не должен менять level карточки')
+
+  console.log('  ✓ приоритет карточки из отметки (23.08.2026): source отметка/чтение-<slug> обгоняют рутинный словарь наравне с pt, expand-400 приоритета не получает, level не тронут')
+  passed++
+}
+
+/**
  * Живая отметка владельца — абсолютный приоритет ввода (22.08.2026/уточнение 23.08.2026).
  *
  * Живой пример дефекта: `sparse` отмечено 22.08.2026, карточка в колоде есть, level: 4,
@@ -1585,6 +1623,7 @@ function main(): void {
   dontKnowChecks()
   newStopChecks()
   ptPriorityChecks()
+  fromMarkPriorityChecks()
   markPriorityChecks()
   leechFlagChecks()
   afkCapChecks()
