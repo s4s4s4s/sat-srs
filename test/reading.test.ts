@@ -46,6 +46,7 @@ import {
   startClock, advance, poke, setActive, flush, READ_IDLE_MS, READ_MIN_CREDIT_S
 } from '../src/lib/readclock'
 import type { GlossEntry, JournalLine, ReadingRec, ReadingView } from '../src/lib/types'
+import { screenSource } from './screen-source'
 
 let passed = 0
 function assert(cond: boolean, msg: string): void {
@@ -61,18 +62,6 @@ function source(file: string): string {
   const p = path.join(SRC, file)
   assert(existsSync(p), `не найден исходник ${p} — тест запускают из корня пакета`)
   // git отдаёт рабочее дерево с CRLF (core.autocrlf) — ищем по исходнику в одном виде
-  return readFileSync(p, 'utf8').replace(/\r\n/g, '\n')
-}
-
-/**
- * То же для экранов. Границы отметки — свойство экрана, а не слоя данных: чтение пишет в
- * `reading:<слаг>`, упражнение — в `card:<слаг>`, и в упражнении разметке подлежит только
- * условие. Прогнать это в node нельзя (React и DOM здесь нет), поэтому проверка структурная —
- * она ловит возврат старого кода, но не заменяет живой прогон в браузере.
- */
-function screenSource(file: string): string {
-  const p = path.join(process.cwd(), 'src', 'screens', file)
-  assert(existsSync(p), `не найден исходник экрана ${p} — тест запускают из корня пакета`)
   return readFileSync(p, 'utf8').replace(/\r\n/g, '\n')
 }
 

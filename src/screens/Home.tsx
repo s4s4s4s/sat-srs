@@ -1,9 +1,9 @@
 import { useApp, views, readingViews, setScreen, startSync, startLesson, logReading, unsyncedCount } from '../lib/store'
-import { homeCounts, sectionOf, newBudgetFor, levelStats, activeLevel, isLevelled, type Section } from '../lib/scheduler'
+import { homeCounts, sectionOf, newBudgetFor, levelStats, activeLevel, type Section } from '../lib/scheduler'
 import { streak, minutesToday, readMinutesToday, floorDays, reviewsByDay, readTextSlugs, MIN_MINUTES, READ_MIN_MINUTES, RUN_MIN_REVIEWS, type PauseRange } from '../lib/journal'
 import { DAY_NORMS, NEW_PER_DAY, NORM_LEVELS, NORM_TITLE_GENITIVE, dayNormFill, dayNormStatus } from '../lib/norms'
-import { examReady, maturity, PRIMARY_DATE } from '../lib/metrics'
-import { State } from 'ts-fsrs'
+import { examReady, PRIMARY_DATE } from '../lib/metrics'
+import { stageCounts, type WordStage } from '../lib/wordstatus'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt, Book } from '../components/Icon'
 import { readingLevel } from '../lib/reading'
@@ -167,10 +167,17 @@ export default function Home() {
 
   /* Числа главного экрана. `examReady` остаётся — но за ним теперь ходят в
      «Статистику»: здесь от него берётся только `total` (размер словарной
-     колоды). На витрине — введено, закрепилось и дни с закрытым полом. */
+     колоды). На витрине — введено, закрепилось и дни с закрытым полом.
+     Оба числа берутся из ОДНОЙ сводки (`stageCounts`, wordstatus.ts) — единого
+     источника правды о состоянии слова, а не из двух самостоятельных выражений,
+     которые могли бы разъехаться, как только у них появится третий потребитель. */
   const er = examReady(all, PRIMARY_DATE)
-  const mat = maturity(all)
-  const introduced = all.filter(v => isLevelled(v) && !v.suspended && v.fsrs.state !== State.New).length
+  const stages = stageCounts(all)
+  // тип стадии, а не строка: опечатка в имени иначе тихо дала бы ноль на витрине
+  const stageN = (s: WordStage) => stages.find(x => x.stage === s)?.n ?? 0
+  // «введено» = всё, кроме new и suspended: leech + learning + review + mature
+  const introduced = stages.reduce((sum, x) => sum + (x.stage === 'new' || x.stage === 'suspended' ? 0 : x.n), 0)
+  const matureCount = stageN('mature')
   const fd = floorDays(app.journal, today)
 
   /* Автозачёт пустого дня удалён 05.08.2026.
@@ -251,18 +258,27 @@ export default function Home() {
           существует нигде. Решение не печатать её здесь от этого не изменилось:
           вывод был не про конкретное число, а про то, что метрика без разрезов
           и подписей на главном экране не даёт обратной связи. */}
-      <div className="card hero hero-slim">
+      {/* Вся плашка — кнопка на экран списка слов (`setScreen('words')`), а не только
+          подпись: полоса и обе строки говорят об одном и том же прогрессе, и часть
+          из них не должна выглядеть кликабельной, а часть — нет. Стрелка справа —
+          тот же признак кнопки, что у `path-chip`/`path-chip-arr` в SectionBlock. */}
+      <button
+        type="button"
+        className="card hero hero-slim hero-link"
+        onClick={() => setScreen('words')}
+        aria-label={`Список слов: ${introduced} из ${er.total} введено, ${matureCount} закрепилось`}
+      >
         <div className="hero-head" style={{ marginBottom: 6 }}>
           <span className="hero-title">Слова</span>
-          <span className="hero-sub"><b>{introduced}</b> из {er.total} введено</span>
+          <span className="hero-sub"><b>{introduced}</b> из {er.total} введено <span className="path-chip-arr">›</span></span>
         </div>
         <div className="minbar-row" style={{ marginTop: 0, marginBottom: 4 }}>
           <div className="minbar"><div style={{ width: `${er.total ? Math.min(100, (introduced / er.total) * 100) : 0}%` }} /></div>
           <span className="minbar-label">
-            {mat.matureCount > 0 ? `${mat.matureCount} закрепилось` : 'закрепившихся пока нет'}
+            {matureCount > 0 ? `${matureCount} закрепилось` : 'закрепившихся пока нет'}
           </span>
         </div>
-      </div>
+      </button>
 
       <div className="card hero hero-slim">
         <div className="hero-head" style={{ marginBottom: 6 }}>

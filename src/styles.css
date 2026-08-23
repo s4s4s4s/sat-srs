@@ -422,6 +422,13 @@ body::before {
 .hero-slim .buddy { margin-bottom: -16px; flex-shrink: 0; }
 .hero-slim .hero-head { flex-direction: column; align-items: flex-start; gap: 1px; }
 
+/* Плашка «Слова» на главной — кнопка (переход на экран списка), а не просто div.hero-slim:
+   сбрасываем то, что кнопке достаётся от юзер-агента (центрирование, свой шрифт, курсор), и
+   держим общую с .read-item обратную связь на нажатие, чтобы кнопки экрана ощущались одинаково. */
+.hero-link { display: block; width: 100%; text-align: left; font-family: inherit; cursor: pointer; }
+.hero-link:active { transform: translateY(1px); filter: brightness(.97); }
+@media (hover: hover) { .hero-link:hover { border-color: var(--blue-line); } }
+
 .syncline { font-size: 13px; color: var(--text2); font-weight: 700; text-align: center; margin-top: 12px; min-height: 18px; }
 .syncline.err { color: var(--red-text); }
 
@@ -1213,6 +1220,30 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
 .read-item-sub { font-size: 13px; color: var(--text2); font-weight: 600; }
 .read-item-mark { flex: none; color: var(--text-faint); line-height: 0; }
 .read-item.is-read .read-item-mark { color: var(--green); }
+
+/* ── Экран «Слова» (список введённых слов) ─────────────────────── */
+/* Фильтр по стадии — тот же приём чипа, что .path-chip, но их несколько в ряд
+   и с переносом строки: на телефоне шесть стадий в одну линию не влезают. */
+.stage-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 14px; }
+.stage-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 7px 12px; border-radius: var(--r-pill);
+  background: var(--surface2); border: 1px solid var(--line);
+  color: var(--text2); font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.stage-chip:disabled { opacity: .45; cursor: default; }
+.stage-chip.is-active { background: var(--blue-soft); border-color: var(--blue-line); color: var(--blue-text); }
+.stage-chip-n { color: var(--text-faint); font-weight: 800; }
+.stage-chip.is-active .stage-chip-n { color: var(--blue-text); }
+
+/* Подпись стадии и полоса прогресса справа от слова — вторая колонка строки read-item. */
+.word-stage { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 5px; width: 84px; }
+.word-stage-label { font-size: 12px; font-weight: 700; color: var(--text2); white-space: nowrap; }
+.word-stage .mastery { width: 100%; margin-top: 0; }
+
+.word-detail { margin-top: -4px; margin-bottom: 10px; padding: 12px 14px; }
+.word-detail .syncline { margin-top: 0; text-align: left; }
+.word-detail .syncline ~ .syncline { margin-top: 4px; }
 
 /* сам текст */
 .read-h { font-size: 19px; line-height: 1.25; }

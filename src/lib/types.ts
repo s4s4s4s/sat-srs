@@ -236,7 +236,7 @@ export const DEFAULT_SETTINGS: Settings = {
   coachToken: '',
 }
 
-export type Screen = 'home' | 'review' | 'summary' | 'add' | 'stats' | 'settings' | 'path' | 'reading'
+export type Screen = 'home' | 'review' | 'summary' | 'add' | 'stats' | 'settings' | 'path' | 'reading' | 'words'
 
 export interface SessionResult {
   day: string       // учебный день, зафиксированный на старте сессии (не в момент финиша)
