@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useApp, questionViews, logPractice, setScreen } from '../lib/store'
+import { useApp, questionViews, logPractice, setScreen, toggleWordMark } from '../lib/store'
 import { pickPractice, practiceStats, type PracticeFilter } from '../lib/practice'
 import { parseStemBlocks, rationaleText } from '../lib/practiceView'
+import { questionSrc } from '../lib/journal'
+import { markedLemmas, type Segment } from '../lib/reading'
+import Markable from '../components/Markable'
 import { ChevronLeft, Check, Close } from '../components/Icon'
 import type { QuestionView } from '../lib/types'
 
@@ -18,13 +21,28 @@ import type { QuestionView } from '../lib/types'
  * в порядке `view.choices`.
  */
 
-function Stem({ text }: { text: string }) {
+/**
+ * Условие вопроса — единственное место, где отметка незнакомого слова разрешена ДО ответа
+ * (см. развёрнутый комментарий у `markSrc`/`markWord` ниже). Каждая строка условия и каждая
+ * заметка списка проходит через `Markable` независимо: разбор предложений не должен склеивать
+ * заметки списка друг с другом.
+ */
+function Stem({ text, marked, onWord }: {
+  text: string
+  marked: ReadonlySet<string>
+  onWord: (seg: Extract<Segment, { kind: 'word' }>) => void
+}) {
   const blocks = useMemo(() => parseStemBlocks(text), [text])
+  const isMarked = (seg: Extract<Segment, { kind: 'word' }>) => marked.has(seg.lemma)
   return (
     <div className="prac-stem">
       {blocks.map((b, i) => b.kind === 'ul'
-        ? <ul key={i} className="prac-notes">{b.lines.map((l, j) => <li key={j}>{l}</li>)}</ul>
-        : <p key={i}>{b.lines.join(' ')}</p>)}
+        ? (
+          <ul key={i} className="prac-notes">
+            {b.lines.map((l, j) => <li key={j}><Markable text={l} isMarked={isMarked} onWord={onWord} /></li>)}
+          </ul>
+        )
+        : <p key={i}><Markable text={b.lines.join(' ')} isMarked={isMarked} onWord={onWord} /></p>)}
     </div>
   )
 }
@@ -38,6 +56,7 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
   onExit: () => void
   onDone: (correct: boolean | null) => void
 }) {
+  const app = useApp()
   const [picked, setPicked] = useState<QuestionView['choices'][number]['letter'] | null>(null)
   const [confirmed, setConfirmed] = useState(false)
   const shownAt = useRef(Date.now())
@@ -45,11 +64,37 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
   // длинном варианте, но повторный рендер того же вопроса не должен писать вторую строку
   const logged = useRef(false)
 
+  /* Отметка незнакомого слова. Источник — `question:<qid>` (journal.questionSrc): слово из
+     настоящего вопроса банка College Board — отдельный сигнал от слова из карточки колоды.
+     Ответ на вопрос это не трогает, как и в Review.tsx: очередь сессии собрана заранее и на
+     строки журнала не смотрит.
+
+     ГРАНИЦЫ ОТМЕТКИ МЕНЯЮТСЯ С ОТВЕТОМ, и это неочевидно, поэтому явно:
+       — ДО подтверждения (`!confirmed`) касание разрешено ТОЛЬКО в условии (Stem). Варианты
+         в этот момент — кнопки выбора, и тап по слову внутри них обязан выбирать вариант,
+         а не отмечать слово незнакомым: смешать эти два намерения нельзя.
+       — ПОСЛЕ подтверждения варианты перестают быть кнопками выбора (ответ уже дан и не
+         меняется), поэтому отмечать можно везде — в условии, в тексте вариантов и в разборе. */
+  const markSrc = questionSrc(view.qid)
+  const marked = useMemo(() => markedLemmas(app.journal, markSrc), [app.journal, markSrc])
+  const [markError, setMarkError] = useState('')
+  async function markWord(seg: Extract<Segment, { kind: 'word' }>) {
+    setMarkError('')
+    try {
+      await toggleWordMark(markSrc, { word: seg.text, lemma: seg.lemma, sentence: seg.sentence })
+    } catch (e) {
+      // молчать нельзя: человек уверен, что отметил слово, а его нет ни в журнале, ни у тьютора
+      setMarkError(e instanceof Error ? e.message : String(e))
+    }
+  }
+  const isMarked = (seg: Extract<Segment, { kind: 'word' }>) => marked.has(seg.lemma)
+
   useEffect(() => {
     setPicked(null)
     setConfirmed(false)
     logged.current = false
     shownAt.current = Date.now()
+    setMarkError('')
   }, [view.path])
 
   function confirm() {
@@ -74,8 +119,17 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
 
       <div className="card">
         <div className="prac-meta">{view.skill}{view.difficulty ? ` · ${view.difficulty}` : ''}</div>
-        <Stem text={view.stem} />
+        <Stem text={view.stem} marked={marked} onWord={markWord} />
       </div>
+      {/* Подсказка живёт в обоих состояниях и меняет текст вместе с границами отметки:
+          после ответа отмечать можно БОЛЬШЕ, чем до него, и подсказка, исчезающая ровно
+          в этот момент, говорила бы обратное. */}
+      <div className="read-hint">
+        {confirmed
+          ? 'Незнакомое слово — коснитесь его: в условии, в вариантах и в разборе'
+          : 'Незнакомое слово в условии — коснитесь его'}
+      </div>
+      {markError && <div className="why-err">Отметка не сохранилась: {markError}</div>}
 
       <div className={`mc-stack${confirmed ? ' answered' : ''}`}>
         {view.choices.map(c => {
@@ -84,21 +138,32 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
           const isWrongPick = confirmed && known && isPicked && c.letter !== view.answer
           const cls = [
             'mc-option', 'prac-choice',
+            confirmed ? 'mc-static' : '',
             isRight ? 'mc-right' : '',
             isWrongPick ? 'mc-wrong' : '',
             confirmed && !isRight && !isWrongPick ? 'mc-dim' : '',
             !confirmed && isPicked ? 'prac-picked' : ''
           ].filter(Boolean).join(' ')
-          return (
+          const body = (
+            <>
+              <span className="prac-letter">{c.letter}</span>
+              <span className="prac-choice-text">
+                {/* до ответа — вариант это кнопка выбора, разметке слово не подлежит (см. комментарий
+                    у markSrc/markWord выше); после ответа он статичен, и слово можно отметить */}
+                {confirmed ? <Markable text={c.text} isMarked={isMarked} onWord={markWord} /> : c.text}
+              </span>
+            </>
+          )
+          return confirmed ? (
+            <div key={c.letter} className={cls}>{body}</div>
+          ) : (
             <button
               key={c.letter}
               type="button"
               className={cls}
-              onClick={() => !confirmed && setPicked(c.letter)}
-              disabled={confirmed}
+              onClick={() => setPicked(c.letter)}
             >
-              <span className="prac-letter">{c.letter}</span>
-              <span className="prac-choice-text">{c.text}</span>
+              {body}
             </button>
           )
         })}
@@ -118,7 +183,7 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
             </span>
             {known && !correct && <span className="hero-sub">правильный ответ — {view.answer}</span>}
           </div>
-          <div className="prac-rationale">{rationaleText(view)}</div>
+          <div className="prac-rationale"><Markable text={rationaleText(view)} isMarked={isMarked} onWord={markWord} /></div>
           <button className="btn btn-green btn-lg" onClick={() => onDone(correct)}>
             {index + 1 < total ? 'Следующий вопрос' : 'Итог сессии'}
           </button>

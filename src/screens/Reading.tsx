@@ -7,14 +7,11 @@ import { startClock, advance, poke, setActive, flush } from '../lib/readclock'
 import { glossFor, lemmaOf, markedLemmas, orderReadings, paragraphs, readingLevel } from '../lib/reading'
 import Markable from '../components/Markable'
 import { Check, ChevronLeft, Book } from '../components/Icon'
+import { множ } from '../lib/plural'
 import type { GlossEntry, ReadingView } from '../lib/types'
 
 /** «138 слов» — подпись читается вслух, а не как счётчик (тот же приём, что `упражнений` на главной). */
-function слов(n: number): string {
-  const ten = n % 100
-  const one = n % 10
-  return `${n} ${ten >= 11 && ten <= 14 ? 'слов' : one === 1 ? 'слово' : one >= 2 && one <= 4 ? 'слова' : 'слов'}`
-}
+const слов = (n: number) => множ(n, 'слово', 'слова', 'слов')
 
 /**
  * Сколько незнакомых слов текст ещё выдерживает, оставаясь прочитанным самостоятельно.

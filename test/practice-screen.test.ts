@@ -145,6 +145,29 @@ function screenChecks(): void {
   assert(!/putJournal/.test(prac), 'экран не пишет в базу мимо store')
   assert(!/fetch\(|openai|anthropic/i.test(prac), 'экран не зовёт модель напрямую')
   group('структурно: экран пишет только через store.logPractice')
+
+  // отметка незнакомого слова: источник — questionSrc, не readingSrc и не cardSrc
+  assert(prac.includes("import Markable from '../components/Markable'"), 'экран подключает Markable')
+  assert(prac.includes('questionSrc('), 'источник отметки — questionSrc(view.qid), а не строка на месте')
+  assert(!prac.includes('readingSrc') && !prac.includes('cardSrc('),
+    'экран практики не пишет отметок в источники текста или карточки колоды')
+  const markableCount = (prac.match(/<Markable/g) ?? []).length
+  assert(markableCount >= 3,
+    `Markable используется в условии, вариантах и разборе — найдено вхождений: ${markableCount}`)
+  group('структурно: отметка слова пишется в собственный источник вопроса (questionSrc)')
+
+  // до ответа отмечать можно только в условии: вариант — кнопка выбора, а не div,
+  // и disabled-кнопка (которая гасит клики по вложенным словам) не используется вовсе
+  assert(!/disabled={confirmed}/.test(prac),
+    'вариант ответа не гасится disabled: тап по слову внутри disabled-кнопки не доходит')
+  assert(prac.includes('confirmed ? <Markable'),
+    'текст варианта размечается Markable только когда вопрос уже подтверждён (confirmed)')
+  assert(prac.includes('confirmed ? (') && prac.includes('<div key={c.letter} className={cls}>{body}</div>'),
+    'после подтверждения вариант рисуется <div>, а не кнопкой — иначе отметка слова внутри не сработает')
+  assert(prac.includes('onClick={() => setPicked(c.letter)}'),
+    'до подтверждения вариант остаётся кнопкой выбора без клика по отдельным словам')
+  assert(prac.includes('mc-static'), 'отвеченный вариант помечен классом mc-static (правит поведение в styles.css)')
+  group('структурно: до ответа разметка есть только в условии, вариант выбирается кнопкой целиком')
 }
 
 function main(): void {

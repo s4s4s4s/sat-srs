@@ -1,4 +1,6 @@
-import { useApp, views, setScreen } from '../lib/store'
+import { useApp, views, questionViews, setScreen } from '../lib/store'
+import { practiceStats, practiceBreakdown } from '../lib/practice'
+import { множ } from '../lib/plural'
 import { homeCounts, loadForecast, sectionOf, newBudgetTotal, SECTIONS } from '../lib/scheduler'
 import { streak, trueRetention30, minutesToday, retentionByFormat, minutesByDay, emptyDays, isDayDone } from '../lib/journal'
 import {
@@ -15,6 +17,8 @@ import { ChevronLeft, Flame } from '../components/Icon'
 const FMT_NAMES: Record<string, string> = { mc: 'Выбор (MC)', type: 'Ввод', prep: 'Предлоги', reveal: 'Показ' }
 const KIND_NAMES: Record<string, string> = { vocab: 'Слово', grammar: 'Грамматика', math: 'Математика', error: 'Разбор ошибки' }
 const DOW = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс']
+const DIFFICULTY_ORDER = ['Easy', 'Medium', 'Hard']
+const DIFFICULTY_LABELS: Record<string, string> = { Easy: 'Лёгкая', Medium: 'Средняя', Hard: 'Сложная' }
 
 /** Мини-график тренда: полилиния по ряду значений (null = пропуск дня). */
 function Spark({ values, label }: { values: (number | null)[]; label: string }) {
@@ -73,9 +77,15 @@ function RetTable({ rows }: { rows: { label: string; b: Bucketed }[] }) {
  * а точный счёт по всей колоде — сколько карточек раздела уже в review или уже зрелых. Малая
  * колода (например, математика) — не шум, а факт: у неё правда мало карточек.
  */
-function CountRows({ rows }: { rows: { label: string; part: number; total: number }[] }) {
+/* `empty` — подпись пустой таблицы. Умолчание про карточки годится не всем, кто зовёт
+   этот компонент: у практики пустая таблица означает «ещё не отвечено», а не «нет карточек»,
+   и чужая подпись здесь была бы прямой неправдой. */
+function CountRows({ rows, empty = 'пока нет карточек' }: {
+  rows: { label: string; part: number; total: number }[]
+  empty?: string
+}) {
   const shown = rows.filter(r => r.total > 0)
-  if (!shown.length) return <div className="syncline">пока нет карточек</div>
+  if (!shown.length) return <div className="syncline">{empty}</div>
   return (
     <>
       {shown.map(r => (
@@ -178,6 +188,26 @@ export default function Stats() {
   const sectionRetRows = SECTIONS.map(s => ({ label: SECTION_LABELS[s], b: rs.get(s) ?? { pct: null, n: 0, pass: 0 } }))
   const sectionReviewRows = SECTIONS.map(s => ({ label: SECTION_LABELS[s], part: ms[s].reviewCount, total: ms[s].total }))
   const sectionMatureRows = SECTIONS.map(s => ({ label: SECTION_LABELS[s], part: ms[s].matureCount, total: ms[s].total }))
+
+  // Практика — настоящие вопросы SAT (questionViews, отдельно от карточек колоды)
+  const qViews = questionViews()
+  const practice = practiceStats(qViews, app.journal)
+  const pb = practiceBreakdown(qViews, app.journal, today)
+  /* Слабое — выше, и слабость меряется ТОЛЬКО по отвеченному: `part`/`total` здесь —
+     верно из ОТВЕЧЕННОГО, а не из всех вопросов навыка. Разница не косметическая. Навык,
+     до которого руки ещё не дошли, при счёте от общего числа даёт ноль верных и встаёт
+     первым — экран показывает «хуже всего» там, где просто ничего не решали, и отправляет
+     подтягивать наугад. Нетронутые навыки в таблицу не попадают вовсе: `CountRows`
+     отбрасывает строки с нулевым `total`, и это ровно нужное поведение. */
+  const skillRows = Object.entries(practice.bySkill)
+    .map(([skill, g]) => ({ label: skill, part: g.correct, total: g.solved }))
+    .sort((a, b) => a.part / (a.total || 1) - b.part / (b.total || 1) || b.total - a.total)
+  // тот же счёт, что у навыков: доля верных среди отвеченного, а не среди всего банка
+  const difficultyRows = DIFFICULTY_ORDER.map(d => ({
+    label: DIFFICULTY_LABELS[d] ?? d,
+    part: pb.byDifficulty[d]?.correct ?? 0,
+    total: pb.byDifficulty[d]?.solved ?? 0
+  }))
 
   return (
     <div className="screen s-stats">
@@ -347,6 +377,26 @@ export default function Stats() {
             label: FMT_NAMES[f] ?? f,
             b: { pct: v.total ? Math.round((v.pass / v.total) * 100) : null, n: v.total, pass: v.pass }
           }))} />
+        </div>
+      )}
+
+      {practice.total > 0 && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <h2 className="sec">Практика · {practice.total}</h2>
+          <div className="minbar-row" style={{ marginTop: 2 }}>
+            <div className="minbar"><div style={{ width: `${Math.round((practice.correct / practice.total) * 100)}%` }} /></div>
+            <span className="minbar-label"><b>{practice.correct}</b> / {practice.total} верно</span>
+          </div>
+          <div className="syncline" style={{ marginBottom: 6 }}>отвечено {practice.solved} из {practice.total} вопросов</div>
+          <div className="syncline" style={{ margin: '10px 0 6px' }}>навыки: верно из отвеченного — где хуже, там выше</div>
+          <CountRows rows={skillRows} empty="ни на один вопрос ещё не отвечено" />
+          <div className="syncline" style={{ margin: '10px 0 6px' }}>сложность: верно из отвеченного</div>
+          <CountRows rows={difficultyRows} empty="ни на один вопрос ещё не отвечено" />
+          <div className="syncline" style={{ marginTop: 10 }}>
+            за 7 дней: {множ(pb.week.attempts, 'ответ', 'ответа', 'ответов')}
+            {pb.week.accuracy !== null ? ` · точность ${pb.week.accuracy}%` : ''}
+            {' · среднее время '}{pb.avgSec !== null ? `${pb.avgSec.toFixed(1)} с` : '—'}
+          </div>
         </div>
       )}
 

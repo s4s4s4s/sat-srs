@@ -32,7 +32,7 @@ import path from 'node:path'
 import { parseMd, readingView, countWords } from '../src/lib/yamlfm'
 import {
   toNdjson, parseNdjson, activeMarks, isMarked, markCount, markKey, normWord, deckHasWord,
-  cardSrc, readingSrc, readingPassed, readTextSlugs, READING_UNKNOWN_SHARE_MAX, MARK_SENTENCE_MAX,
+  cardSrc, readingSrc, questionSrc, readingPassed, readTextSlugs, READING_UNKNOWN_SHARE_MAX, MARK_SENTENCE_MAX,
   markDigest
 } from '../src/lib/journal'
 import { readingsDeletionPlan } from '../src/lib/db'
@@ -344,15 +344,23 @@ function digestChecks(): void {
     markLine({ id: 'd2', word: 'Moratoriums', lemma: 'moratorium', src: SRC_OTHER, ts: '2026-08-24T10:01:00+04:00' }),
     markLine({ id: 'd3', word: 'kelp', ts: '2026-08-24T10:02:00+04:00' }),
     markLine({ id: 'd4', word: 'kelp', on: false, ts: '2026-08-24T10:03:00+04:00' }),
-    markLine({ id: 'd5', word: 'bolster', src: cardSrc('bolster'), ts: '2026-08-24T10:04:00+04:00' })
+    markLine({ id: 'd5', word: 'bolster', src: cardSrc('bolster'), ts: '2026-08-24T10:04:00+04:00' }),
+    markLine({ id: 'd6', word: 'ostensibly', src: questionSrc('1f3be847'), ts: '2026-08-24T10:05:00+04:00' })
   ]
   // колода знает bolster (карточка живая) и не знает moratorium
   const d = markDigest(lines, new Set(['bolster']))
 
-  assert(d.total === 3, `снятое не считается: ожидалось 3 живых отметки, получено ${d.total}`)
-  assert(d.fromReading === 2 && d.fromCards === 1,
-    `источники разведены: тексты ${d.fromReading}, задания ${d.fromCards}`)
-  assert(d.entries.length === 2, `разных слов должно быть 2, получено ${d.entries.length}`)
+  assert(d.total === 4, `снятое не считается: ожидалось 4 живых отметки, получено ${d.total}`)
+  assert(d.fromReading === 2 && d.fromCards === 1 && d.fromQuestions === 1,
+    `источники разведены: тексты ${d.fromReading}, задания ${d.fromCards}, вопросы ${d.fromQuestions}`)
+  /* Разрезы обязаны сходиться с итогом. Без этой проверки новый источник молча уходит
+     в `total`, не появляясь ни в одном разрезе, — сводка тьютору начинает недосчитывать. */
+  assert(d.fromReading + d.fromCards + d.fromQuestions === d.total,
+    `сумма разрезов ${d.fromReading + d.fromCards + d.fromQuestions} разошлась с итогом ${d.total}`)
+  const q = d.entries.find(e => e.lemma === 'ostensibly')
+  assert(!!q && q.fromQuestions === 1 && q.fromReading === 0 && q.fromCards === 0,
+    'отметка из вопроса SAT попала в свой разрез и ни в чей больше')
+  assert(d.entries.length === 3, `разных слов должно быть 3, получено ${d.entries.length}`)
 
   const mora = d.entries.find(e => e.lemma === 'moratorium')
   assert(!!mora, 'слово, отмеченное в двух текстах, не потерялось')
@@ -376,8 +384,8 @@ function digestChecks(): void {
     'историческое поле строки при этом не переписано — журнал append-only')
   group('принадлежность к колоде считается по текущей колоде, а не по полю отметки')
 
-  assert(activeMarks(lines).length === 3,
-    'activeMarks без источника отдаёт отметки всех источников сразу')
+  assert(activeMarks(lines).length === 4,
+    'activeMarks без источника отдаёт отметки всех трёх источников сразу')
   assert(activeMarks(lines, SRC_REEF).length === 1,
     'с источником — по-прежнему только его отметки')
   group('activeMarks: без источника — вся работа, с источником — один текст')
@@ -682,6 +690,51 @@ function highlightChecks(): void {
   group('подсветка: словарная форма из глоссария склеивает формы одного слова')
 }
 
+// ---- отметка в практике (вопросы банка College Board) ----------------------
+
+/**
+ * `questionSrc` — третий, отдельный от `reading:`/`card:` источник отметки: слово, не понятое
+ * в НАСТОЯЩЕМ вопросе экзамена, — самостоятельный сигнал, и смешивать его с текстом или с
+ * карточкой колоды нельзя (см. комментарий у `questionSrc` в journal.ts).
+ */
+function questionSrcChecks(): void {
+  assert(questionSrc('q1') === 'question:q1', `questionSrc даёт "question:<qid>", получено «${questionSrc('q1')}»`)
+  assert(questionSrc('q1') !== readingSrc('q1'), 'источник вопроса не совпадает с источником текста того же имени')
+  assert(questionSrc('q1') !== cardSrc('q1'), 'источник вопроса не совпадает с источником карточки того же имени')
+  group('questionSrc: даёт собственный ключ, отличный от readingSrc/cardSrc')
+
+  const lines = [
+    markLine({ id: 'q-1', word: 'ubiquitous', src: questionSrc('q1'), ts: '2026-08-24T10:00:00+04:00' }),
+    markLine({ id: 'q-2', word: 'kelp', src: SRC_REEF, ts: '2026-08-24T10:01:00+04:00' }),
+    markLine({ id: 'q-3', word: 'bolster', src: cardSrc('c1'), ts: '2026-08-24T10:02:00+04:00' })
+  ]
+  const onQuestion = markedLemmas(lines, questionSrc('q1'))
+  assert(onQuestion.has('ubiquitous') && onQuestion.size === 1,
+    `отметка вопроса видна только в его источнике, получено [${[...onQuestion].join()}]`)
+  assert(!markedLemmas(lines, SRC_REEF).has('ubiquitous'), 'отметка вопроса не просачивается в источник текста')
+  assert(!markedLemmas(lines, cardSrc('c1')).has('ubiquitous'), 'отметка вопроса не просачивается в источник карточки')
+  assert(!onQuestion.has('kelp') && !onQuestion.has('bolster'),
+    'источник вопроса, в свою очередь, не видит чужих отметок из reading:/card:')
+  group('markedLemmas: отметки вопроса, текста и карточки не пересекаются ни в одну сторону')
+}
+
+/**
+ * Условие настоящего вопроса содержит `______` — но это оформление пропуска студенческого
+ * ответа на бумаге, не пропуск карточки. `segmentText` без `blanks` (ровно так его зовёт
+ * `Markable` в Practice.tsx для Stem/вариантов/разбора) обязан оставить его текстом.
+ */
+function questionStemChecks(): void {
+  const stem = 'While researching a topic, a student found that the results were ______ inconclusive.'
+  const segs = segmentText(stem)
+  assert(!segs.some(s => s.kind === 'blank'), 'подчёркивание условия вопроса не превращается в пропуск карточки')
+  assert(rebuild(segs) === stem, 'условие вопроса восстанавливается посимвольно вместе с подчёркиванием')
+  const w = wordsOf(segs)
+  assert(w.length > 0, 'в условии вопроса есть цели для касания')
+  assert(w.every(x => !!x.lemma && !!x.sentence), 'у каждого слова условия непустые лемма и предложение')
+  assert(w.some(x => x.text === 'inconclusive'), 'слово рядом с пропуском остаётся целью для касания')
+  group('segmentText на условии вопроса: подчёркивание — текст, слова размечены с леммой и предложением')
+}
+
 function glossChecks(): void {
   const gl: GlossEntry[] = [
     { word: 'moratorium', pos: 'noun', meaning_en: 'an official pause', meaning_ru: 'мораторий' },
@@ -909,6 +962,8 @@ function main(): void {
   tokenEdgeChecks()
   cardContextChecks()
   highlightChecks()
+  questionSrcChecks()
+  questionStemChecks()
   glossChecks()
   levelChecks()
   orderChecks()

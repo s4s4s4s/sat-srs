@@ -13,6 +13,7 @@
  * `broken`, а не ронять приложение — тем же приёмом, что и `parseMd` для frontmatter.
  */
 import type { JournalLine, QuestionChoice, QuestionRec, QuestionView } from './types'
+import { addDaysKey, dayKey } from './daytime'
 
 const KNOWN_SECTIONS = new Set(['Вопрос', 'Варианты', 'Разбор'])
 const LETTERS = ['A', 'B', 'C', 'D'] as const
@@ -168,23 +169,86 @@ export interface PracticeStats extends PracticeGroupStats {
 
 const emptyGroup = (): PracticeGroupStats => ({ total: 0, solved: 0, correct: 0 })
 
-/** Сводка практики: всего вопросов, отвечено, из них верно — целиком и по каждому навыку. */
-export function practiceStats(views: QuestionView[], journal: JournalLine[]): PracticeStats {
-  const total = emptyGroup()
-  const bySkill: Record<string, PracticeGroupStats> = {}
-
+/**
+ * Разрез практики по производному ключу вопроса (навык, сложность — что угодно из QuestionView).
+ * Общая механика для `bySkill` и `byDifficulty`: битые вопросы отбрасываются, «отвечено» — была
+ * хотя бы одна попытка, «верно» — среди попыток была хотя бы одна верная (семантика вопроса,
+ * а не попытки: пересдал со второго раза — вопрос засчитан верным).
+ */
+function groupByKey(views: QuestionView[], journal: JournalLine[], keyOf: (v: QuestionView) => string): Record<string, PracticeGroupStats> {
+  const groups: Record<string, PracticeGroupStats> = {}
   for (const v of views) {
     if (v.broken) continue
-    const group = bySkill[v.skill] ?? (bySkill[v.skill] = emptyGroup())
-    total.total++
+    const group = groups[keyOf(v)] ?? (groups[keyOf(v)] = emptyGroup())
     group.total++
     const attempts = attemptsFor(journal, v.qid)
     if (attempts.length) {
-      total.solved++
       group.solved++
-      if (attempts.some(a => a.correct === true)) { total.correct++; group.correct++ }
+      if (attempts.some(a => a.correct === true)) group.correct++
     }
   }
+  return groups
+}
+
+/** Сводка практики: всего вопросов, отвечено, из них верно — целиком и по каждому навыку. */
+export function practiceStats(views: QuestionView[], journal: JournalLine[]): PracticeStats {
+  const bySkill = groupByKey(views, journal, v => v.skill)
+  const total = Object.values(bySkill).reduce((acc, g) => ({
+    total: acc.total + g.total,
+    solved: acc.solved + g.solved,
+    correct: acc.correct + g.correct
+  }), emptyGroup())
 
   return { ...total, bySkill }
+}
+
+/** Сколько попыток пришло за последние 7 учебных дней (включая сегодня) и какая среди них точность. */
+export interface WeekPracticeStats {
+  attempts: number         // строк practice за окно, ПОПЫТКИ, не вопросы
+  accuracy: number | null  // доля верных ПОПЫТОК среди них, 0..100; null — попыток не было
+}
+
+/** Разрезы практики сверх `practiceStats`: по сложности, за неделю, по времени ответа. */
+export interface PracticeBreakdown {
+  byDifficulty: Record<string, PracticeGroupStats>
+  week: WeekPracticeStats
+  avgSec: number | null    // среднее время на попытку по строкам, где sec известен; null — таких нет
+}
+
+/**
+ * Разрез по сложности + недельная динамика + скорость ответа.
+ *
+ * Недельная `accuracy` — ДРУГАЯ величина, чем `correct` в `PracticeGroupStats`: там единица счёта —
+ * вопрос (решён = была хоть одна верная попытка когда-либо), здесь единица счёта — попытка
+ * (строка журнала). Два неверных ответа на один и тот же вопрос за неделю — это 0 из 2 попыток,
+ * а не 0 из 1 вопроса; смешивать их в одно число значило бы тихо занижать или завышать точность
+ * в зависимости от того, сколько раз человек пересдавал один вопрос.
+ *
+ * Битые вопросы не попадают ни в один разрез — то же правило, что в `practiceStats`: попытки,
+ * привязанные к qid вопроса, отсутствующего среди небитых `views` (вопрос стал битым уже после
+ * того, как на него отвечали), в разрезы за неделю и по времени не идут.
+ */
+export function practiceBreakdown(views: QuestionView[], journal: JournalLine[], today: string = dayKey()): PracticeBreakdown {
+  const byDifficulty = groupByKey(views, journal, v => v.difficulty)
+  const validQids = new Set(views.filter(v => !v.broken).map(v => v.qid))
+  const from = addDaysKey(today, -6)
+
+  let weekAttempts = 0
+  let weekCorrect = 0
+  let secSum = 0
+  let secN = 0
+
+  for (const l of journal) {
+    if (l.type !== 'practice' || !l.qid || !validQids.has(l.qid)) continue
+    if (typeof l.sec === 'number') { secSum += l.sec; secN++ }
+    if (!l.day || l.day < from || l.day > today) continue
+    weekAttempts++
+    if (l.correct === true) weekCorrect++
+  }
+
+  return {
+    byDifficulty,
+    week: { attempts: weekAttempts, accuracy: weekAttempts ? Math.round((weekCorrect / weekAttempts) * 100) : null },
+    avgSec: secN ? secSum / secN : null
+  }
 }

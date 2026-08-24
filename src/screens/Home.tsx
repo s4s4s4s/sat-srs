@@ -10,18 +10,11 @@ import { readingLevel } from '../lib/reading'
 import { practiceStats, type PracticeStats } from '../lib/practice'
 import FlameBuddy from '../components/FlameBuddy'
 import FjordScene from '../components/FjordScene'
+import { множ } from '../lib/plural'
 import type { CardView, ReadingView } from '../lib/types'
 
 /** «1 упражнение · 3 упражнения · 12 упражнений» — подпись читается вслух, а не как счётчик. */
-function упражнений(n: number): string {
-  const ten = n % 100
-  const one = n % 10
-  const слово = ten >= 11 && ten <= 14 ? 'упражнений'
-    : one === 1 ? 'упражнение'
-    : one >= 2 && one <= 4 ? 'упражнения'
-    : 'упражнений'
-  return `${n} ${слово}`
-}
+const упражнений = (n: number) => множ(n, 'упражнение', 'упражнения', 'упражнений')
 
 function SectionBlock({ title, icon, badge, glyph, cards, budget, extraBudget, onStart, onReview, onExtra, levelLine, onPath }: {
   title: string

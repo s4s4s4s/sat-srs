@@ -398,6 +398,17 @@ export const readingSrc = (slug: string) => `reading:${slug}`
    ИМЕННО этого текста и от чужих отметок обязан быть избавлен. */
 export const cardSrc = (slug: string) => `card:${slug}`
 
+/* Источник отметки для вопроса практики: `question:<qid>`.
+
+   Отдельное пространство имён от `card:` намеренно: слово, не понятое в НАСТОЯЩЕМ вопросе
+   банка College Board (`Практика`), — самый дорогой сигнал из всех, что копит журнал. Это
+   ровно тот язык, который встретится на экзамене, а не формулировка карточки, написанная
+   тьютором для тренировки. Смешивать эти два источника нельзя по той же причине, по которой
+   `card:` разведён с `reading:`: порог понятности текста (`readingPassed`) считает отметки
+   ТОЛЬКО своего источника, и чужие отметки — из практики или из карточек — обязаны быть
+   от него избавлены. */
+export const questionSrc = (qid: string) => `question:${qid}`
+
 /** Нормализация формы слова для сравнения: регистр и обрамляющая пунктуация значения не имеют. */
 export function normWord(w: string): string {
   return w.trim().toLowerCase().replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '')
@@ -531,6 +542,7 @@ export interface MarkDigestEntry {
   marks: number          // в скольких источниках отмечено сейчас
   fromReading: number    // из них текстов
   fromCards: number      // из них заданий
+  fromQuestions: number  // из них настоящих вопросов SAT
   inDeck: boolean        // есть ли слово в колоде СЕЙЧАС
   sample: string         // предложение из первой отметки — готовый контекст для карточки
 }
@@ -540,6 +552,7 @@ export interface MarkDigest {
   total: number
   fromReading: number
   fromCards: number
+  fromQuestions: number
   entries: MarkDigestEntry[]
 }
 
@@ -562,18 +575,27 @@ export function markDigest(lines: JournalLine[], deck: ReadonlySet<string>): Mar
   const byLemma = new Map<string, MarkDigestEntry>()
   let fromReading = 0
   let fromCards = 0
+  let fromQuestions = 0
+  /* Разрезов ровно столько, сколько пространств имён источника (`readingSrc`, `cardSrc`,
+     `questionSrc`), и это не украшение: сумма разрезов обязана сходиться с `total`.
+     Источник, у которого нет своего счётчика, попадает только в общий итог — и сводка
+     начинает врать молча, показывая «отмечено 30, в текстах 12 · в заданиях 5» без следа
+     остальных тринадцати. Заводишь четвёртый источник — заводи и счётчик. */
   for (const l of activeMarks(lines)) {
     const lemma = normWord(String(l.lemma || l.word || ''))
     if (!lemma) continue
     const isReading = (l.src ?? '').startsWith('reading:')
     const isCard = (l.src ?? '').startsWith('card:')
+    const isQuestion = (l.src ?? '').startsWith('question:')
     if (isReading) fromReading++
     if (isCard) fromCards++
+    if (isQuestion) fromQuestions++
     const prev = byLemma.get(lemma)
     if (prev) {
       prev.marks++
       if (isReading) prev.fromReading++
       if (isCard) prev.fromCards++
+      if (isQuestion) prev.fromQuestions++
       if (!prev.sample && l.sentence) prev.sample = l.sentence
     } else {
       byLemma.set(lemma, {
@@ -581,6 +603,7 @@ export function markDigest(lines: JournalLine[], deck: ReadonlySet<string>): Mar
         marks: 1,
         fromReading: isReading ? 1 : 0,
         fromCards: isCard ? 1 : 0,
+        fromQuestions: isQuestion ? 1 : 0,
         inDeck: deckHasWord(deck, l.lemma, l.word),
         sample: l.sentence ?? '',
       })
@@ -590,5 +613,5 @@ export function markDigest(lines: JournalLine[], deck: ReadonlySet<string>): Mar
      числу отметок: слово, споткнувшее владельца дважды, важнее споткнувшего однажды. */
   const entries = [...byLemma.values()].sort((a, b) =>
     Number(a.inDeck) - Number(b.inDeck) || b.marks - a.marks || a.lemma.localeCompare(b.lemma))
-  return { total: entries.reduce((n, e) => n + e.marks, 0), fromReading, fromCards, entries }
+  return { total: entries.reduce((n, e) => n + e.marks, 0), fromReading, fromCards, fromQuestions, entries }
 }

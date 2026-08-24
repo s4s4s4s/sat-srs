@@ -26,7 +26,7 @@
 import 'fake-indexeddb/auto'
 import { openDB } from 'idb'
 import { parseMd } from '../src/lib/yamlfm'
-import { parseQuestionBody, questionView, pickPractice, practiceStats } from '../src/lib/practice'
+import { parseQuestionBody, questionView, pickPractice, practiceStats, practiceBreakdown } from '../src/lib/practice'
 import { getAllCards, getAllJournal, getAllReadings, getAllQuestions, applyQuestionsPull, kvGet } from '../src/lib/db'
 import type { JournalLine, QuestionRec, QuestionView } from '../src/lib/types'
 
@@ -267,6 +267,71 @@ function statsChecks(): void {
     'пустой набор — пустая сводка, а не деление на ноль')
 }
 
+// ---- разрезы сверх practiceStats (сложность, неделя, время) -----------------
+
+function breakdownChecks(): void {
+  const today = '2026-08-24'
+
+  // семантика byDifficulty = семантика bySkill: вопрос, отвеченный верно со второй
+  // попытки, засчитывается верным целиком (не «наполовину»)
+  const q1 = view('q1', { difficulty: 'Medium' })
+  const q2 = view('q2', { skill: 'Command of Evidence', difficulty: 'Easy' })
+  const broken = view('q3', { difficulty: 'Medium', broken: true })
+  const views = [q1, q2, broken]
+  const j1: JournalLine[] = [
+    practiceLine({ qid: 'q1', difficulty: 'Medium', correct: false, ts: '2026-08-20T10:00:00+04:00', day: '2026-08-20' }),
+    practiceLine({ qid: 'q1', difficulty: 'Medium', correct: true, ts: '2026-08-21T10:00:00+04:00', day: '2026-08-21' }),
+    // ответ на битый вопрос — не должен попасть ни в один разрез
+    practiceLine({ qid: 'q3', difficulty: 'Medium', correct: false, ts: '2026-08-21T10:00:00+04:00', day: '2026-08-21' })
+  ]
+  const bd1 = practiceBreakdown(views, j1, today)
+  assert(bd1.byDifficulty['Medium'].total === 1 && bd1.byDifficulty['Medium'].solved === 1 && bd1.byDifficulty['Medium'].correct === 1,
+    `byDifficulty Medium: та же семантика «верно», что у bySkill, и битый q3 (той же сложности) не даёт вторую единицу: ${JSON.stringify(bd1.byDifficulty['Medium'])}`)
+  assert(bd1.byDifficulty['Easy'].total === 1 && bd1.byDifficulty['Easy'].solved === 0,
+    'разрез по сложности: неотвеченный вопрос виден как total без solved')
+  group('practiceBreakdown: byDifficulty — та же семантика «решён», что и bySkill; битые вопросы не попадают в разрез')
+
+  // недельная точность считает ПОПЫТКИ, а не вопросы: два неверных ответа на один и тот же
+  // вопрос дают 0 из 2, а не 0 из 1 — другая величина, чем «correct» в PracticeGroupStats
+  const q4 = view('q4', { difficulty: 'Hard' })
+  const j2: JournalLine[] = [
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: false, ts: '2026-08-22T10:00:00+04:00', day: '2026-08-22' }),
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: false, ts: '2026-08-23T10:00:00+04:00', day: '2026-08-23' }),
+    // за пределами окна в 7 дней (today-6..today) — не считается
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: true, ts: '2026-08-10T10:00:00+04:00', day: '2026-08-10' })
+  ]
+  const bd2 = practiceBreakdown([q4], j2, today)
+  assert(bd2.week.attempts === 2, `недельные попытки считают строки, а не вопросы: получено ${bd2.week.attempts}`)
+  assert(bd2.week.accuracy === 0, `0 верных из 2 попыток — точность 0%, а не как у 0 из 1 вопроса, получено ${bd2.week.accuracy}`)
+  group('practiceBreakdown: недельная точность считает попытки, не вопросы — два неверных ответа на один вопрос дают 0 из 2')
+
+  // старая попытка за окном не искажает точность, а свежий верный ответ поднимает её
+  const j3: JournalLine[] = [
+    ...j2,
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: true, ts: '2026-08-24T09:00:00+04:00', day: '2026-08-24' })
+  ]
+  const bd3 = practiceBreakdown([q4], j3, today)
+  assert(bd3.week.attempts === 3 && bd3.week.accuracy === 33, `3 попытки за неделю, 1 верная → 33%, получено ${JSON.stringify(bd3.week)}`)
+
+  // среднее время игнорирует строки без sec, а не считает их нулём
+  const j4: JournalLine[] = [
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: true, ts: '2026-08-22T10:00:00+04:00', day: '2026-08-22', sec: 10 }),
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: false, ts: '2026-08-23T10:00:00+04:00', day: '2026-08-23', sec: 20 }),
+    // без sec — не измерена, не должна тянуть среднее к нулю
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: true, ts: '2026-08-24T10:00:00+04:00', day: '2026-08-24', sec: undefined })
+  ]
+  const bd4 = practiceBreakdown([q4], j4, today)
+  assert(bd4.avgSec === 15, `среднее по двум измеренным строкам (10 и 20), без sec игнорируется: получено ${bd4.avgSec}`)
+  group('practiceBreakdown: среднее время считается только по строкам с известным sec')
+
+  // пустой журнал — без NaN и без деления на ноль
+  const bdEmpty = practiceBreakdown([], [], today)
+  assert(bdEmpty.week.attempts === 0 && bdEmpty.week.accuracy === null && bdEmpty.avgSec === null,
+    `пустой журнал: ноль попыток, точность и время — null, а не NaN: ${JSON.stringify(bdEmpty)}`)
+  assert(Object.keys(bdEmpty.byDifficulty).length === 0, 'пустой набор вопросов — пустой разрез по сложности')
+  group('practiceBreakdown: пустой журнал не даёт NaN и деления на ноль')
+}
+
 // ---- обновление схемы БД со 2 на 3 -------------------------------------------
 
 async function dbMigrationCheck(): Promise<void> {
@@ -321,6 +386,7 @@ async function main(): Promise<void> {
   bareParseChecks()
   pickChecks()
   statsChecks()
+  breakdownChecks()
   await dbMigrationCheck()
   console.log(`\nВсе проверки практики пройдены (${passed} групп).`)
 }
