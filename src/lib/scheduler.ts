@@ -438,6 +438,49 @@ export function matchesLiveMark(v: CardView, marked: ReadonlySet<string>): boole
 }
 
 /**
+ * Глоссы отмеченных слов текущего предложения - то, что ученик видит под условием
+ * сразу после касания незнакомого слова: перевод карточки, если карточка уже заведена,
+ * иначе честное «карточки пока нет». Без этого отметка красит слово жёлтым и ничего
+ * не объясняет: предложение остаётся непонятым при каждом следующем показе.
+ *
+ * Предложение разбирается тем же `segmentText`, что и разметка касанием (Markable.tsx) -
+ * список глоссов и подсвеченные слова обязаны расходиться на одном и том же правиле,
+ * а не на двух похожих. Повтор леммы в предложении даёт одну строку (первое появление),
+ * лемма без карточки - тоже строку, только с `meaning: null`.
+ *
+ * Принадлежность к колоде - то же правило, что у `deckWords` (store.ts): слово ИЛИ слаг
+ * файла ИЛИ форма из `from_mark`. Слаг нужен здесь, потому что карточка-разводка синонима
+ * (`bolster-2.md`) не обязана нести слово `bolster` в `fm.word`, а лемма в предложении -
+ * именно `bolster`. `matchesLiveMark` слаг не проверяет и проверять не должен - это другое
+ * направление сравнения (карточка ищет отметку, а не отметка карточку), трогать его нельзя.
+ *
+ * Суспендированные карточки (в т.ч. битые: `cardView` выставляет `suspended` и при
+ * `rec.broken`, отдельного поля `broken` у CardView нет) в поиск не идут - показывать
+ * перевод карточки, которую урок никогда не покажет, было бы враньём с экрана.
+ */
+export function markGlosses(
+  cards: CardView[],
+  marked: ReadonlySet<string>,
+  sentence: string
+): { word: string; lemma: string; meaning: string | null }[] {
+  if (!marked.size) return []
+  const out: { word: string; lemma: string; meaning: string | null }[] = []
+  const seen = new Set<string>()
+  for (const seg of segmentText(sentence)) {
+    if (seg.kind !== 'word') continue
+    if (!marked.has(seg.lemma) || seen.has(seg.lemma)) continue
+    seen.add(seg.lemma)
+    const card = cards.find(c => !c.suspended && (
+      normWord(c.word) === seg.lemma ||
+      normWord(c.slug) === seg.lemma ||
+      c.from_mark.some(f => normWord(f) === seg.lemma)
+    ))
+    out.push({ word: seg.text, lemma: seg.lemma, meaning: card && card.meaning_ru ? card.meaning_ru : null })
+  }
+  return out
+}
+
+/**
  * Новые единицы в порядке ввода. Живая отметка владельца — абсолютный приоритет:
  * карточка, отвечающая ей, идёт первой независимо от вида (kindRank) и ступени —
  * иначе отмеченное слово с высокой ступенью не введётся месяцами (живой пример:

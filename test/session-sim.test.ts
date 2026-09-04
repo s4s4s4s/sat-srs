@@ -20,7 +20,7 @@ import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
   pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, holdExerciseToNextDay, isExercise, LEARN_AHEAD_MS, LAST_LEARNING_STEP, sharesMeaning, typedTwin, checkTyped,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
-  pickTask, meaningDistractors, REVIEW_CYCLE, ROTATE_FROM_REPS, NEW_STOP_DATE, kindRank, expandItems, freshItems,
+  pickTask, meaningDistractors, REVIEW_CYCLE, ROTATE_FROM_REPS, NEW_STOP_DATE, kindRank, expandItems, freshItems, markGlosses,
   homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal,
   MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS
 } from '../src/lib/scheduler'
@@ -1304,7 +1304,56 @@ function markPriorityChecks(): void {
 }
 
 /**
- * Задача 3 (17.08.2026) — починка флага пиявки. Старое условие в store.rateItem
+ * Глоссы отмеченных слов текущего предложения (04.09.2026): экран Review под отмеченным
+ * словом обязан показать перевод (или честное «карточки пока нет») сразу по касанию.
+ * Живой пример дефекта: карточка deplete, контекст «A long siege will ______ a city's
+ * grain stores, even when its walls hold.», отмечены siege и grain - и предложение
+ * оставалось непонятым при каждом показе, потому что отметка красила слово и молчала.
+ */
+function markGlossesChecks(): void {
+  const sentence = "A long siege will deplete a city's grain stores, even when its walls hold."
+
+  // 1. слово с карточкой, найденной по word.
+  const siegeCard = newCard('siege')
+  const bySiege = markGlosses([siegeCard], new Set(['siege']), sentence)
+  assert(bySiege.length === 1 && bySiege[0].word === 'siege' && bySiege[0].lemma === 'siege',
+    `markGlosses: слово siege обязано попасть в выдачу: ${JSON.stringify(bySiege)}`)
+  assert(bySiege[0].meaning === siegeCard.meaning_ru,
+    `markGlosses: значение siege обязано браться из meaning_ru карточки, найденной по word: ${JSON.stringify(bySiege)}`)
+
+  // 2. слово с карточкой, найденной ТОЛЬКО через from_mark (лемма не совпадает с word карточки).
+  const granaryCard: CardView = { ...newCard('granary'), from_mark: ['grain'] }
+  const byFromMark = markGlosses([granaryCard], new Set(['grain']), sentence)
+  assert(byFromMark.length === 1 && byFromMark[0].word === 'grain' && byFromMark[0].lemma === 'grain',
+    `markGlosses: слово grain обязано попасть в выдачу через from_mark: ${JSON.stringify(byFromMark)}`)
+  assert(byFromMark[0].meaning === granaryCard.meaning_ru,
+    `markGlosses: значение grain обязано браться с карточки granary, найденной по from_mark: ${JSON.stringify(byFromMark)}`)
+
+  // 3. слово без карточки в колоде - значение null, а не отсутствие строки.
+  const noCard = markGlosses([siegeCard], new Set(['walls']), sentence)
+  assert(noCard.length === 1 && noCard[0].word === 'walls' && noCard[0].meaning === null,
+    `markGlosses: слово без карточки обязано попасть в выдачу с meaning: null: ${JSON.stringify(noCard)}`)
+
+  // 4. отмечено, но в ЭТОМ предложении не встречается - в выдачу не попадает.
+  const notInSentence = markGlosses([siegeCard], new Set(['siege', 'palace']), sentence)
+  assert(notInSentence.length === 1 && notInSentence.every(g => g.lemma !== 'palace'),
+    `markGlosses: лемма, которой нет в предложении, не должна появляться в выдаче: ${JSON.stringify(notInSentence)}`)
+
+  // 5-6. порядок по появлению в предложении и повтор леммы - одна строка.
+  const orderSentence = 'Grain filled the silo, and later more grain arrived, while coin traders watched.'
+  const ordered = markGlosses([], new Set(['coin', 'grain', 'palace']), orderSentence)
+  assert(ordered.length === 2, `markGlosses: повтор леммы grain обязан дать одну строку, а не две: ${JSON.stringify(ordered)}`)
+  assert(ordered[0].lemma === 'grain' && ordered[1].lemma === 'coin',
+    `markGlosses: порядок выдачи обязан идти по появлению в предложении (grain раньше coin): ${JSON.stringify(ordered)}`)
+  assert(ordered[0].word === 'Grain',
+    `markGlosses: word обязан быть формой из текста (как написано), а не леммой: ${JSON.stringify(ordered)}`)
+
+  console.log('  ✓ markGlosses (04.09.2026): карточка по word/from_mark, слово без карточки (null), лемма вне предложения не попадает, порядок и повтор')
+  passed++
+}
+
+/**
+ * Задача 3 (17.08.2026) - починка флага пиявки. Старое условие в store.rateItem
  * (`next.lapses >= leech_lapses + 6`) требовало lapses ≥ 6, а lapses растёт только при
  * провале карточки из состояния Review — по всей колоде максимум был 2. Реальный путь к
  * пиявке — многократный провал ИЗ Learning/Relearning (reps растёт на каждой оценке,
@@ -1625,6 +1674,7 @@ function main(): void {
   ptPriorityChecks()
   fromMarkPriorityChecks()
   markPriorityChecks()
+  markGlossesChecks()
   leechFlagChecks()
   afkCapChecks()
   tomorrowCountChecks()

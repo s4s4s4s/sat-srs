@@ -5,7 +5,7 @@ import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
   pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, typedTwin, suggestedGrade, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP,
-  blankPhrase, blankSentence,
+  blankPhrase, blankSentence, markGlosses,
   type TypeVerdict,
   newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
 } from '../lib/scheduler'
@@ -71,6 +71,25 @@ function Sentence({ context, word, revealed, marked, onWord, variant = 'bubble' 
           ? <span className="rev-filled"><Tex text={word} /></span>
           : <span className="rev-blank">&nbsp;</span>}
       />
+    </div>
+  )
+}
+
+/**
+ * Строка глоссов под предложением условия: перевод каждого слова, отмеченного в текущем
+ * предложении незнакомым (см. `markGlosses` в scheduler.ts). Своего пузыря не получает -
+ * это подпись к отдельным словам, а не отдельная карточка на экране. Пустой список ничего
+ * не рисует: пока в предложении ничего не отмечено, блоку нечего показывать.
+ */
+function WordMarks({ glosses }: { glosses: { word: string; lemma: string; meaning: string | null }[] }) {
+  if (!glosses.length) return null
+  return (
+    <div className="rev-marks">
+      {glosses.map(g => (
+        <div key={g.lemma}>
+          <span className="rev-marks-word">{g.word}</span> - {g.meaning ?? 'карточки пока нет, заведётся к утру'}
+        </div>
+      ))}
     </div>
   )
 }
@@ -780,6 +799,16 @@ export default function Review() {
     () => (markSrc ? markedLemmas(app.journal, markSrc) : new Set<string>()),
     [app.journal, markSrc]
   )
+  /* Глоссы отмеченных слов текущего предложения (rev-marks) - обязаны обновиться сразу
+     при касании, поэтому считаются из того же `marked`, а не отдельным запросом к журналу.
+     Колода берётся вся (views()), а не срез раздела `deck`: карточка на отмеченное слово
+     может лежать в любом разделе. Предложение берётся ЦЕЛЫМ (task.ctx), а не показанным обрывком: режим «слово по
+     значению» показывает только оборот вокруг пропуска (cuePhrase), но глоссы обязаны
+     учитывать всё предложение: иначе отметка вне обрывка молча пропадала бы из блока. */
+  const glosses = useMemo(
+    () => (task ? markGlosses(views(), marked, task.ctx) : []),
+    [app.cards, marked, task]
+  )
   async function markWord(seg: Extract<Segment, { kind: 'word' }>) {
     if (!markSrc) return
     setMarkError('')
@@ -933,7 +962,8 @@ export default function Review() {
               {card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
               <div className="intro-label">Пример использования</div>
               <Sentence context={task.ctx} word={card.word} revealed marked={marked} onWord={markWord} />
-              {/* на знакомстве предложение открыто сразу — перевод показываем вместе с ним */}
+              <WordMarks glosses={glosses} />
+              {/* на знакомстве предложение открыто сразу - перевод показываем вместе с ним */}
               {sentenceRu && <div className="rev-sentence-ru">{sentenceRu}</div>}
             </div>
           </>
@@ -974,10 +1004,12 @@ export default function Review() {
                 variant="phrase"
               />
             )}
+            <WordMarks glosses={glosses} />
           </div>
         ) : (
           <>
             <Sentence context={sentence} word={answerWord} revealed={revealed} marked={marked} onWord={markWord} />
+            <WordMarks glosses={glosses} />
             {revealed && sentenceRu && <div className="rev-sentence-ru">{sentenceRu}</div>}
           </>
         )}
