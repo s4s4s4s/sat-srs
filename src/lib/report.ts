@@ -9,7 +9,7 @@ import {
 } from './journal'
 import { activeLevel, levelStats, isLevelled, EXAM_DATE, SECTIONS } from './scheduler'
 import {
-  examReady, maturity, pace, retentionByInterval, retentionBySection, maturityBySection,
+  examReady, maturity, pace, retentionByInterval, retentionByLateness, retentionBySection, maturityBySection,
   speedStats, typoSplit, gaveUpShare, planVsFact, isLeechCard, orphanedLines, ddmm,
   PRIMARY_DATE, NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS,
   INTERVAL_LABELS, SECTION_LABELS, type IntervalBucket
@@ -149,6 +149,12 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   const ri = retentionByInterval(lines)
   const riParts = (Object.keys(ri) as IntervalBucket[]).map(k => `${INTERVAL_LABELS[k]} ${ri[k].pct === null ? '—' : ri[k].pct + '%'}${ri[k].n ? ` (n=${ri[k].n})` : ''}`)
   out.push(`- Retention по бакетам интервала: ${riParts.join(' · ')}`)
+  // Разрез по сроку показа - вовремя или с просрочкой, отдельно от расстояния между показами
+  // (retentionByLateness, metrics.ts): бакет интервала и просрочка исполнения - два разных
+  // вопроса, и второй раньше не отвечался нигде.
+  const rl = retentionByLateness(lines)
+  const latenessPart = (b: typeof rl.onTime) => (b.pct === null ? 'нет данных' : `${b.pct}%`) + (b.n ? ` (n=${b.n})` : '')
+  out.push(`- Retention по сроку: вовремя ${latenessPart(rl.onTime)} · с просрочкой ${latenessPart(rl.overdue)}${rl.avgDelayDays !== null ? ` (ср. просрочка ${rl.avgDelayDays} дн)` : ''}`)
   // Разрез по разделам (слова/грамматика/математика) — до 17.08.2026 отсутствовал везде:
   // ни retention, ни зрелость не показывали, какой раздел проседает.
   const rs = retentionBySection(views, lines)
@@ -161,9 +167,12 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   // со slug уже нет в колоде (переработка пиявки, переименование файла) — тьютору нужно
   // видеть это явно, а не догадываться по тихо просевшим процентам.
   const orph = orphanedLines(views, lines)
-  out.push(orph.n
-    ? `- Осиротевшие строки журнала (slug карточки пропал из колоды — переработка/переименование): **${orph.n} из ${orph.total} (${Math.round(orph.share * 100)}%)** · ${orph.slugs.map(s => `${s.slug} ×${s.n}`).join(', ')}`
-    : `- Осиротевшие строки журнала: нет — все ${orph.total} строк со slug привязаны к карточкам колоды`)
+  const reworkedSuffix = orph.reworked.length
+    ? ` · переработанные пиявки (история обнулена осознанно): ${orph.reworked.map(s => `${s.slug} ×${s.n}`).join(', ')}`
+    : ''
+  out.push((orph.n
+    ? `- Осиротевшие строки журнала (slug карточки пропал из колоды - переработка/переименование): **${orph.n} из ${orph.total} (${Math.round(orph.share * 100)}%)** · ${orph.slugs.map(s => `${s.slug} ×${s.n}`).join(', ')}`
+    : `- Осиротевшие строки журнала: нет - все ${orph.total} строк со slug привязаны к карточкам колоды`) + reworkedSuffix)
   const ms = maturityBySection(active)
   const msParts = SECTIONS.map(s => `${SECTION_LABELS[s]} review ${ms[s].reviewCount}/${ms[s].total} · зрелых ${ms[s].matureCount}/${ms[s].total}`)
   out.push(`- В review / зрелых по разделам: ${msParts.join(' · ')}`)

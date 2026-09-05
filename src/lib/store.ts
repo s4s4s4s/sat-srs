@@ -398,8 +398,11 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     new_state: next.state,
     due: next.due.toISOString(),
     stability: Math.round(next.stability * 100) / 100,
-    // плановый интервал FSRS — точный бакет интервала в retentionByInterval без реконструкции из ts
+    // план до следующего показа, для бакетов интервала не годится, см. elapsed_days ниже
     scheduled_days: next.scheduled_days,
+    // фактический интервал с прошлого показа (FSRS f.next() сам считает его в elapsed_days),
+    // именно по нему бакетируется retentionByInterval, не по scheduled_days
+    elapsed_days: next.elapsed_days,
     elapsed_ms: journalElapsedMs(elapsedMs, item.view.kind),
     synced: 0
   }
@@ -480,7 +483,6 @@ export async function deferItemToNextDay(item: StudyItem): Promise<void> {
   updateBadge()
 }
 
-/** Идеальный день: всё повторено вовремя, очередь пуста — день зачитывается сам, без сессии */
 /** Отметить чтение: вторая половина защищённого минимума.
  *
  *  Инструмента для неё не было вовсе, и в «Метриках» семь недель подряд стоит

@@ -178,7 +178,8 @@ export interface JournalLine {
   new_state?: number
   due?: string
   stability?: number
-  scheduled_days?: number // плановый интервал из FSRS — точный бакет интервала без реконструкции
+  scheduled_days?: number // план до следующего показа; для бакетов интервала не годится, см. elapsed_days
+  elapsed_days?: number   // фактический интервал с прошлого показа по FSRS (целые сутки), по нему бакетируется retention
   elapsed_ms?: number
   // session:
   dur_ms?: number

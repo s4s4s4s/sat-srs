@@ -258,9 +258,18 @@ export const INTERVAL_LABELS: Record<IntervalBucket, string> = {
 }
 
 /**
- * Retention по бакетам интервала — самая ценная таблица: общий retention смешивает интервалы
- * в полтора дня и в три недели. Интервал берём из scheduled_days (пишется с шага 2), иначе
- * реконструируем как разницу ts соседних показов одного slug#skill.
+ * Retention по бакетам интервала - самая ценная таблица: общий retention смешивает интервалы
+ * в полтора дня и в три недели. Интервал берём из elapsed_days (пишется с шага W3, ts-fsrs сам
+ * считает его в f.next() как разрыв с прошлым показом), иначе реконструируем как разницу ts
+ * соседних показов одного slug#skill.
+ *
+ * `scheduled_days` для этого не годится и здесь не читается вовсе: это план ДО следующего
+ * показа, а не факт последнего интервала, и обе величины совпадают только когда карточка
+ * пришла вовремя. Провал в Review пишет туда 0 (следующий шаг лестницы обучения короче суток),
+ * а не фактический разрыв с прошлым разом, и такая строка проваливалась в реконструкцию по ts,
+ * тогда как успешный показ шёл по плану напрямую. Замер на живом журнале 06.09.2026: 71 из 207
+ * зрелых показов оказались не в своём бакете, все до одного - успехи, и бакет 11-30 дн показывал
+ * 60% вместо настоящих 74%.
  */
 export function retentionByInterval(journal: JournalLine[]): Record<IntervalBucket, Bucketed> {
   const out: Record<IntervalBucket, Bucketed> = {
@@ -273,7 +282,7 @@ export function retentionByInterval(journal: JournalLine[]): Record<IntervalBuck
     const t = Date.parse(l.ts)
     const prev = prevTs.get(key)
     let interval: number | null = null
-    if (typeof l.scheduled_days === 'number' && l.scheduled_days > 0) interval = l.scheduled_days
+    if (typeof l.elapsed_days === 'number') interval = l.elapsed_days
     else if (prev !== undefined && Number.isFinite(t)) interval = (t - prev) / 86400_000
     if (Number.isFinite(t)) prevTs.set(key, t)
     if (!isMatureShow(l) || interval === null) continue
@@ -320,7 +329,7 @@ export function retentionByDomain(journal: JournalLine[]): Map<string, Bucketed>
 }
 
 export interface OrphanSlug { slug: string; n: number }
-export interface OrphanedLines { n: number; total: number; share: number; slugs: OrphanSlug[] }
+export interface OrphanedLines { n: number; total: number; share: number; slugs: OrphanSlug[]; reworked: OrphanSlug[] }
 
 /**
  * Строки журнала со slug, которого в колоде уже нет. Все join'ы выше (retentionByLevel,
@@ -335,24 +344,47 @@ export interface OrphanedLines { n: number; total: number; share: number; slugs:
  * дописывать `fsrs` здесь нельзя — контракт колоды прямо запрещает править `fsrs` руками.
  * Задача этой функции — сделать потерю видимой, а не заменить её починку.
  *
- * `total` — все строки журнала со slug (знаменатель доли), `n` — из них осиротевшие,
- * `slugs` — по убыванию числа строк на slug. Пустой список — обычное состояние, не ошибка.
+ * `total` - только review-строки со slug (знаменатель доли), `n` - из них осиротевшие,
+ * `slugs` - по убыванию числа строк на slug. Пустой список - обычное состояние, не ошибка.
+ * Считаются только `type: 'review'`: reading-строки несут слаг ТЕКСТА чтения, не карточки, и
+ * join по колоде карточек на них не имеет смысла в принципе; mark-строки для join'а безопасны
+ * (у них есть `src`), но участия здесь не принимают, потому что не про карточку.
+ *
+ * `reworked` - отдельный список: слаги, для которых в колоде уже нет исходной карточки, но
+ * есть её переработка `${slug}-N` с `source: releech` (тот самый случай bolster/deter/
+ * scrutinize/yield выше). Это не потеря, а осознанное обнуление истории пиявки, поэтому такие
+ * слаги и их строки не входят ни в `n`, ни в `slugs` - учебная работа не пропала, просто у неё
+ * теперь новый файл.
  */
 export function orphanedLines(cards: CardView[], journal: JournalLine[]): OrphanedLines {
   const slugsInDeck = new Set(cards.map(v => v.slug))
+  const reworkedBases = new Set<string>()
+  for (const v of cards) {
+    if (v.source !== 'releech') continue
+    const m = /^(.+)-\d+$/.exec(v.slug)
+    if (m) reworkedBases.add(m[1])
+  }
   let total = 0
   const bySlug = new Map<string, number>()
+  const reworkedBySlug = new Map<string, number>()
   for (const l of journal) {
-    if (!l.slug) continue
+    if (l.type !== 'review' || !l.slug) continue
     total++
     if (slugsInDeck.has(l.slug)) continue
+    if (reworkedBases.has(l.slug)) {
+      reworkedBySlug.set(l.slug, (reworkedBySlug.get(l.slug) ?? 0) + 1)
+      continue
+    }
     bySlug.set(l.slug, (bySlug.get(l.slug) ?? 0) + 1)
   }
   const slugs = [...bySlug.entries()]
     .map(([slug, n]) => ({ slug, n }))
     .sort((a, b) => b.n - a.n || a.slug.localeCompare(b.slug))
   const n = slugs.reduce((a, s) => a + s.n, 0)
-  return { n, total, share: total ? Math.round((n / total) * 100) / 100 : 0, slugs }
+  const reworked = [...reworkedBySlug.entries()]
+    .map(([slug, n]) => ({ slug, n }))
+    .sort((a, b) => b.n - a.n || a.slug.localeCompare(b.slug))
+  return { n, total, share: total ? Math.round((n / total) * 100) / 100 : 0, slugs, reworked }
 }
 
 // ---- ретеншн и зрелость по разделам (слова/логика/грамматика/математика) --------
@@ -525,6 +557,52 @@ export function planVsFact(journal: JournalLine[], today: string, daysBack = 6):
     }
   }
   return perDay
+}
+
+/**
+ * Retention по сроку показа: вовремя или с просрочкой, отдельно от бакетов интервала.
+ * Бакет интервала отвечает «на каком расстоянии повторили», этот разрез отвечает на другой
+ * вопрос: «повторили тогда, когда планировал FSRS, или позже» - карточка, показанная позже
+ * плана, набрала лишнюю забывчивость сверх расчётной, и её провал не о качестве интервала,
+ * а о просроченном исполнении. План берётся из `due` ПРЕДЫДУЩЕЙ строки того же ключа
+ * (slug#skill), тем же `dueDayKey`, что и `planVsFact` - одно определение «дня по плану»
+ * на обе таблицы. Считаются только зрелые показы (`isMatureShow`); строка без предыдущей в
+ * своей паре или без `due` у предыдущей пропускается, как и learning-шаги внутри одного дня.
+ */
+export function retentionByLateness(journal: JournalLine[]): { onTime: Bucketed; overdue: Bucketed; avgDelayDays: number | null } {
+  const byItem = new Map<string, JournalLine[]>()
+  for (const l of journal) {
+    if (l.type !== 'review' || !l.slug) continue
+    const key = `${l.slug}#${l.skill ?? 'recall'}`
+    if (!byItem.has(key)) byItem.set(key, [])
+    byItem.get(key)!.push(l)
+  }
+  const onTime = emptyBucket()
+  const overdue = emptyBucket()
+  let delaySum = 0
+  let delayN = 0
+  for (const seq of byItem.values()) {
+    seq.sort(byTime)
+    for (let i = 1; i < seq.length; i++) {
+      const cur = seq[i]
+      if (!isMatureShow(cur)) continue
+      const prevDue = seq[i - 1].due
+      if (!prevDue) continue
+      const planned = dueDayKey(prevDue)
+      const actual = cur.day
+      if (!planned || !actual) continue
+      const delay = Math.round((Date.parse(actual) - Date.parse(planned)) / 86400_000)
+      const cell = delay > 0 ? overdue : onTime
+      cell.n++
+      if ((cur.rating ?? 0) > 1) cell.pass++
+      if (delay > 0) { delaySum += delay; delayN++ }
+    }
+  }
+  return {
+    onTime: seal(onTime),
+    overdue: seal(overdue),
+    avgDelayDays: delayN ? Math.round((delaySum / delayN) * 10) / 10 : null
+  }
 }
 
 // ---- снимок истории ------------------------------------------------------

@@ -14,7 +14,7 @@ import path from 'node:path'
 import { fsrs, generatorParameters, State, type Card as FsrsCard } from 'ts-fsrs'
 import type { CardView, JournalLine } from '../src/lib/types'
 import {
-  examReady, maturity, pace, reviewCount, retentionByInterval, retentionByLevel, retentionByDomain,
+  examReady, maturity, pace, reviewCount, retentionByInterval, retentionByLateness, retentionByLevel, retentionByDomain,
   speedStats, typoSplit, gaveUpShare, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
   intervalBucketOf, enoughForPct, isLeechCard, orphanedLines,
   PRIMARY_DATE, NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MIN_N_FOR_PCT,
@@ -22,7 +22,7 @@ import {
 } from '../src/lib/metrics'
 import { dayKey, addDaysKey } from '../src/lib/daytime'
 import { parseMd, cardView } from '../src/lib/yamlfm'
-import { parseNdjson } from '../src/lib/journal'
+import { parseNdjson, toNdjson } from '../src/lib/journal'
 
 let passed = 0
 function assert(cond: boolean, msg: string): void {
@@ -128,14 +128,15 @@ function maturityChecks(): void {
 // ---- retentionByInterval -------------------------------------------------
 
 function intervalChecks(): void {
-  // каждая строка бакетируется по своему scheduled_days; typo и не-Review исключаются
+  // каждая строка бакетируется по своему elapsed_days (факт), а не scheduled_days (план);
+  // typo и не-Review исключаются
   const j: JournalLine[] = [
-    rev({ slug: 'a', prev_state: State.Review, scheduled_days: 2, rating: 3 }),   // 1-3 pass
-    rev({ slug: 'b', prev_state: State.Review, scheduled_days: 5, rating: 1 }),   // 4-10 fail
-    rev({ slug: 'c', prev_state: State.Review, scheduled_days: 20, rating: 4 }),  // 11-30 pass
-    rev({ slug: 'd', prev_state: State.Review, scheduled_days: 45, rating: 3 }),  // 30+ pass
-    rev({ slug: 'e', prev_state: State.Review, scheduled_days: 2, rating: 1, typo: true }), // исключить
-    rev({ slug: 'g', prev_state: State.Learning, scheduled_days: 2, rating: 3 }), // не зрелый — исключить
+    rev({ slug: 'a', prev_state: State.Review, elapsed_days: 2, rating: 3 }),   // 1-3 pass
+    rev({ slug: 'b', prev_state: State.Review, elapsed_days: 5, rating: 1 }),   // 4-10 fail
+    rev({ slug: 'c', prev_state: State.Review, elapsed_days: 20, rating: 4 }),  // 11-30 pass
+    rev({ slug: 'd', prev_state: State.Review, elapsed_days: 45, rating: 3 }),  // 30+ pass
+    rev({ slug: 'e', prev_state: State.Review, elapsed_days: 2, rating: 1, typo: true }), // исключить
+    rev({ slug: 'g', prev_state: State.Learning, elapsed_days: 2, rating: 3 }), // не зрелый - исключить
   ]
   const ri = retentionByInterval(j)
   assert(ri['1-3'].n === 1 && ri['1-3'].pct === 100, `1-3: n=${ri['1-3'].n} pct=${ri['1-3'].pct}`)
@@ -145,7 +146,19 @@ function intervalChecks(): void {
   const total = ri['1-3'].n + ri['4-10'].n + ri['11-30'].n + ri['30+'].n
   assert(total === 4, `суммарное n по бакетам ожидалось 4 (typo и learning исключены), получено ${total}`)
 
-  // реконструкция интервала из ts, когда scheduled_days нет
+  /* Ловушка, которую диагноз W3 нашёл на живом журнале: scheduled_days пишет план ДО
+     следующего показа, а провал из Review сбрасывает его в 0 (следующий шаг лестницы короче
+     суток) - это не имеет отношения к тому, через сколько дней случился ЭТОТ показ. Строка
+     ниже врёт планом на 45 дней вперёд при фактическом интервале в 2 дня: если бы бакет
+     читал scheduled_days, показ ушёл бы в «30+» вместо настоящего «1-3». */
+  const jTrap: JournalLine[] = [
+    rev({ slug: 'trap', prev_state: State.Review, scheduled_days: 45, elapsed_days: 2, rating: 3 })
+  ]
+  const riTrap = retentionByInterval(jTrap)
+  assert(riTrap['1-3'].n === 1, `ловушка scheduled_days: ожидался бакет 1-3 по elapsed_days, n=${riTrap['1-3'].n}`)
+  assert(riTrap['30+'].n === 0, `scheduled_days не должен читаться для бакета, 30+ n=${riTrap['30+'].n}`)
+
+  // реконструкция интервала из ts, когда elapsed_days нет
   const j2: JournalLine[] = [
     rev({ slug: 'r', prev_state: State.Learning, ts: '2026-09-01T10:00:00+03:00', rating: 3 }),
     rev({ slug: 'r', prev_state: State.Review, ts: '2026-09-04T10:00:00+03:00', rating: 3 }), // gap 3 дн → 1-3
@@ -153,9 +166,17 @@ function intervalChecks(): void {
   const ri2 = retentionByInterval(j2)
   assert(ri2['1-3'].n === 1, `реконструкция из ts: 1-3 n ожидалось 1, получено ${ri2['1-3'].n}`)
 
-  /* Внутридневной повтор — отдельный бакет, а не «1–3 дн». До 17.08.2026 они лежали
-     вместе: из 70 показов бакета «1–3» 49 были внутридневными, и процент бакета не
-     значил ничего. Граница ровно на сутках: 0,9 дн — «меньше суток», 1,0 — уже «1–3». */
+  // elapsed_days = 0 - честный «меньше суток» (провал из Review, следующий шаг короче суток),
+  // а не пропуск строки и не бакет «1-3»
+  const j0: JournalLine[] = [
+    rev({ slug: 'z', prev_state: State.Review, elapsed_days: 0, rating: 3 })
+  ]
+  const ri0 = retentionByInterval(j0)
+  assert(ri0['<1'].n === 1, `elapsed_days=0 ожидался бакет «<1», получено n=${ri0['<1'].n}`)
+
+  /* Внутридневной повтор - отдельный бакет, а не «1-3 дн». До 17.08.2026 они лежали
+     вместе: из 70 показов бакета «1-3» 49 были внутридневными, и процент бакета не
+     значил ничего. Граница ровно на сутках: 0,9 дн - «меньше суток», 1,0 - уже «1-3». */
   const j3: JournalLine[] = [
     rev({ slug: 'x', prev_state: State.Review, ts: '2026-09-01T10:00:00+03:00', rating: 3 }),
     rev({ slug: 'x', prev_state: State.Review, ts: '2026-09-01T10:20:00+03:00', rating: 1 }), // +20 мин
@@ -168,7 +189,49 @@ function intervalChecks(): void {
     'интервал меньше суток → бакет «<1»')
   assert(intervalBucketOf(1) === '1-3' && intervalBucketOf(3) === '1-3',
     'ровно сутки и трое суток → бакет «1-3»')
-  group('retentionByInterval: бакеты по scheduled_days, «меньше суток» отдельно, реконструкция из ts, typo/learning вне зачёта')
+
+  // elapsed_days обязан пережить запись/чтение ndjson - иначе бакетирование в проде тихо
+  // откатилось бы к реконструкции по ts на каждой строке
+  const roundtripLine = rev({ slug: 'rt', prev_state: State.Review, elapsed_days: 7, rating: 3 })
+  const { lines: rtLines } = parseNdjson(toNdjson([roundtripLine]))
+  assert(rtLines.length === 1 && rtLines[0].elapsed_days === 7,
+    `elapsed_days должен пережить ndjson roundtrip, получено ${JSON.stringify(rtLines[0])}`)
+
+  group('retentionByInterval: бакеты по elapsed_days (не по scheduled_days), ловушка плана закрыта, «меньше суток» отдельно, реконструкция из ts, typo/learning вне зачёта, roundtrip ndjson')
+}
+
+// ---- retentionByLateness ---------------------------------------------------
+
+function latenessChecks(): void {
+  // due предыдущей строки - 04.09, фактический показ - 06.09: просрочка 2 дня
+  const jOverdue: JournalLine[] = [
+    rev({ slug: 'p', day: '2026-09-01', prev_state: State.Learning, due: '2026-09-04T10:00:00+03:00', rating: 3 }),
+    rev({ slug: 'p', day: '2026-09-06', prev_state: State.Review, rating: 3 })
+  ]
+  const rl = retentionByLateness(jOverdue)
+  assert(rl.overdue.n === 1 && rl.overdue.pct === 100, `overdue: n=${rl.overdue.n} pct=${rl.overdue.pct}`)
+  assert(rl.onTime.n === 0, `onTime ожидалось 0 при просрочке, получено ${rl.onTime.n}`)
+  assert(rl.avgDelayDays === 2, `средняя просрочка ожидалась 2 дн, получено ${rl.avgDelayDays}`)
+
+  // показ ровно в срок - onTime, просрочки нет
+  const jOnTime: JournalLine[] = [
+    rev({ slug: 'q', day: '2026-09-01', prev_state: State.Learning, due: '2026-09-04T10:00:00+03:00', rating: 3 }),
+    rev({ slug: 'q', day: '2026-09-04', prev_state: State.Review, rating: 1 })
+  ]
+  const rl2 = retentionByLateness(jOnTime)
+  assert(rl2.onTime.n === 1 && rl2.onTime.pct === 0, `onTime: n=${rl2.onTime.n} pct=${rl2.onTime.pct}`)
+  assert(rl2.overdue.n === 0, `overdue ожидалось 0 при показе в срок, получено ${rl2.overdue.n}`)
+
+  // learning-строка (не зрелый показ) вне счёта, даже если формально просрочена
+  const jLearning: JournalLine[] = [
+    rev({ slug: 'r', day: '2026-09-01', prev_state: State.New, due: '2026-09-04T10:00:00+03:00', rating: 3 }),
+    rev({ slug: 'r', day: '2026-09-06', prev_state: State.Learning, rating: 3 })
+  ]
+  const rl3 = retentionByLateness(jLearning)
+  assert(rl3.onTime.n === 0 && rl3.overdue.n === 0,
+    `learning-строка обязана быть вне счёта, получено onTime=${rl3.onTime.n} overdue=${rl3.overdue.n}`)
+
+  group('retentionByLateness: onTime/overdue по due предыдущей строки того же ключа, средняя просрочка, learning вне счёта')
 }
 
 // ---- retentionByLevel / Domain -------------------------------------------
@@ -358,31 +421,42 @@ function snapshotChecks(): void {
 // ---- orphanedLines ---------------------------------------------------------
 
 function orphanedLinesChecks(): void {
-  const cards = [vocab('a', reviewFsrs(30, 1)), vocab('b', reviewFsrs(30, 1))]
+  const cards = [
+    vocab('a', reviewFsrs(30, 1)),
+    vocab('b', reviewFsrs(30, 1)),
+    // переработка пиявки: исходного слага 'bolster' в колоде уже нет, вместо него -2 с source releech
+    vocab('bolster-2', reviewFsrs(30, 1), 1, { source: 'releech' })
+  ]
   const j: JournalLine[] = [
     rev({ slug: 'a', rating: 3 }),
     rev({ slug: 'ghost1', rating: 1 }),
     rev({ slug: 'ghost1', rating: 3 }),
     rev({ slug: 'ghost2', rating: 4 }),
     rev({ slug: 'b', rating: 3 }),
-    rev({ type: 'session', slug: undefined, dur_ms: 90000 }),   // без slug — вне счёта
+    rev({ type: 'session', slug: undefined, dur_ms: 90000 }),      // без slug - вне счёта
+    rev({ type: 'reading', slug: '1-01-reef', marks: 2 }),          // слаг ТЕКСТА чтения, не карточки - вне total
+    rev({ slug: 'bolster', rating: 1 }),
+    rev({ slug: 'bolster', rating: 3 })
   ]
   const orph = orphanedLines(cards, j)
-  assert(orph.total === 5, `total (строк со slug) ожидалось 5, получено ${orph.total}`)
-  assert(orph.n === 3, `n (осиротевших) ожидалось 3, получено ${orph.n}`)
-  assert(Math.abs(orph.share - 0.6) < 0.001, `share ожидалась 0.6, получено ${orph.share}`)
+  assert(orph.total === 7, `total (review-строк со slug) ожидалось 7, получено ${orph.total}`)
+  assert(orph.n === 3, `n (осиротевших, без переработанных) ожидалось 3, получено ${orph.n}`)
+  assert(Math.abs(orph.share - 0.43) < 0.01, `share ожидалась ~0.43 (3 из 7), получено ${orph.share}`)
   assert(orph.slugs.length === 2, `слагов ожидалось 2 (ghost1, ghost2), получено ${orph.slugs.length}`)
   assert(orph.slugs[0].slug === 'ghost1' && orph.slugs[0].n === 2,
     `по убыванию первым ожидался ghost1 ×2, получено ${JSON.stringify(orph.slugs[0])}`)
   assert(orph.slugs[1].slug === 'ghost2' && orph.slugs[1].n === 1,
     `вторым ожидался ghost2 ×1, получено ${JSON.stringify(orph.slugs[1])}`)
+  assert(orph.reworked.length === 1 && orph.reworked[0].slug === 'bolster' && orph.reworked[0].n === 2,
+    `bolster обязан уйти в reworked ×2, а не в slugs, получено ${JSON.stringify(orph.reworked)}`)
+  assert(!orph.slugs.some(s => s.slug === 'bolster'), 'bolster не должен попасть в slugs (это переработка, а не потеря)')
 
-  // все слаги журнала есть в колоде — ноль, без ложной тревоги на пустом месте
+  // все слаги журнала есть в колоде - ноль, без ложной тревоги на пустом месте
   const clean = orphanedLines(cards, [rev({ slug: 'a' }), rev({ slug: 'b' })])
-  assert(clean.n === 0 && clean.total === 2 && clean.slugs.length === 0,
-    `журнал без осиротевших: ожидалось n=0 total=2 slugs=[], получено ${JSON.stringify(clean)}`)
+  assert(clean.n === 0 && clean.total === 2 && clean.slugs.length === 0 && clean.reworked.length === 0,
+    `журнал без осиротевших: ожидалось n=0 total=2 slugs=[] reworked=[], получено ${JSON.stringify(clean)}`)
 
-  group('orphanedLines: осиротевшие строки считаются и перечисляются по убыванию, строки без slug вне счёта, чистый журнал даёт ноль')
+  group('orphanedLines: только review-строки в счёте, переработанные пиявки уходят в reworked, а не в slugs, чистый журнал даёт ноль')
 }
 
 // ---- живая колода (необязательно) ------------------------------------------
@@ -418,9 +492,14 @@ function liveDeckOrphanCheck(): void {
   const orph = orphanedLines(cards, journal)
   assert(orph.n <= orph.total, `осиротевших не может быть больше строк со slug: n=${orph.n} total=${orph.total}`)
   assert(orph.slugs.reduce((a, s) => a + s.n, 0) === orph.n, 'сумма n по слагам должна сходиться с общим n')
-  console.log(`  ⓘ живая колода: ${cards.length} карточек, ${journal.length} строк журнала → осиротевших ${orph.n} из ${orph.total} (${Math.round(orph.share * 100)}%): ${orph.slugs.map(s => `${s.slug} ×${s.n}`).join(', ') || '—'}`)
+  // слаги чтения ('1-01-…', слаг текста, не карточки) не должны просочиться в осиротевшие -
+  // они отфильтрованы ограничением type: 'review'
+  assert(!orph.slugs.some(s => /^\d+-\d+-/.test(s.slug)),
+    `в orph.slugs не должно быть слагов текстов чтения, получено ${JSON.stringify(orph.slugs.filter(s => /^\d+-\d+-/.test(s.slug)))}`)
+  console.log(`  i живая колода: ${cards.length} карточек, ${journal.length} строк журнала, осиротевших ${orph.n} из ${orph.total} (${Math.round(orph.share * 100)}%): ${orph.slugs.map(s => `${s.slug} ×${s.n}`).join(', ') || 'нет'}`)
+  console.log(`  i переработанные пиявки (история обнулена осознанно): ${orph.reworked.map(s => `${s.slug} ×${s.n}`).join(', ') || 'нет'}`)
 
-  group('orphanedLines на живой колоде: считает без ошибок, сумма по слагам сходится с общим счётом')
+  group('orphanedLines на живой колоде: считает без ошибок, сумма по слагам сходится с общим счётом, слаги чтения не просачиваются')
 }
 
 function main(): void {
@@ -430,6 +509,7 @@ function main(): void {
   goalChecks()
   smallSampleChecks()
   intervalChecks()
+  latenessChecks()
   levelDomainChecks()
   speedTypoChecks()
   paceChecks()
