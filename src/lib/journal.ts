@@ -129,11 +129,19 @@ export function readMinutesToday(lines: JournalLine[], today: string = dayKey())
   return readMinutesByDay(lines).get(today) ?? 0
 }
 
-/** Оценок (упражнений) по дням — основа нижнего порога дня. */
+/** Строка журнала, это оценённый ответ (упражнение), а не просто показ.
+ *  Окно знакомства (format 'intro', пишет markIntroduced) рейтинга не даёт (A7):
+ *  это показ нового слова, а не проверка памяти, и он не должен закрывать день. */
+export function isGraded(l: JournalLine): boolean {
+  return l.type === 'review' && typeof l.rating === 'number'
+}
+
+/** Оценок (упражнений) по дням, основа нижнего порога дня.
+ *  Считаем оценки, не показы: окно знакомства рейтинга не даёт (A7) и день не закрывает. */
 export function reviewsByDay(lines: JournalLine[]): Map<string, number> {
   const m = new Map<string, number>()
   for (const l of lines) {
-    if (l.type !== 'review') continue
+    if (!isGraded(l)) continue
     m.set(l.day, (m.get(l.day) ?? 0) + 1)
   }
   return m
