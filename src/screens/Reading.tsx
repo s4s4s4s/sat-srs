@@ -4,7 +4,7 @@ import {
   readingSrc, readTextSlugs, markCount, readingPassed, READING_UNKNOWN_SHARE_MAX
 } from '../lib/journal'
 import { startClock, advance, poke, setActive, flush } from '../lib/readclock'
-import { glossFor, lemmaOf, markedLemmas, orderReadings, paragraphs, readingLevel } from '../lib/reading'
+import { chunkPassages, glossFor, lemmaOf, markedLemmas, orderReadings, paragraphs, readingLevel } from '../lib/reading'
 import Markable from '../components/Markable'
 import { Check, ChevronLeft, Book } from '../components/Icon'
 import { множ } from '../lib/plural'
@@ -31,11 +31,25 @@ function допускФраза(words: number): string {
 
 interface TapInfo { word: string; gloss: GlossEntry | null }
 
+/** Ключ localStorage, под которым хранится номер открытого отрывка этого текста. */
+const fragKey = (slug: string) => `sat-srs-read-frag:${slug}`
+
 function TextView({ text, onBack }: { text: ReadingView; onBack: () => void }) {
   const app = useApp()
   const src = readingSrc(text.slug)
   const marked = useMemo(() => markedLemmas(app.journal, src), [app.journal, src])
-  const parts = useMemo(() => paragraphs(text.text), [text.text])
+  /* Текст на экране показывается отрывками по 120-150 слов (WS10), не всем полотном сразу:
+     единица работы падает с 6-9 минут до одной, и заход на текст умещается в свободную
+     минуту. Часы чтения (`readclock.ts`) и отметки слов работают так же, как раньше: они
+     не знают об отрывках вовсе, потому что живут над всем текстом на экране, а не над куском. */
+  const chunks = useMemo(() => chunkPassages(text.text), [text.text])
+  const [frag, setFrag] = useState(() => {
+    let saved = 0
+    try { saved = Number(localStorage.getItem(fragKey(text.slug))) } catch { /* приватный режим, не критично */ }
+    return Number.isInteger(saved) && saved > 0 && saved < chunks.length ? saved : 0
+  })
+  const isLastFrag = frag >= chunks.length - 1
+  const parts = useMemo(() => paragraphs(chunks[frag] ?? ''), [chunks, frag])
   const marks = markCount(app.journal, src)
   /* Сноска показывается только по касанию и только для последнего слова: глоссарий рядом с
      текстом превратил бы чтение в перевод по словарю — ровно то, ради ухода от чего тексты
@@ -111,21 +125,31 @@ function TextView({ text, onBack }: { text: ReadingView; onBack: () => void }) {
     }
   }
 
+  /** Дальше по отрывкам: чтение продолжается, счёт времени и отметки идут как раньше. */
+  function nextFrag() {
+    const n = frag + 1
+    setFrag(n)
+    try { localStorage.setItem(fragKey(text.slug), String(n)) } catch { /* приватный режим, не критично */ }
+    setTap(null)
+  }
+
   async function finish() {
     setBusy(true)
     setErr('')
     try {
-      /* Часы останавливаются ДО записи: время над карточкой «Текст прочитан» — это уже не
-         чтение. Секунды всего захода уходят в строку прочтения (темп), минуты — отдельной
+      /* Часы останавливаются ДО записи: время над карточкой «Текст прочитан» это уже не
+         чтение. Секунды всего захода уходят в строку прочтения (темп), минуты идут отдельной
          строкой `read` в полосу дня; двойного счёта нет, это разные величины в разных полях. */
       clock.current = setActive(clock.current, Date.now(), false)
       await logTextRead(text, clock.current.total)
       await сдать.current(true)
-      // счёт берём из журнала после записи — тем же способом, что и сама строка (logTextRead),
+      // счёт берём из журнала после записи, тем же способом, что и сама строка (logTextRead),
       // чтобы итог на экране не мог разойтись с тем, что уехало тьютору
       const n = markCount(currentJournal(), src)
       setDone({ marks: n, passed: readingPassed(n, text.words) })
       setTap(null)
+      // текст прочитан целиком: позиция внутри него больше не нужна, повторное чтение начнётся с начала
+      try { localStorage.removeItem(fragKey(text.slug)) } catch { /* приватный режим, не критично */ }
     } catch (e) {
       setErr(`Прочтение не записалось: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
@@ -144,6 +168,7 @@ function TextView({ text, onBack }: { text: ReadingView; onBack: () => void }) {
           а приложение не считает» — ровно эта неразличимость и была дефектом. */}
       <div className="read-meta">
         ступень {text.level} <span className="rsep">·</span> {слов(text.words)}
+        {' '}<span className="rsep">·</span> отрывок {frag + 1} из {chunks.length}
         {' '}<span className="rsep">·</span> отмечено {marks}
         {' '}<span className="rsep">·</span> {минут < 1 ? 'меньше минуты' : `${минут} мин`}
       </div>
@@ -177,9 +202,13 @@ function TextView({ text, onBack }: { text: ReadingView; onBack: () => void }) {
           </div>
           <button className="btn btn-green section-btn" onClick={onBack}>К списку текстов</button>
         </div>
-      ) : (
+      ) : isLastFrag ? (
         <button className="btn btn-green btn-lg read-finish" onClick={() => void finish()} disabled={busy}>
           {busy ? 'Записываю…' : 'Я дочитал'}
+        </button>
+      ) : (
+        <button className="btn btn-green btn-lg read-finish" onClick={nextFrag}>
+          Дальше · осталось {chunks.length - frag - 1}
         </button>
       )}
 

@@ -39,7 +39,7 @@ import { readingsDeletionPlan } from '../src/lib/db'
 import { isCardPath, isReadingPath, readingBase } from '../src/lib/sync'
 import {
   splitSentences, paragraphs, segmentText, markedLemmas, glossFor, lemmaOf,
-  readingLevel, orderReadings, type Segment
+  readingLevel, orderReadings, chunkPassages, CHUNK_MIN_WORDS, CHUNK_MAX_WORDS, type Segment
 } from '../src/lib/reading'
 import { readMinutesToday, readingPaceWpm } from '../src/lib/journal'
 import {
@@ -791,6 +791,110 @@ function orderChecks(): void {
   group('порядок текстов: от текущей ступени вверх, пройденные ступени в хвост')
 }
 
+// ---- отрывки чтения (WS10) --------------------------------------------------
+
+/** Текст из `n` девятисловных предложений подряд, все слова с заглавной буквы: разбор
+ *  предложений («точка, пробел, заглавная») срабатывает на каждой границе без исключений
+ *  из ABBREVIATIONS, а счёт слов детерминирован: по 9 слов на предложение. */
+function makeLongText(sentences: number): string {
+  const out: string[] = []
+  let i = 0
+  for (let s = 0; s < sentences; s++) {
+    const words: string[] = []
+    for (let w = 0; w < 9; w++) { words.push(`Word${i}`); i++ }
+    out.push(words.join(' ') + '.')
+  }
+  return out.join(' ')
+}
+
+function chunkChecks(): void {
+  const text900 = makeLongText(100) // 100 * 9 = 900 слов
+  const chunks = chunkPassages(text900)
+  assert(chunks.length >= 6 && chunks.length <= 8,
+    `900 слов девятисловными предложениями должны дать 6-8 отрывков, вышло ${chunks.length}`)
+  chunks.forEach((c, i) => {
+    const n = c.trim().split(/\s+/).length
+    const isLast = i === chunks.length - 1
+    if (!isLast) assert(n >= CHUNK_MIN_WORDS && n <= CHUNK_MAX_WORDS,
+      `отрывок ${i + 1} из ${chunks.length} вне диапазона ${CHUNK_MIN_WORDS}-${CHUNK_MAX_WORDS}: ${n} слов`)
+    else assert(n <= CHUNK_MAX_WORDS, `последний отрывок не должен превышать верхнюю границу, вышло ${n}`)
+  })
+  const rebuilt = chunks.join(' ').replace(/\s+/g, ' ').trim()
+  const orig = text900.replace(/\s+/g, ' ').trim()
+  assert(rebuilt === orig, 'конкатенация отрывков равна тексту с точностью до пробелов: слова не потеряны и не задвоены')
+  // ни одно предложение не разрезано: каждое предложение целиком лежит внутри одного отрывка
+  for (const s of splitSentences(text900)) {
+    assert(chunks.some(c => c.includes(s)), `предложение «${s.slice(0, 40)}…» оказалось разрезано между отрывками`)
+  }
+  group('chunkPassages: 900 слов дают 6-8 отрывков по 120-150 слов, ни одно предложение не разрезано')
+
+  // формула не разрезается между отрывками: она часть предложения, а предложения не режутся
+  const withFormula = makeLongText(60) + ` If $x^2 + 2x + 1 = 0$, then Word999 holds. ${makeLongText(40)}`
+  const withFormulaChunks = chunkPassages(withFormula)
+  assert(withFormulaChunks.some(c => c.includes('$x^2 + 2x + 1 = 0$')), 'формула цела внутри своего отрывка')
+  assert(withFormulaChunks.join(' ').replace(/\s+/g, ' ').trim() === withFormula.replace(/\s+/g, ' ').trim(),
+    'текст с формулой восстанавливается конкатенацией отрывков без потерь')
+  group('chunkPassages: формула внутри предложения не разрезается между отрывками')
+
+  // короткий текст даёт один отрывок короче нижней границы: резать нечего
+  const short = makeLongText(5) // 45 слов
+  const shortChunks = chunkPassages(short)
+  assert(shortChunks.length === 1 && shortChunks[0].trim().split(/\s+/).length === 45,
+    `текст короче нижней границы остаётся одним отрывком, вышло ${shortChunks.length} отрывков`)
+  group('chunkPassages: текст короче нижней границы не делится вовсе')
+
+  assert(chunkPassages('').length === 0, 'пустой текст отрывков не даёт')
+  group('chunkPassages: пустой текст даёт пустой список')
+}
+
+/** Живые тексты колоды: разбиение держит диапазон на каждом отрывке, кроме последнего. */
+function liveChunkChecks(): boolean {
+  if (!existsSync(TEXTS_DIR)) {
+    skip(`живое разбиение на отрывки не подключалось: каталога ${TEXTS_DIR} нет`)
+    return false
+  }
+  const files = readdirSync(TEXTS_DIR).filter(f => f.endsWith('.md') && !f.startsWith('_'))
+  if (!files.length) {
+    skip(`живое разбиение на отрывки не подключалось: в ${TEXTS_DIR} нет файлов`)
+    return false
+  }
+  let totalChunks = 0
+  const lens: number[] = []
+  for (const f of files) {
+    const raw = readFileSync(path.join(TEXTS_DIR, f), 'utf8')
+    const parsed = parseMd(raw)
+    const v = readingView({ path: `Учёба/Чтение/${f}`, sha: 'live', fm: parsed.fm, body: parsed.body, broken: parsed.broken })
+    if (v.broken) continue
+    const chunks = chunkPassages(v.text)
+    assert(chunks.length > 0, `${f}: разбиение не должно давать пустой список`)
+    const rebuilt = chunks.join(' ').replace(/\s+/g, ' ').trim()
+    const orig = v.text.replace(/\s+/g, ' ').trim()
+    assert(rebuilt === orig, `${f}: конкатенация отрывков разошлась с текстом`)
+    chunks.forEach((c, i) => {
+      const n = c.trim().split(/\s+/).length
+      lens.push(n)
+      totalChunks++
+      /* Нижняя граница держит каждый отрывок, кроме последнего, безусловно: недобор не
+         допускается никогда (см. chunkPassages). Верхняя граница мягкая: предложение не
+         режется, и одно длинное предложение (формула, перечисление) может увести отрывок
+         за 150; запас с большим допуском (2x) стережёт алгоритмическую ошибку, а не саму
+         возможность превышения. */
+      if (i < chunks.length - 1) {
+        assert(n >= CHUNK_MIN_WORDS,
+          `${f}: отрывок ${i + 1} из ${chunks.length} короче нижней границы ${CHUNK_MIN_WORDS}: ${n} слов`)
+        assert(n <= CHUNK_MAX_WORDS * 2,
+          `${f}: отрывок ${i + 1} из ${chunks.length} чрезмерно превышает верхнюю границу: ${n} слов`)
+      } else {
+        assert(n <= CHUNK_MAX_WORDS * 2, `${f}: последний отрывок чрезмерно длинный: ${n} слов`)
+      }
+    })
+  }
+  lens.sort((a, b) => a - b)
+  const median = lens[Math.floor(lens.length / 2)]
+  group(`живые тексты: ${totalChunks} отрывков на ${files.length} файлах, мин ${lens[0]} / медиана ${median} / макс ${lens[lens.length - 1]}`)
+  return true
+}
+
 function paragraphChecks(): void {
   const body = 'First line\nsame paragraph.\n\nSecond paragraph.\n\n\n  Third.  \n'
   const ps = paragraphs(body)
@@ -932,6 +1036,21 @@ function screenChecks(): void {
     'тик часов не чаще пяти секунд: рендер на каждую секунду ради целых минут не нужен')
   group('структурно: экран чтения меряет время и сдаёт его при сворачивании')
 
+  // WS10: экран показывает текст отрывками; часы над отрывком не сбрасываются переходом
+  // «дальше», секунды всего захода копятся в одном clock.current и уходят одной строкой
+  // read_s по завершении последнего отрывка (R10: сумма секунд по отрывкам = read_s строки).
+  assert(reading.includes('chunkPassages'), 'экран режет текст на отрывки функцией слоя данных, а не своим кодом')
+  assert(/отрывок\s*\{frag \+ 1\}\s*из\s*\{chunks\.length\}/.test(reading.replace(/\s+/g, ' ')),
+    'на экране виден номер отрывка и их общее число')
+  const nextFrag = funcBody(reading, 'function nextFrag')
+  assert(!/startClock|flush\(/.test(nextFrag),
+    'переход к следующему отрывку не трогает часы чтения: секунды копятся непрерывно через весь текст')
+  assert(/localStorage\.setItem\(fragKey/.test(nextFrag), 'позиция внутри текста сохраняется локально на устройстве')
+  const finishBody = funcBody(reading, 'async function finish')
+  assert(/logTextRead\(text,\s*clock\.current\.total\)/.test(finishBody),
+    'секунды всего захода (по всем отрывкам) уходят в строку прочтения по завершении последнего отрывка')
+  group('структурно: отрывки чтения не трогают часы, позиция отрывка хранится на устройстве')
+
   const review = screenSource('Review.tsx')
   assert(review.includes('cardSrc('), 'отметка в упражнении уходит в источник карточки')
   assert(!review.includes('readingSrc'), 'упражнение не пишет в источник текста: порог понятности считается по своим отметкам')
@@ -968,11 +1087,13 @@ function main(): void {
   levelChecks()
   orderChecks()
   paragraphChecks()
+  chunkChecks()
   readClockChecks()
   structureChecks()
   screenChecks()
   const live = liveTextsChecks()
-  console.log(`\nВсе проверки чтения пройдены (${passed} групп)${live ? '' : ', живые тексты не подключались'}.`)
+  const liveChunks = liveChunkChecks()
+  console.log(`\nВсе проверки чтения пройдены (${passed} групп)${live && liveChunks ? '' : ', часть живых проверок не подключалась'}.`)
 }
 
 try {
