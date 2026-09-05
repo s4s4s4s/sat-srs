@@ -131,29 +131,93 @@ function attemptsFor(journal: JournalLine[], qid: string): JournalLine[] {
 }
 
 /**
+ * Лёгкий график повтора вопроса практики (P5, WS4). У вопроса нет FSRS (см. заголовок файла),
+ * но и «однажды решил, больше никогда не увидишь» неверно другим боком: 122 вопроса банка
+ * College Board отвечены дважды, и повтор через месяц-другой всё ещё проверяет узнавание
+ * формата, а не память об ответе. Поэтому график простой и не FSRS: два срока по последней
+ * попытке, не по истории целиком - только что вспомнил хуже, чем вспоминал раньше.
+ */
+export const PRACTICE_RETRY_WRONG_DAYS = 2
+export const PRACTICE_RETRY_RIGHT_DAYS = 8
+
+/** Учебный день, с которого вопрос снова готов к повтору (по последней попытке). */
+function retryDayOf(last: JournalLine): string {
+  const days = last.correct === true ? PRACTICE_RETRY_RIGHT_DAYS : PRACTICE_RETRY_WRONG_DAYS
+  return addDaysKey(last.day, days)
+}
+
+/**
  * Очередь вопросов на сессию практики.
  *
- * Порядок групп: 1) вопросы, которых в журнале не было ни разу; 2) вопросы, на которых был
- * хотя бы один неверный ответ и НИ ОДНОГО верного — от самых давних (по времени первой попытки);
- * 3) уже верно решённые — только когда групп 1–2 не хватает на весь список.
+ * Порядок групп: 1) вопросы, которых в журнале не было ни разу (свежие); 2) отвеченные
+ * вопросы, для которых срок повтора уже наступил, от самых просроченных; 3) отвеченные
+ * вопросы, которым рано (график ещё не истёк) - хвостом, тоже по сроку.
  *
- * Функция чистая и детерминированная: все данные приходят аргументами, состояние она не читает.
+ * Прежняя версия отправляла верно решённый вопрос в группу 3 НАВСЕГДА, не зная времени -
+ * это и есть баг из goal WS4. Теперь у верного и у неверного ответа есть срок годности
+ * (`PRACTICE_RETRY_RIGHT_DAYS`/`PRACTICE_RETRY_WRONG_DAYS`), и по его истечении вопрос
+ * возвращается в группу «к повтору», а не остаётся похороненным в хвосте.
+ *
+ * `moduleQueue` берёт из этой же очереди первые вопросы модуля, поэтому группа 3
+ * (ещё не созревшие) не выбрасывается вовсе: в банке меньше `MODULE_QUESTIONS` вопросов,
+ * и очередь обязана отдать все имеющиеся, даже недавно отвеченные.
+ *
+ * Функция чистая и детерминированная: все данные приходят аргументами, состояние она не читает;
+ * `now` - точка отсчёта «сегодня» (учебный день, `dayKey`), по умолчанию текущий момент.
  */
-export function pickPractice(views: QuestionView[], journal: JournalLine[], filter?: PracticeFilter): QuestionView[] {
+export function pickPractice(
+  views: QuestionView[],
+  journal: JournalLine[],
+  filter?: PracticeFilter,
+  now: Date = new Date()
+): QuestionView[] {
+  const today = dayKey(now)
   const fresh: QuestionView[] = []
-  const wrong: { v: QuestionView; first: string }[] = []
-  const solved: QuestionView[] = []
+  const due: { v: QuestionView; retryDay: string }[] = []
+  const notYet: { v: QuestionView; retryDay: string }[] = []
 
   for (const v of views) {
     if (v.broken || !matchesFilter(v, filter)) continue
     const attempts = attemptsFor(journal, v.qid)
     if (!attempts.length) { fresh.push(v); continue }
-    if (attempts.some(a => a.correct === true)) { solved.push(v); continue }
-    wrong.push({ v, first: attempts[0].ts })
+    const retryDay = retryDayOf(attempts[attempts.length - 1])
+    ;(retryDay <= today ? due : notYet).push({ v, retryDay })
   }
 
-  wrong.sort((a, b) => a.first.localeCompare(b.first))
-  return [...fresh, ...wrong.map(w => w.v), ...solved]
+  const byRetryDay = (a: { retryDay: string; v: QuestionView }, b: { retryDay: string; v: QuestionView }) =>
+    a.retryDay.localeCompare(b.retryDay) || a.v.qid.localeCompare(b.v.qid)
+  due.sort(byRetryDay)
+  notYet.sort(byRetryDay)
+
+  return [...fresh, ...due.map(d => d.v), ...notYet.map(d => d.v)]
+}
+
+/** Сколько отвеченных вопросов созрели для повтора именно сегодня (для подписи блока практики). */
+export function practiceDue(views: QuestionView[], journal: JournalLine[], now: Date = new Date()): number {
+  const today = dayKey(now)
+  let due = 0
+  for (const v of views) {
+    if (v.broken) continue
+    const attempts = attemptsFor(journal, v.qid)
+    if (!attempts.length) continue // свежий вопрос - не «повтор», а первое знакомство
+    if (retryDayOf(attempts[attempts.length - 1]) <= today) due++
+  }
+  return due
+}
+
+/**
+ * Режим модуля (D5): 27 вопросов подряд под общим бюджетом времени, как модуль RW
+ * настоящего цифрового SAT. `PACE_SEC` - мягкий темп на один вопрос (не жёсткий лимит,
+ * экран его не блокирует), согласован с бюджетом модуля: `MODULE_SECONDS / MODULE_QUESTIONS`
+ * округляется ровно до него.
+ */
+export const MODULE_QUESTIONS = 27
+export const MODULE_SECONDS = 32 * 60 // 1920 с = 32 мин
+export const PACE_SEC = 71 // MODULE_SECONDS / MODULE_QUESTIONS ≈ 71.1
+
+/** Первые `MODULE_QUESTIONS` из общей очереди практики, очередь не переставляется по-своему. */
+export function moduleQueue(views: QuestionView[], journal: JournalLine[], now: Date = new Date()): QuestionView[] {
+  return pickPractice(views, journal, undefined, now).slice(0, MODULE_QUESTIONS)
 }
 
 /** Сводка по одному разрезу (весь набор или один навык). */
@@ -208,11 +272,18 @@ export interface WeekPracticeStats {
   accuracy: number | null  // доля верных ПОПЫТОК среди них, 0..100; null — попыток не было
 }
 
+/** Разрез по темпу (мягкий таймер PACE_SEC): сколько измеренных попыток и сколько из них за бюджетом. */
+export interface PacePracticeStats {
+  measured: number  // попытки с известным sec
+  slow: number      // из них - те, что превысили PACE_SEC (поле slow в строке журнала)
+}
+
 /** Разрезы практики сверх `practiceStats`: по сложности, за неделю, по времени ответа. */
 export interface PracticeBreakdown {
   byDifficulty: Record<string, PracticeGroupStats>
   week: WeekPracticeStats
-  avgSec: number | null    // среднее время на попытку по строкам, где sec известен; null — таких нет
+  avgSec: number | null    // среднее время на попытку по строкам, где sec известен; null - таких нет
+  pace: PacePracticeStats
 }
 
 /**
@@ -237,10 +308,11 @@ export function practiceBreakdown(views: QuestionView[], journal: JournalLine[],
   let weekCorrect = 0
   let secSum = 0
   let secN = 0
+  let slowN = 0
 
   for (const l of journal) {
     if (l.type !== 'practice' || !l.qid || !validQids.has(l.qid)) continue
-    if (typeof l.sec === 'number') { secSum += l.sec; secN++ }
+    if (typeof l.sec === 'number') { secSum += l.sec; secN++; if (l.slow) slowN++ }
     if (!l.day || l.day < from || l.day > today) continue
     weekAttempts++
     if (l.correct === true) weekCorrect++
@@ -249,6 +321,7 @@ export function practiceBreakdown(views: QuestionView[], journal: JournalLine[],
   return {
     byDifficulty,
     week: { attempts: weekAttempts, accuracy: weekAttempts ? Math.round((weekCorrect / weekAttempts) * 100) : null },
-    avgSec: secN ? secSum / secN : null
+    avgSec: secN ? secSum / secN : null,
+    pace: { measured: secN, slow: slowN }
   }
 }

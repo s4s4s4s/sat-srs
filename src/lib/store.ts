@@ -4,7 +4,7 @@ import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm, readingView, slugFromPath } from './yamlfm'
-import { questionView } from './practice'
+import { questionView, PACE_SEC } from './practice'
 import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, dueCap, type Section, type TypeVerdict } from './scheduler'
 import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
@@ -623,7 +623,9 @@ export async function logPractice(view: QuestionView, chose: string, seconds = 0
     v: 1, type: 'practice', ts: isoLocal(now), ms: now.getMilliseconds(), day: dayKey(),
     qid: view.qid, skill: view.skill, difficulty: view.difficulty, chose: letter, synced: 0,
     ...(view.answer ? { correct: letter === view.answer } : {}),
-    ...(seconds > 0 ? { sec: Math.round(seconds) } : {})
+    ...(seconds > 0 ? { sec: Math.round(seconds) } : {}),
+    // мягкий таймер (PACE_SEC, D5): флаг темпа, а не запрет - ответ пишется как есть
+    ...(seconds > PACE_SEC ? { slow: true } : {})
   }
   await db.putJournal([line])
   state.journal = [...state.journal, line]

@@ -7,7 +7,7 @@ import { stageCounts, type WordStage } from '../lib/wordstatus'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt, Book } from '../components/Icon'
 import { readingLevel } from '../lib/reading'
-import { practiceStats, type PracticeStats } from '../lib/practice'
+import { practiceStats, practiceDue, type PracticeStats } from '../lib/practice'
 import FlameBuddy from '../components/FlameBuddy'
 import FjordScene from '../components/FjordScene'
 import { множ } from '../lib/plural'
@@ -122,13 +122,17 @@ function ReadingBlock({ texts, read, level, onOpen }: {
 }
 
 /**
- * Практика — пятый блок рядом с разделами колоды и чтением.
+ * Практика - пятый блок рядом с разделами колоды и чтением.
  *
  * Тот же приём, что у `ReadingBlock`: у вопроса нет FSRS, показывать «повторить» и «новых»
- * нечего — есть решённые вопросы и точность среди них. Подпись кнопки — счётчик оставшихся,
+ * нечего - есть решённые вопросы и точность среди них. Подпись кнопки - счётчик оставшихся,
  * тем же способом, что у чтения (`left`), а не выдуманное число.
+ *
+ * `due` (WS4, `practiceDue`) - сколько отвеченных вопросов созрели для повтора по лёгкому
+ * графику практики; показывается рядом со свежими только подписью, зачёт дня в счётчики
+ * дневной цели не входит (это делает WS6a).
  */
-function PracticeBlock({ stats, onOpen }: { stats: PracticeStats; onOpen: () => void }) {
+function PracticeBlock({ stats, due, onOpen }: { stats: PracticeStats; due: number; onOpen: () => void }) {
   const left = stats.total - stats.solved
   return (
     <div className="card section-card">
@@ -137,7 +141,10 @@ function PracticeBlock({ stats, onOpen }: { stats: PracticeStats; onOpen: () => 
         <span className="hero-title section-title">
           <span className="sec-badge badge-blue"><Check size={18} /></span> Практика
         </span>
-        <span className="hero-sub">{stats.total ? `${stats.correct}/${stats.total} верно` : 'пока пусто'}</span>
+        <span className="hero-sub">
+          {stats.total ? `${stats.correct}/${stats.total} верно` : 'пока пусто'}
+          {due > 0 ? ` · к повтору ${due}` : ''}
+        </span>
       </div>
       <div className="stats3">
         <div className={`stat stat-new${left ? '' : ' is-zero'}`}><div className="n">{left}</div><div className="t">осталось</div></div>
@@ -253,6 +260,7 @@ export default function Home() {
   const readSlugs = readTextSlugs(app.journal)
   const readLevel = readingLevel(texts, readSlugs)
   const practice = practiceStats(questionViews(), app.journal)
+  const practiceDueCount = practiceDue(questionViews(), app.journal)
 
   const rwStats = levelStats(rw)
   const rwActive = activeLevel(rw)
@@ -383,7 +391,7 @@ export default function Home() {
       <SectionBlock title="Грамматика" icon={<span className="sec-x">¶</span>} badge="badge-green" glyph="var(--rune-ansuz)" cards={grammar} budget={budgetGrammar} extraBudget={extraGrammar} onStart={go('grammar')} onReview={go('grammar', true)} onExtra={goExtra('grammar')} />
       <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budgetMath} extraBudget={extraMath} onStart={go('math')} onReview={go('math', true)} onExtra={goExtra('math')} />
       <ReadingBlock texts={texts} read={readSlugs} level={readLevel} onOpen={() => setScreen('reading')} />
-      <PracticeBlock stats={practice} onOpen={() => setScreen('practice')} />
+      <PracticeBlock stats={practice} due={practiceDueCount} onOpen={() => setScreen('practice')} />
 
       <div className="home-actions">
         <div className="row">

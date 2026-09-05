@@ -222,6 +222,11 @@ export interface JournalLine {
   difficulty?: string  // сложность вопроса на момент ответа (fm.difficulty)
   chose?: string       // буква, которую выбрал ученик (A|B|C|D)
   sec?: number         // секунды над вопросом; отсутствует у неизмеренных ответов
+  /* Флаг мягкого таймера (D5, PACE_SEC в practice.ts): true, если ответ пришёл после 71 с
+     над вопросом. Таймер ничего не блокирует и не аннулирует ответ - это только отметка
+     темпа для разреза practiceBreakdown, добавлено поле, старые строки без него читаются
+     как "в темпе" (правило D3: только добавление полей). */
+  slow?: boolean
 }
 
 export interface JournalRec extends JournalLine {

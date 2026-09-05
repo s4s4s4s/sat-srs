@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp, questionViews, logPractice, setScreen, toggleWordMark } from '../lib/store'
-import { pickPractice, practiceStats, type PracticeFilter } from '../lib/practice'
+import {
+  pickPractice, practiceStats, practiceDue, moduleQueue, MODULE_QUESTIONS, MODULE_SECONDS, PACE_SEC,
+  type PracticeFilter
+} from '../lib/practice'
 import { parseStemBlocks, rationaleText } from '../lib/practiceView'
 import { questionSrc } from '../lib/journal'
 import { markedLemmas, type Segment } from '../lib/reading'
@@ -54,7 +57,7 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
   index: number
   total: number
   onExit: () => void
-  onDone: (correct: boolean | null) => void
+  onDone: (correct: boolean | null, seconds: number, overPace: boolean) => void
 }) {
   const app = useApp()
   const [picked, setPicked] = useState<QuestionView['choices'][number]['letter'] | null>(null)
@@ -63,6 +66,21 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
   // защита от двойной записи: подтверждение одним тапом уже отсекает случайный ответ на
   // длинном варианте, но повторный рендер того же вопроса не должен писать вторую строку
   const logged = useRef(false)
+
+  /* Мягкий таймер темпа (D5, PACE_SEC): полоса растёт до 71 с и меняет цвет по истечении,
+     ответ она НЕ блокирует и НЕ засчитывает неверным - это единственно честный вариант
+     для практики без FSRS, где превышение темпа лишь пишется в журнал строкой `slow`.
+     Тик каждую секунду только пока вопрос не подтверждён - после ответа полоса не нужна,
+     а таймер и не должен продолжать идти. */
+  const [, forceTick] = useState(0)
+  useEffect(() => {
+    if (confirmed) return
+    const id = setInterval(() => forceTick(t => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [confirmed, view.path])
+  const elapsedSec = (Date.now() - shownAt.current) / 1000
+  const overPaceNow = elapsedSec > PACE_SEC
+  const paceWidth = Math.min(100, (elapsedSec / PACE_SEC) * 100)
 
   /* Отметка незнакомого слова. Источник — `question:<qid>` (journal.questionSrc): слово из
      настоящего вопроса банка College Board — отдельный сигнал от слова из карточки колоды.
@@ -97,12 +115,19 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
     setMarkError('')
   }, [view.path])
 
+  // время и темп фиксируются в момент подтверждения ответа, а не при переходе к следующему
+  // вопросу: пока ученик читает разбор, часы бы продолжали идти и завышали темп задним числом
+  const answeredSec = useRef(0)
+  const answeredOver = useRef(false)
+
   function confirm() {
     if (!picked || confirmed) return
     setConfirmed(true)
     if (!logged.current) {
       logged.current = true
       const seconds = (Date.now() - shownAt.current) / 1000
+      answeredSec.current = seconds
+      answeredOver.current = seconds > PACE_SEC
       void logPractice(view, picked, seconds)
     }
   }
@@ -116,6 +141,14 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
         <button className="iconbtn" onClick={onExit} aria-label="Завершить сессию"><ChevronLeft /></button>
         <h2>Практика · {index + 1}/{total}</h2>
       </div>
+
+      {/* Мягкий темп: полоса растёт до PACE_SEC (71 с) и меняет цвет по истечении, ответ
+          она не блокирует и не отменяет - таймер только заканчивает экзамен, не отбирает время. */}
+      {!confirmed && (
+        <div className={`prac-pace${overPaceNow ? ' is-over' : ''}`} aria-hidden="true">
+          <div className="prac-pace-fill" style={{ width: `${paceWidth}%` }} />
+        </div>
+      )}
 
       <div className="card">
         <div className="prac-meta">{view.skill}{view.difficulty ? ` · ${view.difficulty}` : ''}</div>
@@ -184,7 +217,7 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
             {known && !correct && <span className="hero-sub">правильный ответ — {view.answer}</span>}
           </div>
           <div className="prac-rationale"><Markable text={rationaleText(view)} isMarked={isMarked} onWord={markWord} /></div>
-          <button className="btn btn-green btn-lg" onClick={() => onDone(correct)}>
+          <button className="btn btn-green btn-lg" onClick={() => onDone(correct, answeredSec.current, answeredOver.current)}>
             {index + 1 < total ? 'Следующий вопрос' : 'Итог сессии'}
           </button>
         </div>
@@ -200,12 +233,18 @@ interface Session {
   idx: number
   answered: number
   correct: number
+  mode: 'free' | 'module'
+  startedAt: number
+  sumSec: number
+  overCount: number
 }
 
 export default function Practice() {
   const app = useApp()
   const views = questionViews()
   const stats = useMemo(() => practiceStats(views, app.journal), [views, app.journal])
+  const due = useMemo(() => practiceDue(views, app.journal), [views, app.journal])
+  const freshCount = stats.total - stats.solved
   const skills = useMemo(
     () => Array.from(new Set(views.map(v => v.skill).filter(Boolean))).sort(),
     [views]
@@ -223,21 +262,56 @@ export default function Practice() {
   )
   const [session, setSession] = useState<Session | null>(null)
 
-  function start() {
-    if (!available.length) return
-    setSession({ queue: available, idx: 0, answered: 0, correct: 0 })
+  function start(mode: 'free' | 'module') {
+    // модуль имитирует настоящий проход RW и не сужается фильтром навыка/сложности -
+    // это отдельный режим, а не «начать практику» с предустановленными чипами
+    const queue = mode === 'module' ? moduleQueue(views, app.journal) : available
+    if (!queue.length) return
+    setSession({ queue, idx: 0, answered: 0, correct: 0, mode, startedAt: Date.now(), sumSec: 0, overCount: 0 })
   }
 
-  function done(correct: boolean | null) {
+  function done(correct: boolean | null, seconds: number, overPace: boolean) {
     setSession(s => s && {
-      queue: s.queue,
+      ...s,
       idx: s.idx + 1,
       answered: s.answered + 1,
-      correct: s.correct + (correct ? 1 : 0)
+      correct: s.correct + (correct ? 1 : 0),
+      sumSec: s.sumSec + seconds,
+      overCount: s.overCount + (overPace ? 1 : 0)
     })
   }
 
-  if (session && session.idx < session.queue.length) {
+  // счётчик общего бюджета модуля тикает раз в секунду, только пока модуль ещё идёт -
+  // это отдельные часы от таймера одного вопроса (PACE_SEC), считающие целиком заход
+  const [, forceModuleTick] = useState(0)
+  const moduleRunning = !!session && session.mode === 'module' && session.idx < session.queue.length
+  useEffect(() => {
+    if (!moduleRunning) return
+    const id = setInterval(() => forceModuleTick(t => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [moduleRunning])
+  const moduleElapsedSec = session?.mode === 'module' ? (Date.now() - session.startedAt) / 1000 : 0
+  const moduleTimeUp = session?.mode === 'module' && moduleElapsedSec >= MODULE_SECONDS
+
+  if (session && session.mode === 'module' && !moduleTimeUp && session.idx < session.queue.length) {
+    const remaining = Math.max(0, Math.round(MODULE_SECONDS - moduleElapsedSec))
+    return (
+      <>
+        <div className="prac-module-clock" aria-live="polite">
+          {String(Math.floor(remaining / 60)).padStart(2, '0')}:{String(remaining % 60).padStart(2, '0')} до конца модуля
+        </div>
+        <QuestionScreen
+          view={session.queue[session.idx]}
+          index={session.idx}
+          total={session.queue.length}
+          onExit={() => setSession(null)}
+          onDone={done}
+        />
+      </>
+    )
+  }
+
+  if (session && session.mode === 'free' && session.idx < session.queue.length) {
     return (
       <QuestionScreen
         view={session.queue[session.idx]}
@@ -250,6 +324,11 @@ export default function Practice() {
   }
 
   if (session) {
+    // сводка модуля (D5): успел ли, точность, среднее время на вопрос, сколько ответов
+    // ушло за мягкий бюджет темпа (PACE_SEC) - именно эти четыре числа просит goal WS4
+    const finishedAll = session.idx >= session.queue.length
+    const accuracy = session.answered ? Math.round((session.correct / session.answered) * 100) : null
+    const avgSec = session.answered ? Math.round(session.sumSec / session.answered) : null
     return (
       <div className="screen s-practice">
         <div className="page-title">
@@ -257,12 +336,25 @@ export default function Practice() {
           <h2>Итог сессии</h2>
         </div>
         <div className="card sum-wrap">
-          <h2 className="sum-title">Сессия закончена</h2>
+          <h2 className="sum-title">{session.mode === 'module' ? 'Модуль закончен' : 'Сессия закончена'}</h2>
+          {session.mode === 'module' && (
+            <div className="sum-sub">
+              {finishedAll
+                ? `Успел: ${session.answered} из ${session.queue.length}`
+                : `Не успел: ${session.answered} из ${session.queue.length} за ${Math.round(MODULE_SECONDS / 60)} мин`}
+            </div>
+          )}
           <div className="sum-sub">
             {session.answered === 0
               ? 'ни один вопрос не отвечен'
-              : `${session.correct} из ${session.answered} верно`}
+              : `${session.correct} из ${session.answered} верно${accuracy !== null ? ` (${accuracy}%)` : ''}`}
           </div>
+          {avgSec !== null && (
+            <div className="sum-sub">
+              среднее время на вопрос: {avgSec} с
+              {session.mode === 'module' && ` (за бюджетом ${PACE_SEC} с: ${session.overCount})`}
+            </div>
+          )}
           <button className="btn btn-green btn-lg" onClick={() => setSession(null)}>К практике</button>
         </div>
       </div>
@@ -283,7 +375,7 @@ export default function Practice() {
           <div className="card hero hero-slim">
             <div className="hero-head">
               <span className="hero-title">Всего вопросов</span>
-              <span className="hero-sub">{stats.total}</span>
+              <span className="hero-sub">к повтору {due} · свежих {freshCount}</span>
             </div>
             <div className="minbar-row" style={{ marginTop: 10 }}>
               <div className="minbar"><div style={{ width: `${stats.total ? Math.min(100, (stats.solved / stats.total) * 100) : 0}%` }} /></div>
@@ -338,8 +430,21 @@ export default function Practice() {
             </div>
           )}
 
-          <button className="btn btn-green btn-lg" onClick={start} disabled={available.length === 0}>
-            {available.length === 0 ? 'Под этот фильтр вопросов нет' : `Начать практику · ${available.length}`}
+          <button className="btn btn-green btn-lg" onClick={() => start('free')} disabled={available.length === 0}>
+            {available.length === 0
+              ? 'Под этот фильтр вопросов нет'
+              : due > 0 && freshCount === 0
+                ? `Повторить · ${due}`
+                : `Начать практику · ${available.length}`}
+          </button>
+          {/* Режим модуля (D5): 27 вопросов подряд с общим бюджетом 32 минуты, как модуль RW
+              настоящего цифрового SAT - независимо от чипов навыка/сложности выше. */}
+          <button
+            className="btn btn-white btn-lg prac-module-btn"
+            onClick={() => start('module')}
+            disabled={stats.total === 0}
+          >
+            Режим модуля · {Math.min(MODULE_QUESTIONS, stats.total)} вопросов, {Math.round(MODULE_SECONDS / 60)} мин
           </button>
         </>
       )}

@@ -170,11 +170,38 @@ function screenChecks(): void {
   group('структурно: до ответа разметка есть только в условии, вариант выбирается кнопкой целиком')
 }
 
+// ---- мягкий таймер темпа (P6, PACE_SEC) и режим модуля ------------------------
+
+function paceAndModuleChecks(): void {
+  const prac = screenSource('Practice.tsx')
+
+  // индикатор темпа читает константу из lib/practice, а не переносит литерал 71 в экран
+  assert(/from\s+'\.\.\/lib\/practice'/.test(prac) && prac.includes('PACE_SEC'),
+    'экран берёт PACE_SEC из lib/practice, а не заводит собственное число')
+  assert(!/71\s*[,)]/.test(prac.replace(/PACE_SEC/g, '')),
+    'секунды мягкого темпа не продублированы литералом 71 где-то ещё в экране')
+  group('структурно: мягкий таймер темпа читает PACE_SEC из lib/practice')
+
+  // таймер не блокирует ответ: кнопка «Ответить» зависит только от выбора варианта
+  assert(/disabled={!picked}/.test(prac),
+    'кнопка «Ответить» отключена только отсутствием выбора, а не таймером')
+  assert(!/disabled=\{[^}]*(elapsedSec|overPace|Pace)[^}]*\}/.test(prac),
+    'в исходнике нет блокировки ответа по времени (elapsedSec/overPace) - мягкий таймер ничего не запрещает')
+  group('структурно: мягкий таймер не блокирует и не отменяет ответ')
+
+  // режим модуля: своя очередь через moduleQueue, свой бюджет времени MODULE_SECONDS
+  assert(prac.includes('moduleQueue('), 'режим модуля строит очередь через moduleQueue, а не вручную')
+  assert(prac.includes('MODULE_SECONDS') && prac.includes('MODULE_QUESTIONS'),
+    'бюджет и число вопросов модуля берутся из констант lib/practice, а не литералами')
+  group('структурно: режим модуля использует moduleQueue и его константы, а не самодельные числа')
+}
+
 function main(): void {
   console.log('SRS практика — экран: разбор условия, отсутствующий разбор, очередь и порядок вариантов')
   stemChecks()
   rationaleChecks()
   screenChecks()
+  paceAndModuleChecks()
   console.log(`\nВсе проверки экрана практики пройдены (${passed} групп).`)
 }
 

@@ -26,7 +26,10 @@
 import 'fake-indexeddb/auto'
 import { openDB } from 'idb'
 import { parseMd } from '../src/lib/yamlfm'
-import { parseQuestionBody, questionView, pickPractice, practiceStats, practiceBreakdown } from '../src/lib/practice'
+import {
+  parseQuestionBody, questionView, pickPractice, practiceStats, practiceBreakdown,
+  practiceDue, moduleQueue, MODULE_QUESTIONS, MODULE_SECONDS, PACE_SEC
+} from '../src/lib/practice'
 import { getAllCards, getAllJournal, getAllReadings, getAllQuestions, applyQuestionsPull, kvGet } from '../src/lib/db'
 import type { JournalLine, QuestionRec, QuestionView } from '../src/lib/types'
 
@@ -69,13 +72,17 @@ function view(qid: string, over: Partial<QuestionView> = {}): QuestionView {
 let idSeq = 0
 function practiceLine(o: Partial<JournalLine> & { qid: string }): JournalLine {
   idSeq++
+  const ts = o.ts ?? '2026-08-24T10:00:00+04:00'
+  // day по умолчанию берётся из ts (первые 10 символов ISO), а не из отдельной константы:
+  // в реальном журнале day и ts всегда пишутся из одного `now` (см. logPractice в store.ts),
+  // и фикстура с расходящимися day/ts маскировала бы ошибки в графике повтора (P5)
   return {
     id: `p-${idSeq}`,
     v: 1,
     type: 'practice',
-    ts: '2026-08-24T10:00:00+04:00',
+    ts,
     ms: 0,
-    day: '2026-08-24',
+    day: ts.slice(0, 10),
     skill: 'Rhetorical Synthesis',
     difficulty: 'Medium',
     chose: 'A',
@@ -208,8 +215,12 @@ function pickChecks(): void {
   assert(empty.map(v => v.qid).join() === 'q1,q2,q3,q4', 'без истории порядок сохраняется как во входном списке')
   group('pickPractice: пустой журнал отдаёт все небитые вопросы')
 
+  // now зафиксирован (2026-08-24): q1 (последняя попытка верная 08-21, срок +8 = 08-29) ещё
+  // не созрел и на эту дату уходит в третью группу; q3 (промах 08-10, срок +2 = 08-12) и
+  // q2 (промах 08-15, срок +2 = 08-17) оба уже созрели, отсортированы по сроку
+  const now = new Date('2026-08-24T12:00:00+04:00')
   const journal: JournalLine[] = [
-    // q1 сначала ответили неверно, потом верно — считается решённым верно, уходит в конец
+    // q1 сначала ответили неверно, потом верно - последняя попытка решает график повтора
     practiceLine({ qid: 'q1', ts: '2026-08-20T10:00:00+04:00', correct: false }),
     practiceLine({ qid: 'q1', ts: '2026-08-21T10:00:00+04:00', correct: true }),
     // q3 неверно давно
@@ -218,22 +229,90 @@ function pickChecks(): void {
     practiceLine({ qid: 'q2', ts: '2026-08-15T10:00:00+04:00', correct: false })
     // q4 в журнале не встречается вовсе
   ]
-  const mixed = pickPractice(views, journal)
+  const mixed = pickPractice(views, journal, undefined, now)
   assert(mixed.map(v => v.qid).join() === 'q4,q3,q2,q1',
-    `новый вопрос впереди, неверные — от самых давних, верно решённый — в конце; получено ${mixed.map(v => v.qid).join()}`)
-  group('pickPractice: новые впереди, неверные по давности, верно решённые — в конец')
+    `новый впереди, созревшие к повтору - от самых просроченных, ещё не созревший верный - в хвосте; получено ${mixed.map(v => v.qid).join()}`)
+  group('pickPractice: новые впереди, созревшие к повтору по давности, ещё не созревшие - в хвост')
 
-  const bySkill = pickPractice(views, journal, { skill: 'Command of Evidence' })
+  const bySkill = pickPractice(views, journal, { skill: 'Command of Evidence' }, now)
   assert(bySkill.length === 1 && bySkill[0].qid === 'q2', 'фильтр по навыку сужает очередь')
-  const byDifficulty = pickPractice(views, journal, { difficulty: 'Hard' })
+  const byDifficulty = pickPractice(views, journal, { difficulty: 'Hard' }, now)
   assert(byDifficulty.length === 1 && byDifficulty[0].qid === 'q4', 'фильтр по сложности сужает очередь')
-  const both = pickPractice(views, journal, { skill: 'Rhetorical Synthesis', difficulty: 'Medium' })
+  const both = pickPractice(views, journal, { skill: 'Rhetorical Synthesis', difficulty: 'Medium' }, now)
   assert(both.map(v => v.qid).join() === 'q3,q1', 'фильтр по навыку и сложности одновременно применяется вместе')
-  const none = pickPractice(views, journal, { skill: 'нет такого' })
+  const none = pickPractice(views, journal, { skill: 'нет такого' }, now)
   assert(none.length === 0, 'фильтр без совпадений отдаёт пустую очередь, а не падает')
   group('pickPractice: фильтр по навыку и по сложности')
 
-  assert(pickPractice([], []).length === 0, 'пустой список вопросов — пустая очередь')
+  assert(pickPractice([], []).length === 0, 'пустой список вопросов - пустая очередь')
+}
+
+// ---- график повтора (P5): промах через PRACTICE_RETRY_WRONG_DAYS, верный - через PRACTICE_RETRY_RIGHT_DAYS
+function retryScheduleChecks(): void {
+  const qf = view('qf') // свежий, ни разу не отвечен
+  const qw = view('qw') // промах 2026-09-05, срок +2 = 2026-09-07
+  const qr = view('qr') // верно 2026-09-01, срок +8 = 2026-09-09
+  const views = [qf, qw, qr]
+  const journal: JournalLine[] = [
+    practiceLine({ qid: 'qw', ts: '2026-09-05T10:00:00+04:00', day: '2026-09-05', correct: false }),
+    practiceLine({ qid: 'qr', ts: '2026-09-01T10:00:00+04:00', day: '2026-09-01', correct: true })
+  ]
+
+  // 2026-09-06: оба ещё не созрели (qw до 09-07, qr до 09-09) - идут хвостом за свежим, по сроку
+  const early = pickPractice(views, journal, undefined, new Date('2026-09-06T12:00:00+04:00'))
+  assert(early.map(v => v.qid).join() === 'qf,qw,qr',
+    `оба ещё не созрели: свежий впереди, хвост по сроку (qw раньше qr); получено ${early.map(v => v.qid).join()}`)
+
+  // 2026-09-08: промах (qw, срок 09-07) уже созрел и встаёт в группу «к повтору» перед verным
+  // (qr, срок 09-09), который всё ещё не созрел и остаётся в хвосте
+  const mid = pickPractice(views, journal, undefined, new Date('2026-09-08T12:00:00+04:00'))
+  assert(mid.map(v => v.qid).join() === 'qf,qw,qr',
+    `промах созрел раньше верного независимо от группы; получено ${mid.map(v => v.qid).join()}`)
+  assert(practiceDue(views, journal, new Date('2026-09-08T12:00:00+04:00')) === 1,
+    'practiceDue на 09-08: созрел только промах (qw), верный (qr) ещё нет')
+
+  // 2026-09-10: оба созрели, порядок по сроку (qw раньше qr)
+  const late = pickPractice(views, journal, undefined, new Date('2026-09-10T12:00:00+04:00'))
+  assert(late.map(v => v.qid).join() === 'qf,qw,qr',
+    `оба созрели, порядок по сроку сохранён; получено ${late.map(v => v.qid).join()}`)
+  assert(practiceDue(views, journal, new Date('2026-09-10T12:00:00+04:00')) === 2,
+    'practiceDue на 09-10: оба созрели')
+
+  assert(practiceDue(views, journal, new Date('2026-09-06T12:00:00+04:00')) === 0,
+    'practiceDue на 09-06: ничего ещё не созрело')
+  assert(practiceDue([qf], []) === 0, 'свежий вопрос без попыток не входит в practiceDue')
+
+  group('pickPractice/practiceDue: график повтора - промах через 2 дня, верный через 8, тот же now даёт тот же результат')
+
+  // граница между 09-06 и 09-07 (день созревания qw): срок наступает включительно
+  const boundary = pickPractice(views, journal, undefined, new Date('2026-09-07T00:01:00+04:00'))
+  assert(boundary.map(v => v.qid).join() === 'qf,qw,qr', 'срок повтора наступает включительно (retryDay <= today)')
+  group('pickPractice: срок повтора наступает включительно')
+}
+
+// ---- очередь модуля (P6): 27 вопросов подряд, бюджет 32 минуты
+function moduleChecks(): void {
+  const many = Array.from({ length: 122 }, (_, i) => view(`m${i}`))
+  assert(moduleQueue(many, []).length === MODULE_QUESTIONS,
+    `при 122 доступных вопросах модуль берёт ровно ${MODULE_QUESTIONS}, получено ${moduleQueue(many, []).length}`)
+
+  const few = Array.from({ length: 20 }, (_, i) => view(`s${i}`))
+  assert(moduleQueue(few, []).length === 20, 'при 20 доступных вопросах модуль отдаёт все 20, не выдумывая недостающие')
+
+  assert(moduleQueue([], []).length === 0, 'пустой банк - пустая очередь модуля, а не падение')
+
+  // moduleQueue - это те же первые вопросы, что отдаёт pickPractice, без своей пересортировки
+  const now = new Date('2026-09-06T12:00:00+04:00')
+  const direct = pickPractice(many, [], undefined, now).slice(0, MODULE_QUESTIONS).map(v => v.qid).join()
+  assert(moduleQueue(many, [], now).map(v => v.qid).join() === direct,
+    'moduleQueue не переставляет вопросы по-своему - это срез pickPractice')
+
+  assert(Math.round(MODULE_SECONDS / MODULE_QUESTIONS) === PACE_SEC,
+    `константы модуля согласованы: MODULE_SECONDS/MODULE_QUESTIONS ≈ PACE_SEC, получено ${MODULE_SECONDS / MODULE_QUESTIONS}`)
+  assert(MODULE_QUESTIONS === 27 && MODULE_SECONDS === 32 * 60 && PACE_SEC === 71,
+    'константы модуля соответствуют арифметике модуля RW настоящего экзамена')
+
+  group('moduleQueue: 27 вопросов при избытке, все доступные при недостатке, константы согласованы')
 }
 
 // ---- сводка -----------------------------------------------------------------
@@ -324,11 +403,24 @@ function breakdownChecks(): void {
   assert(bd4.avgSec === 15, `среднее по двум измеренным строкам (10 и 20), без sec игнорируется: получено ${bd4.avgSec}`)
   group('practiceBreakdown: среднее время считается только по строкам с известным sec')
 
-  // пустой журнал — без NaN и без деления на ноль
+  // разрез по темпу: measured считает строки с известным sec, slow - только помеченные флагом
+  const j5: JournalLine[] = [
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: true, ts: '2026-08-22T10:00:00+04:00', day: '2026-08-22', sec: 40, slow: false }),
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: false, ts: '2026-08-23T10:00:00+04:00', day: '2026-08-23', sec: 90, slow: true }),
+    // без sec - не измерена и в pace.measured не входит, даже если slow где-то ошибочно выставлен
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: true, ts: '2026-08-24T10:00:00+04:00', day: '2026-08-24', sec: undefined })
+  ]
+  const bd5 = practiceBreakdown([q4], j5, today)
+  assert(bd5.pace.measured === 2 && bd5.pace.slow === 1,
+    `разрез по темпу: 2 измеренные попытки, 1 за бюджетом (PACE_SEC), получено ${JSON.stringify(bd5.pace)}`)
+  group('practiceBreakdown: разрез по темпу считает измеренные попытки и долю превысивших PACE_SEC')
+
+  // пустой журнал - без NaN и без деления на ноль
   const bdEmpty = practiceBreakdown([], [], today)
   assert(bdEmpty.week.attempts === 0 && bdEmpty.week.accuracy === null && bdEmpty.avgSec === null,
-    `пустой журнал: ноль попыток, точность и время — null, а не NaN: ${JSON.stringify(bdEmpty)}`)
-  assert(Object.keys(bdEmpty.byDifficulty).length === 0, 'пустой набор вопросов — пустой разрез по сложности')
+    `пустой журнал: ноль попыток, точность и время - null, а не NaN: ${JSON.stringify(bdEmpty)}`)
+  assert(Object.keys(bdEmpty.byDifficulty).length === 0, 'пустой набор вопросов - пустой разрез по сложности')
+  assert(bdEmpty.pace.measured === 0 && bdEmpty.pace.slow === 0, 'пустой журнал - пустой разрез по темпу, а не NaN')
   group('practiceBreakdown: пустой журнал не даёт NaN и деления на ноль')
 }
 
@@ -385,6 +477,8 @@ async function main(): Promise<void> {
   brokenChecks()
   bareParseChecks()
   pickChecks()
+  retryScheduleChecks()
+  moduleChecks()
   statsChecks()
   breakdownChecks()
   await dbMigrationCheck()
