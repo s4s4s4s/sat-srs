@@ -21,6 +21,7 @@ import {
   pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, holdExerciseToNextDay, isExercise, LEARN_AHEAD_MS, LAST_LEARNING_STEP, sharesMeaning, typedTwin, checkTyped,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
   pickTask, meaningDistractors, REVIEW_CYCLE, ROTATE_FROM_REPS, NEW_STOP_DATE, kindRank, expandItems, freshItems, markGlosses,
+  NEW_STOP_BY_SECTION, newIntroAllowed, nextAttempt, dueCap, phase, effectiveRetention, PRIMARY_DATE, EXAM_DATE,
   homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal,
   MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS
 } from '../src/lib/scheduler'
@@ -1248,6 +1249,84 @@ function newStopChecks(): void {
 }
 
 /**
+ * E3 + A8: даты планировщика считаются от ближайшей попытки, а стоп ввода новых свой у
+ * каждого раздела.
+ *
+ * До правки стоп был один на всю колоду (19.09, по словарю), и грамматика с логикой
+ * закрывались вместе со словарём: домен SEC (34 карточки, 26% вопросов RW) три месяца
+ * стоял с нулём оценок и должен был закрыться навсегда за две недели до попытки. Правилу
+ * пунктуации 21 день дозревания не нужен - оно знается, а не дозревает (A8).
+ */
+function sectionStopChecks(): void {
+  const день = (d: number, m: number) => new Date(2026, m - 1, d, 10, 0, 0)
+
+  // сами границы: раздел за разделом, включительно с даты стопа
+  assert(newIntroAllowed(день(18, 9), 'rw') && !newIntroAllowed(день(19, 9), 'rw'), 'A8: словарь закрывается 19.09')
+  assert(newIntroAllowed(день(20, 9), 'logic') && !newIntroAllowed(день(26, 9), 'logic'), 'A8: логика закрывается 26.09')
+  assert(newIntroAllowed(день(29, 9), 'grammar') && !newIntroAllowed(день(30, 9), 'grammar'), 'A8: грамматика закрывается 30.09')
+  assert(!newIntroAllowed(день(19, 9), 'math'), 'A8: математика закрывается вместе со словарём')
+  assert(NEW_STOP_DATE.getTime() === NEW_STOP_BY_SECTION.rw.getTime(), 'NEW_STOP_DATE обязан остаться стопом словаря: по нему считается темп')
+
+  const словарь = [newCard('candid'), newCard('lucid')]
+  const грамматика = [baseView('semicolon', 1, 'grammar'), baseView('dangling', 1, 'grammar')]
+  const логика = [{ ...baseView('log-ii-central-idea', 1, 'error'), domain: 'II' }, { ...baseView('log-cs-purpose', 1, 'error'), domain: 'CS' }]
+  const математика = [baseView('quadratic', 1, 'math')]
+  const колода = [...словарь, ...грамматика, ...логика, ...математика]
+
+  const разделыНовых = (now: Date) => new Set(buildQueue(колода, 8, now).filter(i => i.fsrs.state === State.New).map(i => sectionOf(i.view)))
+
+  const в2009 = разделыНовых(день(20, 9))
+  assert(!в2009.has('rw') && !в2009.has('math'), `20.09: словарь и математика уже закрыты, получено ${[...в2009].join(',')}`)
+  assert(в2009.has('grammar') && в2009.has('logic'), `20.09: грамматика и логика обязаны вводиться, получено ${[...в2009].join(',')}`)
+
+  const в2709 = разделыНовых(день(27, 9))
+  assert([...в2709].join(',') === 'grammar', `27.09: открыта только грамматика, получено ${[...в2709].join(',')}`)
+
+  assert(разделыНовых(день(1, 10)).size === 0, '01.10: ввод закрыт всем разделам')
+
+  // урок одного раздела: очередь строится и на срезе колоды, и правило обязано работать там же
+  assert(buildQueue(грамматика, 3, день(20, 9)).some(i => i.fsrs.state === State.New), '20.09: урок грамматики обязан вводить новые')
+  assert(buildQueue(словарь, 3, день(20, 9)).every(i => i.fsrs.state !== State.New), '20.09: урок слов новых не вводит')
+
+  // добор сверх урочного лимита (bonusNew в Review.tsx) закрывается тем же правилом
+  assert(nextNewItems(грамматика, new Set(), 1, день(20, 9)).length === 1, 'A8: добор грамматики работает до её стопа')
+  assert(nextNewItems(словарь, new Set(), 1, день(20, 9)).length === 0, 'A8: добор слов после 19.09 нулевой')
+  assert(nextNewItems(колода, new Set(), 4, день(20, 9)).every(i => sectionOf(i.view) !== 'rw'), 'A8: добор на смешанном наборе не берёт закрытый раздел')
+
+  /* Главный экран обязан обещать ровно то, что выдаст урок: плашка «N новых» считается
+     по тем же разделам, иначе она гасит открытую грамматику вместе со словарём. */
+  assert(homeCounts(колода, 8, день(20, 9)).newAvail === 4, `homeCounts 20.09: доступны 4 новых (грамматика и логика), получено ${homeCounts(колода, 8, день(20, 9)).newAvail}`)
+  assert(homeCounts(колода, 8, день(27, 9)).newAvail === 2, 'homeCounts 27.09: остаётся только грамматика')
+  assert(homeCounts(колода, 8, день(1, 10)).newAvail === 0, 'homeCounts 01.10: новых нет')
+  for (const d of [день(20, 9), день(27, 9), день(1, 10)]) {
+    assert(homeCounts(колода, 8, d).newAvail === buildQueue(колода, 8, d).filter(i => i.fsrs.state === State.New).length,
+      `плашка главной и очередь урока обязаны сходиться на ${d.toISOString()}`)
+  }
+
+  console.log('  ✓ A8: стоп ввода свой у раздела (слова 19.09, логика 26.09, грамматика 30.09), очередь и главная согласны')
+  passed++
+
+  // даты планировщика: ближайшая попытка, потолок сроков, фаза, окно повышенного retention
+  assert(nextAttempt(день(5, 9)).getTime() === PRIMARY_DATE.getTime(), 'до 03.10 ближайшая попытка - первая')
+  assert(nextAttempt(день(5, 10)).getTime() === EXAM_DATE.getTime(), 'после 03.10 ближайшая попытка - суперскорная')
+  assert(dueCap(день(5, 9)).getTime() === new Date(2026, 8, 26).getTime(), '05.09: потолок сроков 26.09')
+  assert(dueCap(день(29, 9)).getTime() === new Date(2026, 9, 2).getTime(), '29.09: потолок съезжает на канун 02.10')
+  assert(dueCap(день(5, 10)).getTime() === new Date(2026, 9, 31).getTime(), '05.10: потолок 31.10')
+  assert(phase(день(5, 9)) === 'intake', '05.09: ввод открыт - фаза intake')
+  assert(phase(день(20, 9)) === 'intake', '20.09: грамматика ещё вводится - фаза intake')
+  assert(phase(день(29, 9)) === 'final', '29.09: последняя неделя перед попыткой сильнее открытого ввода грамматики')
+  assert(phase(день(5, 10)) === 'taper', '05.10: ввод закрыт всем, до последней недели ноября далеко')
+  assert(phase(день(2, 11)) === 'final', '02.11: последняя неделя перед 07.11')
+  assert(phase(день(10, 11)) === 'between', 'после последней попытки впереди дат нет')
+  assert(effectiveRetention(0.9, день(20, 9)) === 0.95, '20.09: две недели до первой попытки - retention поднят')
+  assert(effectiveRetention(0.9, день(5, 10)) === 0.9, '05.10: до ближайшей попытки месяц - retention обычный')
+  assert(effectiveRetention(0.9, день(25, 10)) === 0.95, '25.10: две недели до 07.11 - retention поднят')
+
+  console.log('  ✓ E3: ближайшая попытка, потолок сроков, фаза и окно retention считаются от даты, а не константами')
+  passed++
+}
+
+/**
  * Задача 2 (17.08.2026) — слова из разборов пробников вперёд очереди. `freshItems` вводил
  * словарь строго по возрастанию уровня, поэтому провал на настоящем пробнике (source:
  * pt4/pt4-m2qNN/pt1-qNN…, см. _КОНТРАКТ.md), размеченный обычной высокой ступенью, не
@@ -1925,6 +2004,7 @@ function main(): void {
   summaryChecks()
   dontKnowChecks()
   newStopChecks()
+  sectionStopChecks()
   ptPriorityChecks()
   fromMarkPriorityChecks()
   markPriorityChecks()

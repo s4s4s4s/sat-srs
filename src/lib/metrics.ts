@@ -1,6 +1,6 @@
 import { fsrs, generatorParameters, State, type FSRS } from 'ts-fsrs'
 import type { CardView, JournalLine } from './types'
-import { isLevelled, sectionOf, PRIMARY_DATE, NEW_STOP_DATE } from './scheduler'
+import { isLevelled, sectionOf, nextAttempt, NEW_STOP_DATE } from './scheduler'
 import type { Section } from './scheduler'
 import { addDaysKey, dayKey } from './daytime'
 import { byTime, minutesByDay, readMinutesByDay, PRACTICE_UNIT_RATIO_FLOOR } from './journal'
@@ -29,7 +29,7 @@ import { MIN_KIND_SAMPLES } from './scheduler'
    нулевой, последний день ввода — 18.09. Планировщик гасит ввод именно так
    (`newIntroAllowed`), и темп обязан считать по той же границе, иначе экран
    будет требовать «+7 слов в день» в день, когда урок новых уже не выдаёт. */
-export { PRIMARY_DATE, EXAM_DATE, NEW_STOP_DATE } from './scheduler'
+export { PRIMARY_DATE, EXAM_DATE, NEW_STOP_DATE, NEW_STOP_BY_SECTION, nextAttempt, dueCap, phase } from './scheduler'
 
 /* Пиявка — одно определение на всё приложение.
 
@@ -122,9 +122,13 @@ export interface ExamReady { ready: number; total: number; byLevel: ReadyByLevel
 
 /**
  * «Слов готово к экзамену» на дату `date`. Готово = не New И retrievability(date) >= 0.90.
- * total — число словарных карточек в колоде; byLevel — разбивка готовности по ступеням.
+ * total: число словарных карточек в колоде; byLevel: разбивка готовности по ступеням.
+ *
+ * По умолчанию дата берётся у `nextAttempt` (E3), а не у константы PRIMARY_DATE: с 03.10
+ * та считала готовность на уже прошедший день, и число «готово к экзамену» переставало
+ * значить что-либо ровно тогда, когда до второй попытки остаётся ещё месяц работы.
  */
-export function examReady(cards: CardView[], date: Date = PRIMARY_DATE): ExamReady {
+export function examReady(cards: CardView[], date: Date = nextAttempt()): ExamReady {
   const f = scheduler()
   const cand = cards.filter(isCandidate)
   const byLevel = new Map<number, { ready: number; total: number }>()
@@ -637,7 +641,7 @@ export function retentionByLateness(journal: JournalLine[]): { onTime: Bucketed;
 
 export interface MetricSnapshot {
   day: string
-  ready: number
+  ready: number             // готовность к ближайшей попытке на день снимка (nextAttempt)
   readyTotal: number
   readyExam: number          // готовность к EXAM_DATE (07.11) — вторая дата
   inReview: number           // числитель первой цели (TARGET_REVIEW)
@@ -672,7 +676,9 @@ const bucketOut = (b: Bucketed) => ({ pct: b.pct, n: b.n })
 /** Снимок всех агрегатов слоёв 1–3 на момент now — одна строка `_метрики.ndjson`. */
 export function buildMetricsSnapshot(cards: CardView[], journal: JournalLine[], now: Date = new Date(), examDate?: Date): MetricSnapshot {
   const today = dayKey(now)
-  const er = examReady(cards, PRIMARY_DATE)
+  // Готовность считается к БЛИЖАЙШЕЙ попытке (E3): после 03.10 ряд снимков продолжает
+  // отвечать на живой вопрос «успеваю ли к экзамену», а не на прошедший.
+  const er = examReady(cards, nextAttempt(now))
   const erExam = examDate ? examReady(cards, examDate) : er
   const pc = pace(cards, journal, NEW_STOP_DATE, now)
   const mat = maturity(cards)

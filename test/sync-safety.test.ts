@@ -1,6 +1,6 @@
 /**
  * Тесты слоя данных: слияние устройств, подтверждение push-а, предохранитель удаления,
- * атомарность оценки, потолок времени, зажим срока под DUE_CAP и флаг «Пиявка».
+ * атомарность оценки, потолок времени, зажим срока под потолок dueCap и флаг «Пиявка».
  *
  * Все семь проверяемых здесь дефектов объединяет одно: каждый молча терял работу ученика и
  * не показывался ни на одном экране. Поэтому тесты идут по правилам, а не по симптомам, —
@@ -31,7 +31,7 @@ import {
 } from '../src/lib/db'
 import { isCardPath, isJournalPath, massDeleteMessage } from '../src/lib/sync'
 import { clampDueBeforeCap, journalElapsedMs, leechTransition } from '../src/lib/store'
-import { DUE_CAP } from '../src/lib/scheduler'
+import { dueCap, nextAttempt, newIntroAllowed, PRIMARY_DATE, EXAM_DATE } from '../src/lib/scheduler'
 import { cardTimeCap } from '../src/lib/journal'
 import { isLeech, LEECH_STABILITY_DAYS } from '../src/lib/metrics'
 import { endOfStudyDay } from '../src/lib/daytime'
@@ -274,12 +274,17 @@ function elapsedChecks(): void {
   group('время (структурно): rateItem пишет elapsed_ms через journalElapsedMs')
 }
 
-// ---- 6. Зажим срока под DUE_CAP ------------------------------------------
+// ---- 6. Зажим срока под потолок dueCap -----------------------------------
+
+/* Потолок сентября: до 26.09 dueCap отдаёт 26.09 в любой день. Проверки ниже гоняют
+   зажим на ФИКСИРОВАННОМ потолке, поэтому он взят у dueCap на явную дату, а не
+   константой: потолок теперь функция времени (E3), и подставлять его вслепую нельзя. */
+const CAP_SEP = dueCap(new Date(2026, 8, 5, 10, 0, 0))
 
 /** Прежняя формула — для доказательства, что дефект был, а не показался. */
 function oldClamp(next: FsrsCard, now: Date, rnd: number): Date {
   const span = Math.min(14, Math.max(5, Math.round(next.stability / 10)))
-  return new Date(DUE_CAP.getTime() - Math.floor(rnd * span) * DAY)
+  return new Date(CAP_SEP.getTime() - Math.floor(rnd * span) * DAY)
 }
 
 function dueCapChecks(): void {
@@ -291,10 +296,10 @@ function dueCapChecks(): void {
   assert(inPast > 100, `прежняя формула обязана давать сроки в прошлом (иначе нечего чинить), получено ${inPast} из 200`)
 
   for (let i = 0; i < 200; i++) {
-    const r = clampDueBeforeCap(strong, now, DUE_CAP, () => i / 200)
+    const r = clampDueBeforeCap(strong, now, CAP_SEP, () => i / 200)
     assert(r.due > now, `срок ${r.due.toISOString()} не должен быть в прошлом или сегодня-в-прошлом`)
     assert(r.due >= endOfStudyDay(now), 'срок не должен возвращать карточку в сегодняшнюю очередь')
-    assert(r.due <= DUE_CAP, `срок ${r.due.toISOString()} не должен уезжать за потолок`)
+    assert(r.due <= CAP_SEP, `срок ${r.due.toISOString()} не должен уезжать за потолок`)
     assert(r.scheduled_days === Math.round((r.due.getTime() - now.getTime()) / DAY),
       `scheduled_days должен считаться от фактического срока, получено ${r.scheduled_days}`)
     assert(r.scheduled_days >= 0, 'отрицательный интервал не маскируется единицей и не пишется в журнал')
@@ -303,31 +308,105 @@ function dueCapChecks(): void {
 
   // разброс сохранён: широкое окно у прочной карточки, узкое у хрупкой, и всё — до потолка
   const early = new Date(2026, 8, 1, 10, 0, 0)
-  const days = (f: FsrsCard) => new Set(Array.from({ length: 50 }, (_, i) => clampDueBeforeCap(f, early, DUE_CAP, () => i / 50).due.getTime()))
+  const days = (f: FsrsCard) => new Set(Array.from({ length: 50 }, (_, i) => clampDueBeforeCap(f, early, CAP_SEP, () => i / 50).due.getTime()))
   const wide = days(strong)
   const narrow = days(fsrs({ stability: 12, due: new Date(2027, 0, 20) }))
   assert(wide.size >= 10, `окно прочной карточки должно быть широким, получено ${wide.size} дней`)
   assert(narrow.size <= 6 && narrow.size >= 4, `окно хрупкой карточки — около недели, получено ${narrow.size} дней`)
   assert(wide.size > narrow.size, 'прочные карточки уезжают раньше хрупких — разброс по стабильности сохранён')
   assert(Math.min(...wide) < Math.min(...narrow), 'нижняя граница окна у прочной карточки должна быть раньше')
-  assert(Math.max(...wide) === DUE_CAP.getTime() && Math.max(...narrow) === DUE_CAP.getTime(), 'верхняя граница окна — сам потолок')
+  assert(Math.max(...wide) === CAP_SEP.getTime() && Math.max(...narrow) === CAP_SEP.getTime(), 'верхняя граница окна — сам потолок')
   group('срок: разброс по стабильности сохранён, всё окно лежит между now и потолком')
 
   // меньше суток до потолка: разыгрывать нечего, карточка получает последний легальный слот
-  const late = new Date(DUE_CAP.getTime() - 3600_000)
-  const r = clampDueBeforeCap(strong, late, DUE_CAP, () => 0.99)
-  assert(r.due.getTime() === DUE_CAP.getTime(), 'при остатке меньше суток срок — сам потолок')
+  const late = new Date(CAP_SEP.getTime() - 3600_000)
+  const r = clampDueBeforeCap(strong, late, CAP_SEP, () => 0.99)
+  assert(r.due.getTime() === CAP_SEP.getTime(), 'при остатке меньше суток срок — сам потолок')
   assert(r.due > late && r.scheduled_days === 0, 'и он всё равно в будущем, а интервал честно нулевой')
   group('срок: остаток меньше суток — последний слот перед потолком, а не розыгрыш в прошлое')
 
   // за что зажим не берётся вовсе
-  const after = new Date(DUE_CAP.getTime() + DAY)
-  assert(clampDueBeforeCap(strong, after, DUE_CAP, () => 0) === strong, 'после потолка зажимать нечего')
+  const after = new Date(CAP_SEP.getTime() + DAY)
+  assert(clampDueBeforeCap(strong, after, CAP_SEP, () => 0) === strong, 'после потолка зажимать нечего')
   const near = fsrs({ due: new Date(2026, 8, 20) })
-  assert(clampDueBeforeCap(near, now, DUE_CAP, () => 0) === near, 'срок и так до потолка — не трогаем')
+  assert(clampDueBeforeCap(near, now, CAP_SEP, () => 0) === near, 'срок и так до потолка — не трогаем')
   const learning = fsrs({ state: State.Learning, due: new Date(2027, 0, 20) })
-  assert(clampDueBeforeCap(learning, now, DUE_CAP, () => 0) === learning, 'зажим только для Review')
+  assert(clampDueBeforeCap(learning, now, CAP_SEP, () => 0) === learning, 'зажим только для Review')
   group('срок: зажим не вмешивается там, где его не звали')
+}
+
+/**
+ * E3: потолок сроков движется вместе с датой, и зажим больше не выключает себя навсегда.
+ *
+ * Замер 05.09.2026: при потолке-константе 26.09 условие `now >= cap` с 27.09 отдавало
+ * карточку нетронутой, и всё со стабильностью выше ~17 дней получало срок за 03.10, то
+ * есть самая выученная четверть колоды не освежалась перед первой попыткой ни разу.
+ * После 03.10 потолка не оставалось вовсе: до 07.11 карточка могла не вернуться ни разу.
+ */
+function movingCapChecks(): void {
+  const сентябрь = new Date(2026, 8, 5, 10, 0, 0)
+  const финальнаяНеделя = new Date(2026, 8, 29, 10, 0, 0)
+  const послеПопытки = new Date(2026, 9, 5, 10, 0, 0)
+  const канун = new Date(2026, 9, 2)          // 02.10, канун первой попытки
+  const потолокНоября = new Date(2026, 9, 31) // 31.10, неделя до 07.11
+
+  assert(dueCap(сентябрь).getTime() === new Date(2026, 8, 26).getTime(),
+    `05.09 потолок обязан стоять на 26.09, получено ${dueCap(сентябрь).toISOString()}`)
+  assert(dueCap(финальнаяНеделя).getTime() === канун.getTime(),
+    `29.09 потолок обязан съехать на канун попытки 02.10, получено ${dueCap(финальнаяНеделя).toISOString()}`)
+  assert(dueCap(послеПопытки).getTime() === потолокНоября.getTime(),
+    `05.10 потолок обязан переехать на 31.10, получено ${dueCap(послеПопытки).toISOString()}`)
+  assert(nextAttempt(сентябрь).getTime() === PRIMARY_DATE.getTime(), 'до 03.10 готовятся к первой попытке')
+  assert(nextAttempt(new Date(2026, 9, 3, 10, 0, 0)).getTime() === EXAM_DATE.getTime(),
+    'в день первой попытки ближайшая цель - уже суперскорная 07.11')
+  assert(nextAttempt(послеПопытки).getTime() === EXAM_DATE.getTime(), 'после 03.10 планируют на 07.11')
+  group('E3: потолок сроков и ближайшая попытка считаются от даты, а не константой')
+
+  /* Карточка ровно того класса, ради которого зажим написан: стабильность 20 дней,
+     FSRS отправляет её в декабрь. Ровно она и выпадала из показов с 27.09. */
+  const strong = fsrs({ stability: 20, due: new Date(2026, 11, 20) })
+  const now28 = new Date(2026, 8, 28, 10, 0, 0)
+
+  assert(clampDueBeforeCap(strong, now28, CAP_SEP, () => 0.5) === strong,
+    'репро поломки: с потолком-константой 26.09 зажим 28.09 выключался и отдавал карточку как есть')
+
+  for (let i = 0; i < 100; i++) {
+    const r = clampDueBeforeCap(strong, now28, undefined, () => i / 100)
+    assert(r.due <= канун, `28.09: срок ${r.due.toISOString()} обязан лечь не позже кануна 02.10`)
+    assert(r.due > now28 && r.due >= endOfStudyDay(now28), '28.09: срок не возвращает карточку в сегодняшнюю очередь')
+    assert(r.scheduled_days === Math.round((r.due.getTime() - now28.getTime()) / DAY), '28.09: интервал считается от фактического срока')
+  }
+  const дефолт = clampDueBeforeCap(strong, now28)
+  assert(дефолт.due <= канун && дефолт.due > now28, 'потолок по умолчанию берётся у dueCap(now), а не у константы')
+  group('E3: 28.09 карточка со стабильностью 20 получает срок не позже кануна 02.10')
+
+  for (let i = 0; i < 100; i++) {
+    const r = clampDueBeforeCap(strong, послеПопытки, undefined, () => i / 100)
+    assert(r.due <= потолокНоября, `05.10: срок ${r.due.toISOString()} обязан лечь не позже 31.10`)
+    assert(r.due > послеПопытки && r.due >= endOfStudyDay(послеПопытки), '05.10: срок не возвращает карточку в сегодняшнюю очередь')
+  }
+  group('E3: 05.10 зажим снова работает и держит срок до 31.10')
+
+  /* Второго горба после 03.10 быть не должно: окно 5-14 дней перед потолком ведёт себя
+     в октябре ровно так же, как в сентябре, и разброс не схлопывается в один день. */
+  for (const день of [4, 5, 6, 7]) {
+    const now = new Date(2026, 9, день, 10, 0, 0)
+    const дни = new Set(Array.from({ length: 60 }, (_, i) => clampDueBeforeCap(strong, now, undefined, () => i / 60).due.getTime()))
+    assert(дни.size >= 5, `04-07.10: окно розыгрыша схлопнулось до ${дни.size} дней - это и есть второй горб`)
+    assert(Math.max(...дни) === потолокНоября.getTime(), 'верхняя граница окна - сам потолок 31.10')
+    assert(Math.min(...дни) >= new Date(2026, 9, 17).getTime(), 'окно шире 14 дней быть не может')
+  }
+  group('E3: после 03.10 разброс сроков держится (5-14 дней перед 31.10), второго горба нет')
+
+  /* Карточки, чей срок уже был выставлен на 03.10-07.10 сентябрьским потолком: они просто
+     приходят в свой день. Зажим их не трогает ни до, ни после - срок и так до потолка. */
+  for (const день of [3, 4, 5, 6, 7]) {
+    const ранняя = fsrs({ stability: 20, due: new Date(2026, 9, день) })
+    const now = new Date(2026, 9, 2, 10, 0, 0)
+    assert(clampDueBeforeCap(ранняя, now, undefined, () => 0) === ранняя,
+      `срок ${день}.10 стоит до потолка и обязан остаться нетронутым`)
+  }
+  group('E3: сроки 03.10-07.10, выставленные до попытки, зажим не переносит')
 }
 
 // ---- 7. Флаг «Пиявка» ----------------------------------------------------
@@ -427,6 +506,7 @@ function main(): void {
   atomicityChecks()
   elapsedChecks()
   dueCapChecks()
+  movingCapChecks()
   leechChecks()
   const live = liveDeckChecks()
   console.log(`\nВсе проверки слоя данных пройдены (${passed} групп)${live ? '' : ', живая колода не подключалась'}.`)

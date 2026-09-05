@@ -2,7 +2,7 @@ import { useApp, views, readingViews, questionViews, setScreen, startSync, start
 import { homeCounts, sectionOf, newBudgetFor, levelStats, activeLevel, type Section } from '../lib/scheduler'
 import { streak, minutesToday, readMinutesToday, floorDays, reviewsByDay, readTextSlugs, MIN_MINUTES, READ_MIN_MINUTES, RUN_MIN_REVIEWS, type PauseRange } from '../lib/journal'
 import { DAY_NORMS, NEW_PER_DAY, NORM_LEVELS, NORM_TITLE_GENITIVE, dayNormFill, dayNormStatus } from '../lib/norms'
-import { examReady, PRIMARY_DATE } from '../lib/metrics'
+import { examReady, nextAttempt } from '../lib/metrics'
 import { stageCounts, type WordStage } from '../lib/wordstatus'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt, Book } from '../components/Icon'
@@ -194,9 +194,12 @@ export default function Home() {
   // и в «Метриках» семь недель подряд стоит «0/7 (не трекается)».
   const readMins = readMinutesToday(app.journal)
   const readDone = readMins >= READ_MIN_MINUTES
-  // Считаем до ПЕРВОЙ попытки, а не до суперскорной: показывать 96 дней там,
-  // где на деле 61, — значит каждый день врать себе про запас времени.
-  const daysToExam = Math.max(0, Math.ceil((PRIMARY_DATE.getTime() - Date.now()) / 86400_000))
+  /* Считаем до БЛИЖАЙШЕЙ попытки (E3): до 03.10 это первая, после неё суперскорная 07.11.
+     Показывать 96 дней там, где на деле 61, значит каждый день врать себе про запас
+     времени; зажим Math.max(0, ...) врал ровно так же с другого конца - с 03.10 счётчик
+     застывал нулём, хотя впереди ещё 35 дней подготовки ко второй попытке. */
+  const attempt = nextAttempt()
+  const daysToExam = Math.ceil((attempt.getTime() - Date.now()) / 86400_000)
 
   /* Числа главного экрана. `examReady` остаётся — но за ним теперь ходят в
      «Статистику»: здесь от него берётся только `total` (размер словарной
@@ -204,7 +207,7 @@ export default function Home() {
      Оба числа берутся из ОДНОЙ сводки (`stageCounts`, wordstatus.ts) — единого
      источника правды о состоянии слова, а не из двух самостоятельных выражений,
      которые могли бы разъехаться, как только у них появится третий потребитель. */
-  const er = examReady(all, PRIMARY_DATE)
+  const er = examReady(all, attempt)
   const stages = stageCounts(all)
   // тип стадии, а не строка: опечатка в имени иначе тихо дала бы ноль на витрине
   const stageN = (s: WordStage) => stages.find(x => x.stage === s)?.n ?? 0
@@ -331,7 +334,7 @@ export default function Home() {
           {/* Минуты не выброшены — они переехали сюда: время остаётся полезной
               справкой, но перестало быть шкалой дня. */}
           <span className="hero-sub">
-            до SAT: {daysToExam} дн <span className="rsep">·</span> завтра: {cAll.revTomorrow}
+            {daysToExam > 0 ? <>до SAT: {daysToExam} дн</> : <>SAT позади</>} <span className="rsep">·</span> завтра: {cAll.revTomorrow}
             <span className="rsep">·</span> {Math.floor(mins)}/{MIN_MINUTES} мин
           </span>
         </div>

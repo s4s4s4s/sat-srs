@@ -17,7 +17,7 @@ import {
   examReady, maturity, pace, reviewCount, retentionByInterval, retentionByLateness, retentionByLevel, retentionByDomain,
   speedStats, typoSplit, gaveUpShare, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
   intervalBucketOf, enoughForPct, isLeechCard, orphanedLines,
-  PRIMARY_DATE, NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MIN_N_FOR_PCT,
+  PRIMARY_DATE, EXAM_DATE, NEW_STOP_DATE, NEW_STOP_BY_SECTION, nextAttempt, TARGET_REVIEW, TARGET_MATURE, MIN_N_FOR_PCT,
   MATURE_STABILITY_DAYS, READY_R
 } from '../src/lib/metrics'
 import { dayKey, addDaysKey } from '../src/lib/daytime'
@@ -334,6 +334,51 @@ function paceChecks(): void {
   group('pace: темп к стопу ввода новых, Learning/New вне цели, после стопа — closed')
 }
 
+/**
+ * E3: метрика считается на БЛИЖАЙШУЮ попытку, а не на константу первой.
+ *
+ * examReady(cards) без даты 05.10 считала готовность на 03.10, то есть на вчера: число
+ * «готово к экзамену» переставало значить что-либо ровно тогда, когда до второй попытки
+ * остаётся ещё месяц работы. Дата по умолчанию теперь приходит из nextAttempt.
+ */
+function nextAttemptMetricChecks(): void {
+  const cards = [
+    vocab('ready', reviewFsrs(300, 4), 1),
+    vocab('mid', reviewFsrs(40, 4), 1),
+    vocab('stale', reviewFsrs(6, 4), 1)
+  ]
+
+  assert(nextAttempt(new Date(2026, 8, 5, 12, 0, 0)).getTime() === PRIMARY_DATE.getTime(), 'до 03.10 метрика считает на первую попытку')
+  assert(nextAttempt(new Date(2026, 9, 5, 12, 0, 0)).getTime() === EXAM_DATE.getTime(), '05.10 ближайшая попытка - 07.11')
+
+  const наПопытку = examReady(cards, nextAttempt(new Date(2026, 9, 5, 12, 0, 0)))
+  const наНоябрь = examReady(cards, EXAM_DATE)
+  const наОктябрь = examReady(cards, PRIMARY_DATE)
+  assert(наПопытку.ready === наНоябрь.ready, '05.10 готовность обязана считаться на 07.11')
+  assert(наОктябрь.ready > наНоябрь.ready, 'предпосылка проверки: на более дальнюю дату готовых меньше, иначе она ничего не различает')
+
+  // сегодняшний вызов без даты обязан идти по ближайшей попытке, а не по константе
+  assert(examReady(cards).ready === examReady(cards, nextAttempt()).ready, 'examReady без даты считает на ближайшую попытку')
+
+  /* Структурно: дата по умолчанию именно nextAttempt(). Значение проверить нечем -
+     сегодня ближайшая попытка и есть PRIMARY_DATE, и откат к константе тест бы не заметил
+     до 03.10, то есть ровно до того дня, ради которого правка сделана. */
+  const src = readFileSync(path.join(process.cwd(), 'src', 'lib', 'metrics.ts'), 'utf8')
+  assert(/export function examReady\(cards: CardView\[\], date: Date = nextAttempt\(\)\)/.test(src),
+    'сигнатура examReady обязана брать дату по умолчанию у nextAttempt()')
+
+  // темп ввода считается по стопу СЛОВ: стопов теперь четыре, у каждого раздела свой (A8)
+  assert(NEW_STOP_DATE.getTime() === NEW_STOP_BY_SECTION.rw.getTime(), 'pace обязан считать по стопу словаря')
+  assert(NEW_STOP_BY_SECTION.grammar > NEW_STOP_BY_SECTION.rw, 'A8: грамматика вводится дольше словаря')
+  const j: JournalLine[] = []
+  const поУмолчанию = pace(cards, j, undefined, new Date(2026, 8, 25, 12, 0, 0))
+  assert(поУмолчанию.verdict === 'closed', 'pace без явного стопа берёт стоп слов: 25.09 ввод слов уже закрыт')
+  const доСтопа = pace(cards, j, undefined, new Date(2026, 8, 18, 12, 0, 0))
+  assert(доСтопа.verdict !== 'closed' && доСтопа.daysLeft === 1, '18.09 - последний день ввода слов')
+
+  group('E3: examReady и pace берут даты у ближайшей попытки и у стопа своего раздела')
+}
+
 // ---- цель: Review + зрелые ------------------------------------------------
 
 function goalChecks(): void {
@@ -513,6 +558,7 @@ function main(): void {
   levelDomainChecks()
   speedTypoChecks()
   paceChecks()
+  nextAttemptMetricChecks()
   snapshotChecks()
   orphanedLinesChecks()
   liveDeckOrphanCheck()

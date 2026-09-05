@@ -6,7 +6,7 @@ import { streak, trueRetention30, minutesToday, retentionByFormat, minutesByDay,
 import {
   pace, maturity, retentionByInterval, retentionByLevel, retentionByDomain,
   retentionBySection, maturityBySection, speedStats, typoSplit, gaveUpShare, planVsFact,
-  orphanedLines, enoughForPct, ddmm, PRIMARY_DATE, NEW_STOP_DATE,
+  orphanedLines, enoughForPct, ddmm, nextAttempt, NEW_STOP_DATE,
   TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS, INTERVAL_LABELS, SECTION_LABELS, SLOW_MS,
   type Bucketed, type IntervalBucket, type MetricSnapshot, type PlanVsFactDay
 } from '../lib/metrics'
@@ -222,7 +222,7 @@ export default function Stats() {
           <div className="minbar"><div style={{ width: `${Math.min(100, (mat.reviewCount / TARGET_REVIEW) * 100)}%` }} /></div>
           <span className="minbar-label"><b>{mat.reviewCount}</b> / {TARGET_REVIEW}</span>
         </div>
-        <div className="syncline" style={{ marginBottom: 6 }}>доведено до повторов — цель 250–300 слов к {ddmm(PRIMARY_DATE)}</div>
+        <div className="syncline" style={{ marginBottom: 6 }}>доведено до повторов, цель 250-300 слов к ближайшей попытке {ddmm(nextAttempt())}</div>
         <div className="minbar-row">
           <div className="minbar"><div style={{ width: `${Math.min(100, (mat.matureCount / TARGET_MATURE) * 100)}%` }} /></div>
           <span className="minbar-label"><b>{mat.matureCount}</b> / {TARGET_MATURE}</span>

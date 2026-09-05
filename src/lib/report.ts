@@ -8,11 +8,11 @@ import {
   READING_UNKNOWN_SHARE_MAX, READ_MIN_TEXTS, reviewsByDay, dayUnitsByDay, practiceUnitsByDay,
   practiceMinutesByDay, type PauseRange
 } from './journal'
-import { activeLevel, levelStats, isLevelled, EXAM_DATE, SECTIONS } from './scheduler'
+import { activeLevel, levelStats, isLevelled, EXAM_DATE, SECTIONS, nextAttempt, dueCap, phase, NEW_STOP_BY_SECTION } from './scheduler'
 import {
   examReady, maturity, pace, retentionByInterval, retentionByLateness, retentionBySection, maturityBySection,
   speedStats, typoSplit, gaveUpShare, planVsFact, isLeechCard, orphanedLines, ddmm, practiceUnitRatio,
-  PRIMARY_DATE, NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS,
+  NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS,
   INTERVAL_LABELS, SECTION_LABELS, type IntervalBucket
 } from './metrics'
 
@@ -144,7 +144,12 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
      Стало: довести 250–300 карточек до review и сделать 150+ из них зрелыми.
      Готовность по retrievability осталась справочной строкой — тьютору она полезна,
      но планом больше не является и ни с какой целевой цифрой не сравнивается. */
-  const erP = examReady(active, PRIMARY_DATE)
+  /* Даты берутся у планировщика в момент отчёта (E3), а не у константы первой попытки:
+     отчёт уезжает тьютору и после 03.10, и «готовность к 03.10» в нём была бы отчётом
+     о прошедшем дне. attempt - ближайшая попытка, cap - потолок сроков на сегодня. */
+  const attempt = nextAttempt(now)
+  const dueCapNow = dueCap(now)
+  const erP = examReady(active, attempt)
   const erE = examReady(active, EXAM_DATE)
   const pc = pace(active, lines, NEW_STOP_DATE, now)
   const mat = maturity(active)
@@ -152,13 +157,22 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
     ? 'идёшь с опережением'
     : pc.daysBehind === null ? 'темпа нет — 0 слов за 14 дн' : `отстаёшь на ${pc.daysBehind} дн`
   out.push('## Прогресс к экзамену', '')
-  out.push(`> Цель (с 17.08.2026): довести **${TARGET_REVIEW}** карточек до состояния review — коридор 250–300 — и сделать **${TARGET_MATURE}+** из них зрелыми (стабильность ≥ ${MATURE_STABILITY_DAYS} дн) к ${ddmm(PRIMARY_DATE)}. Ввод новых слов прекращается ${ddmm(NEW_STOP_DATE)} (последний рабочий день ввода — накануне), дальше только дозревание введённого.`, '')
+  const stopsStr = SECTIONS.map(s2 => `${SECTION_LABELS[s2]} ${ddmm(NEW_STOP_BY_SECTION[s2])}`).join(' · ')
+  out.push(`> Цель (с 17.08.2026): довести **${TARGET_REVIEW}** карточек до состояния review, коридор 250-300, и сделать **${TARGET_MATURE}+** из них зрелыми (стабильность ≥ ${MATURE_STABILITY_DAYS} дн) к ближайшей попытке ${ddmm(attempt)}. Ввод новых закрывается у каждого раздела своей датой (A8): ${stopsStr}; последний рабочий день ввода - накануне, дальше только дозревание введённого. Потолок сроков на сегодня: ${ddmm(dueCapNow)}.`, '')
   out.push(`- В review: **${mat.reviewCount} из ${TARGET_REVIEW}** · зрелых (стаб.≥${MATURE_STABILITY_DAYS}дн): **${mat.matureCount} из ${TARGET_MATURE}** · медианная стабильность ${mat.medianStability} дн`)
   out.push(pc.verdict === 'closed'
     ? `- Ввод новых закрыт с ${ddmm(NEW_STOP_DATE)}: добор объёма окончен, темп ввода больше не считается`
     : `- Ввод новых закрывается ${ddmm(NEW_STOP_DATE)}: довести ещё **${pc.remaining}** · нужно **+${pc.neededPerDay}/день** (осталось ${pc.daysLeft} дн ввода) · **${verdictStr}**`)
   out.push(`- Темп: +${pc.actual7} за 7 дн · +${pc.actual14} за 14 дн (выход в review по журналу)`)
-  out.push(`- Справочно, готовность по прогнозной retrievability (R ≥ 0.90, без будущих повторов): к ${ddmm(PRIMARY_DATE)} ${erP.ready} · к ${ddmm(EXAM_DATE)} ${erE.ready} · всего словарных карточек ${erP.total}`)
+  const readyTail = attempt.getTime() === EXAM_DATE.getTime() ? '' : ` · к ${ddmm(EXAM_DATE)} ${erE.ready}`
+  out.push(`- Справочно, готовность по прогнозной retrievability (R ≥ 0.90, без будущих повторов): к ${ddmm(attempt)} ${erP.ready}${readyTail} · всего словарных карточек ${erP.total}`)
+  /* Финальный проход: в последнюю неделю потолок сроков стоит на кануне попытки, и весь
+     этот объём обязан пройти перед экзаменом. Тьютору нужна не сама дата, а число: это
+     нагрузка, которую ученик либо возьмёт, либо не возьмёт. */
+  if (phase(now) === 'final') {
+    const finalPass = active.filter(v => v.fsrs.state !== State.New && v.fsrs.due.getTime() <= dueCapNow.getTime()).length
+    out.push(`- Финальный проход перед ${ddmm(attempt)}: **${finalPass}** карточек со сроком до ${ddmm(dueCapNow)} (потолок сроков съехал на канун попытки)`)
+  }
   const byLv = erP.byLevel.filter(l => l.level < 999)
   if (byLv.length) out.push(`- Готовность по ступеням: ${byLv.map(l => `L${l.level} ${l.ready}/${l.total}`).join(' · ')}`)
   const ri = retentionByInterval(lines)
@@ -272,7 +286,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   out.push(`- Отмечены при живой карточке (карточка есть, а слово не узнаётся — ПЕРЕФОРМУЛИРОВАТЬ, а не добавлять): ${alreadyInDeck.length ? alreadyInDeck.map(e => `${e.lemma}${e.marks > 1 ? ` ×${e.marks}` : ''}`).join(', ') : '—'}`)
   out.push('')
 
-  out.push('## Нагрузка на 7 дней (план из FSRS)', '')
+  out.push(`## Нагрузка на 7 дней (план из FSRS, потолок сроков ${ddmm(dueCapNow)})`, '')
   out.push('| день | к повторению |', '|---|---|')
   for (let i = 0; i < 7; i++) {
     const d = addDaysKey(today, i)

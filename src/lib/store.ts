@@ -5,7 +5,7 @@ import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm, readingView, slugFromPath } from './yamlfm'
 import { questionView } from './practice'
-import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, DUE_CAP, type Section, type TypeVerdict } from './scheduler'
+import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, dueCap, type Section, type TypeVerdict } from './scheduler'
 import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
 import {
@@ -278,15 +278,15 @@ export function unsyncedCount(): number {
 }
 
 /**
- * Потолок интервала: всё выученное обязано вернуться хотя бы раз до DUE_CAP (scheduler.ts) —
+ * Потолок интервала: всё выученное обязано вернуться хотя бы раз до потолка dueCap (scheduler.ts) —
  * иначе карточка получает срок за первой попыткой и до экзамена не показывается ни разу.
  *
- * Срок разыгрывается в окне шириной `span` дней, упирающемся в DUE_CAP, и ширина растёт со
+ * Срок разыгрывается в окне шириной `span` дней, упирающемся в потолок, и ширина растёт со
  * стабильностью: прочные карточки уезжают раньше, хрупкие жмутся к самому потолку, и зрелая
  * часть колоды не сваливается в один день. Замысел прежний, сломана была реализация.
  *
  * Окно обязано лежать МЕЖДУ `now` и потолком. Прежняя версия отсчитывала только назад от
- * DUE_CAP и с `now` не сверялась вовсе: 24.09 при стабильности 120 карточка получала срок
+ * потолка и с `now` не сверялась вовсе: 24.09 при стабильности 120 карточка получала срок
  * 15–18.09 — на 5–8 дней в прошлом, и так в 86% розыгрышей того дня. Ровно за две недели до
  * первой попытки вся зрелая часть колоды разом стала бы просроченной. Побочно `scheduled_days`
  * писался как `Math.max(1, …)` от отрицательного числа, то есть единицей, и уезжал в журнал:
@@ -295,12 +295,18 @@ export function unsyncedCount(): number {
  *
  * Нижняя граница окна — начало следующего учебного дня: FSRS только что сказал, что сегодня
  * карточку показывать не нужно, и зажим не повод возвращать её в сегодняшнюю очередь.
- * Если до потолка осталось меньше суток, разыгрывать нечего — карточка получает сам DUE_CAP:
+ * Если до потолка осталось меньше суток, разыгрывать нечего — карточка получает сам потолок:
  * это последний слот, который ещё раньше первой попытки, и он всё равно в будущем.
+ *
+ * Потолок по умолчанию берётся у `dueCap(now)` и вместе с `now` движется (E3). Пока он был
+ * константой 26.09, условие `now >= cap` выключало зажим навсегда: с 27.09 карточка со
+ * стабильностью выше ~17 дней снова получала срок за первой попыткой, и самая выученная
+ * четверть колоды не освежалась ни разу перед 03.10. Выход из зажима остаётся, но означает
+ * теперь другое: до ближайшего потолка меньше суток, втискивать повтор некуда.
  *
  * `rnd` вынесен в параметр, чтобы розыгрыш можно было проверить тестом, а не поверить в него.
  */
-export function clampDueBeforeCap(next: FsrsCard, now: Date, cap: Date = DUE_CAP, rnd: () => number = Math.random): FsrsCard {
+export function clampDueBeforeCap(next: FsrsCard, now: Date, cap: Date = dueCap(now), rnd: () => number = Math.random): FsrsCard {
   if (next.state !== State.Review || now >= cap || next.due <= cap) return next
   const span = Math.min(14, Math.max(5, Math.round(next.stability / 10)))
   const earliest = Math.max(endOfStudyDay(now).getTime(), cap.getTime() - span * 86400_000)
@@ -357,7 +363,7 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
   const now = new Date()
   const prev = fsrsFromKey(rec.fm, fsrsKey)
   let { card: next } = f.next(prev, now, grade)
-  // потолок интервалов: всё возвращается до DUE_CAP, окно 5–14 дней перед ним взвешено по
+  // потолок интервалов: всё возвращается до потолка dueCap(now), окно 5–14 дней перед ним взвешено по
   // стабильности — прочные карточки раньше, хрупкие ближе к потолку (см. clampDueBeforeCap)
   next = clampDueBeforeCap(next, now)
 
