@@ -75,18 +75,25 @@ export interface DayNormStatus {
   next: { level: NormLevel; target: number } | null
 }
 
-/** Что уже взято и что следующее — по числу сделанных сегодня упражнений. */
-export function dayNormStatus(reviews: number): DayNormStatus {
+/**
+ * Что уже взято и что следующее - по числу упражнений дня.
+ *
+ * Аргумент называется `units`, а не `reviews`: с WS6a вызывающий передаёт сюда
+ * `dayUnitsByDay` (оценки карточек + практика в единицах, journal.ts), а не
+ * только оценки карточек. Сигнатура и пороги DAY_NORMS не меняются - число
+ * упражнений считается снаружи.
+ */
+export function dayNormStatus(units: number): DayNormStatus {
   let reached: NormLevel | null = null
   for (const level of NORM_LEVELS) {
-    if (reviews >= DAY_NORMS[level]) reached = level
+    if (units >= DAY_NORMS[level]) reached = level
   }
-  const next = NORM_LEVELS.find(level => reviews < DAY_NORMS[level])
+  const next = NORM_LEVELS.find(level => units < DAY_NORMS[level])
   return { reached, next: next ? { level: next, target: DAY_NORMS[next] } : null }
 }
 
-/** Доля заполнения шкалы дня, 0..1; 100% — максимум дня. */
-export function dayNormFill(reviews: number): number {
-  if (!(reviews > 0)) return 0
-  return Math.min(1, reviews / DAY_NORMS.max)
+/** Доля заполнения шкалы дня, 0..1; 100% - максимум дня. `units` - см. dayNormStatus. */
+export function dayNormFill(units: number): number {
+  if (!(units > 0)) return 0
+  return Math.min(1, units / DAY_NORMS.max)
 }

@@ -3,7 +3,8 @@ import type { CardView, JournalLine } from './types'
 import { isLevelled, sectionOf, PRIMARY_DATE, NEW_STOP_DATE } from './scheduler'
 import type { Section } from './scheduler'
 import { addDaysKey, dayKey } from './daytime'
-import { byTime, minutesByDay, readMinutesByDay } from './journal'
+import { byTime, minutesByDay, readMinutesByDay, PRACTICE_UNIT_RATIO_FLOOR } from './journal'
+import { MIN_KIND_SAMPLES } from './scheduler'
 
 /**
  * Чистые метрики прогресса над (cards, journal, now) — без побочных эффектов.
@@ -479,6 +480,33 @@ export function speedStats(journal: JournalLine[]): SpeedStats {
     byFormat,
     byKind
   }
+}
+
+/**
+ * Сколько оценок карточки стоит один вопрос практики (WS6a, D4): медиана секунд
+ * над вопросом практики делённая на медиану миллисекунд над словарной карточкой.
+ * Практика не двигает расписание и не пишет `kind`, поэтому её нельзя мерить
+ * общей speedStats.medianMs (та смешивает все виды карточек) - берём именно
+ * словарную медиану (`byKind.vocab`), она же ориентир для порога `slowThresholdMs`
+ * в scheduler.ts.
+ *
+ * При нехватке выборки с любой стороны (меньше MIN_KIND_SAMPLES) отдаётся
+ * PRACTICE_UNIT_RATIO_FLOOR - замеренное соотношение по первым дням практики
+ * (53-267 c на вопрос против 8,3 c медианы словарной карточки) уже выше пола,
+ * поэтому пол не завышает зачёт, а лишь не даёт единичным ранним замерам
+ * обрушить коэффициент почти до нуля.
+ */
+export function practiceUnitRatio(journal: JournalLine[]): number {
+  const secs = journal
+    .filter(l => l.type === 'practice' && typeof l.sec === 'number' && l.sec > 0)
+    .map(l => l.sec as number)
+    .sort((a, b) => a - b)
+  const vocab = speedStats(journal).byKind['vocab']
+  if (!vocab || vocab.n < MIN_KIND_SAMPLES || secs.length < MIN_KIND_SAMPLES || vocab.medianMs <= 0) {
+    return PRACTICE_UNIT_RATIO_FLOOR
+  }
+  const medPracticeMs = percentile(secs, 0.5) * 1000
+  return Math.max(PRACTICE_UNIT_RATIO_FLOOR, Math.round(medPracticeMs / vocab.medianMs))
 }
 
 /**

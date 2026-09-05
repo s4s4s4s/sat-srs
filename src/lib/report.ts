@@ -4,13 +4,14 @@ import { cardView, readingView } from './yamlfm'
 import { addDaysKey, dayKey, isoLocal } from './daytime'
 import {
   minutesByDay, readMinutesByDay, streak, trueRetention30, retentionByFormat, READ_MIN_MINUTES,
-  markDigest, markCount, readingSrc, readingPassed, readTextSlugs, readingPaceWpm, normWord,
-  READING_UNKNOWN_SHARE_MAX, type PauseRange
+  markDigest, markCount, readingSrc, readingPassed, readTextSlugs, readTextsToday, readingPaceWpm, normWord,
+  READING_UNKNOWN_SHARE_MAX, READ_MIN_TEXTS, reviewsByDay, dayUnitsByDay, practiceUnitsByDay,
+  practiceMinutesByDay, type PauseRange
 } from './journal'
 import { activeLevel, levelStats, isLevelled, EXAM_DATE, SECTIONS } from './scheduler'
 import {
   examReady, maturity, pace, retentionByInterval, retentionByLateness, retentionBySection, maturityBySection,
-  speedStats, typoSplit, gaveUpShare, planVsFact, isLeechCard, orphanedLines, ddmm,
+  speedStats, typoSplit, gaveUpShare, planVsFact, isLeechCard, orphanedLines, ddmm, practiceUnitRatio,
   PRIMARY_DATE, NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS,
   INTERVAL_LABELS, SECTION_LABELS, type IntervalBucket
 } from './metrics'
@@ -59,8 +60,18 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   }
   const prepCount = active.filter(v => v.prep).length
 
-  const st = streak(lines, today, pause)
+  /* Зачёт дня по трём каналам (WS6a, D4): оценки карточек + практика в единицах
+     (коэффициент - practiceUnitRatio, по замеренным медианам, с полом на нехватке
+     выборки), плюс минуты практики отдельным слагаемым к минутам SRS. Раньше
+     сорокаминутная практика писала "минут сегодня: 0" и "упражнений: 0" - канал
+     существовал в журнале, но нигде не считался. */
+  const ratio = practiceUnitRatio(lines)
+  const st = streak(lines, today, pause, ratio)
   const minutes = minutesByDay(lines)
+  const practiceMin = practiceMinutesByDay(lines)
+  const reviews = reviewsByDay(lines)
+  const units = dayUnitsByDay(lines, ratio)
+  const practiceUnits = practiceUnitsByDay(lines, ratio)
   const ret = trueRetention30(lines, today)
   const retF = retentionByFormat(lines, today)
   const sp = speedStats(lines)
@@ -113,10 +124,14 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
 
   const week = Array.from({ length: 7 }, (_, i) => addDaysKey(today, -6 + i))
   const min7 = week.reduce((a, d) => a + (minutes.get(d) ?? 0), 0)
-  // Чтение — вторая половина защищённого минимума и половина работы над SAT, но в отчёт
+  const practiceMin7 = week.reduce((a, d) => a + (practiceMin.get(d) ?? 0), 0)
+  // Чтение - вторая половина защищённого минимума и половина работы над SAT, но в отчёт
   // не попадало ни разу, и «0/7 (не трекается)» семь недель никто не видел глазами.
   const readMin = readMinutesByDay(lines)
   const read7 = week.reduce((a, d) => a + (readMin.get(d) ?? 0), 0)
+  const weekLines = lines.filter(l => l.day && week.includes(l.day))
+  const textsWeek = readTextSlugs(weekLines).size
+  const textsToday = readTextsToday(lines, today)
 
   const out: string[] = []
   out.push('---', 'type: report', 'report_schema: 1', `updated: "${isoLocal(now)}"`, '---', '')
@@ -184,8 +199,15 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   const lvStats = levelStats(active)
   const curLv = lvStats.find(s => s.level === actLv)
   if (curLv) out.push(`- Активный уровень: **${actLv}** (введено ${curLv.introduced}/${curLv.total} · в review ${curLv.review}) · всего уровней: ${lvStats.length}`)
-  out.push(`- Серия: **${st.days} дн** (${st.todayDone ? 'сегодня зачтён' : 'сегодня НЕ зачтён'}) · минут сегодня: ${Math.round(minutes.get(today) ?? 0)} · за 7 дн: ${Math.round(min7)}`)
-  out.push(`- Чтение (вторая половина минимума, норма ${READ_MIN_MINUTES} мин/день): минут сегодня: ${Math.round(readMin.get(today) ?? 0)} · **за 7 дн: ${Math.round(read7)}** из ${READ_MIN_MINUTES * 7}`)
+  const minutesTodayTotal = (minutes.get(today) ?? 0) + (practiceMin.get(today) ?? 0)
+  const minutes7Total = min7 + practiceMin7
+  out.push(`- Серия: **${st.days} дн** (${st.todayDone ? 'сегодня зачтён' : 'сегодня НЕ зачтён'}) · минут сегодня: ${Math.round(minutesTodayTotal)} (SRS ${Math.round(minutes.get(today) ?? 0)} + практика ${Math.round(practiceMin.get(today) ?? 0)}) · за 7 дн: ${Math.round(minutes7Total)}`)
+  /* Упражнений дня - оценки карточек + практика в единицах (dayUnitsByDay, WS6a):
+     день зачитывается по units (см. isDayDone в journal.ts), а практика без единой
+     оценки карточки день не закрывает - строка ниже показывает оба слагаемых, а не
+     только сумму, чтобы расхождение с isDayDone было видно тьютору сразу. */
+  out.push(`- Упражнений сегодня: **${Math.round(units.get(today) ?? 0)}** (карточки ${reviews.get(today) ?? 0} · практика ${Math.round(practiceUnits.get(today) ?? 0)} в единицах, коэффициент ${ratio})`)
+  out.push(`- Чтение: текстов за 7 дн **${textsWeek}**, норма ${READ_MIN_TEXTS}/день${textsToday ? ` (сегодня прочитано: ${textsToday})` : ''} · минут чтения сегодня: ${Math.round(readMin.get(today) ?? 0)} · за 7 дн: ${Math.round(read7)} (справочно, ${READ_MIN_MINUTES} мин/день не является нормой)`)
   out.push(`- True retention 30 дн (review-показы): **${ret.pct === null ? '—' : ret.pct + '%'}**${ret.n ? ` (n=${ret.n})` : ''}`)
   const fmtNames: Record<string, string> = { mc: 'MC', type: 'ввод', prep: 'предлоги', reveal: 'показ' }
   const retParts = Object.entries(retF).map(([f, v]) => `${fmtNames[f] ?? f} ${pct(v.pass, v.total)}`)

@@ -3,9 +3,22 @@ import type { JournalLine, JournalRec } from './types'
 import { addDaysKey, dayKey } from './daytime'
 
 export const MIN_MINUTES = 15          // защищённый минимум SRS
-export const READ_MIN_MINUTES = 30     // вторая половина минимума — чтение
-export const CARD_TIME_CAP_MS = 60_000 // AFK-защита: на карточку в зачёт минут — максимум 60 c
+export const READ_MIN_MINUTES = 30     // справочная величина (чтение вообще), нормой дня не является, см. READ_MIN_TEXTS
+export const CARD_TIME_CAP_MS = 60_000 // AFK-защита: на карточку в зачёт минут - максимум 60 c
 export const READ_CAP_MINUTES = 180    // разумный потолок одной отметки чтения
+
+/**
+ * Норма чтения - не минуты, а текст (D4, правка WS6a).
+ *
+ * READ_MIN_MINUTES (30 мин/день) была недостижима каталогом: 19 текстов колоды
+ * дают в сумме около 150 минут чтения, при норме 30/день каталог кончается за
+ * пять дней, и дальше метрика стоит на нуле не потому, что не читали, а потому,
+ * что читать больше нечего. Метрика, которую нельзя набрать никаким действием
+ * внутри приложения, отмирает первой (та же формулировка в контракте).
+ * READ_MIN_MINUTES остаётся справочной величиной для строки «минут чтения»,
+ * но нормой дня быть перестаёт.
+ */
+export const READ_MIN_TEXTS = 1
 
 /**
  * Порог «опечатка, а не незнание» при вводе (checkTyped): <= TYPO_MAX_EDITS правок Левенштейна
@@ -16,6 +29,20 @@ export const READ_CAP_MINUTES = 180    // разумный потолок одн
  */
 export const TYPO_MIN_LEN = 6
 export const TYPO_MAX_EDITS = 2
+
+/**
+ * Пол коэффициента "секунда практики стоит секунды словарной карточки" (WS6a, D4).
+ *
+ * Практика (строка type: 'practice') не двигает никакого расписания и живёт своим
+ * временем ответа: замер по журналу - 53-267 c на вопрос против медианы 8,3 c на
+ * словарную карточку. Считать её за одно упражнение наравне с карточкой обесценило
+ * бы 40 минут работы над настоящими вопросами SAT до пары строк на полосе дня, а
+ * приравнивать секунду к секунде нельзя - вопрос практики требует читать абзац и
+ * сравнивать варианты, карточка - одно слово. Коэффициент считается по обеим
+ * медианам (practiceUnitRatio в metrics.ts, чтобы не заводить цикл импорта
+ * journal.ts <-> metrics.ts), а этот пол используется, пока выборки не хватает.
+ */
+export const PRACTICE_UNIT_RATIO_FLOOR = 4
 
 export function newId(): string {
   // crypto.randomUUID есть только в secure context и Safari ≥ 15.4 — фолбэк на getRandomValues
@@ -147,6 +174,49 @@ export function reviewsByDay(lines: JournalLine[]): Map<string, number> {
   return m
 }
 
+/**
+ * Практика (строки type: 'practice') в единицах оценки карточки, по дням.
+ *
+ * До WS6a практика не двигала ни один счётчик дня: сорокаминутный заход в
+ * настоящие вопросы SAT показывал на полосе дня "минут: 0" и "упражнений: 0",
+ * потому что reviewsByDay/minutesByDay режут по l.type !== 'review'. Единица
+ * практики стоит не одну оценку карточки, а `ratio` оценок - вопрос практики
+ * дольше и требует чтения условия; `ratio` считает вызывающий (practiceUnitRatio
+ * в metrics.ts, по медианам обеих активностей), сюда приходит готовым числом,
+ * чтобы не заводить цикл импорта journal.ts <-> metrics.ts.
+ */
+export function practiceUnitsByDay(lines: JournalLine[], ratio: number): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const l of lines) {
+    if (l.type !== 'practice') continue
+    m.set(l.day, (m.get(l.day) ?? 0) + ratio)
+  }
+  return m
+}
+
+/** Минуты практики по дням (поле `sec`), отдельно от минут SRS (minutesByDay остаётся про SRS). */
+export function practiceMinutesByDay(lines: JournalLine[]): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const l of lines) {
+    if (l.type !== 'practice' || !l.sec) continue
+    m.set(l.day, (m.get(l.day) ?? 0) + l.sec / 60)
+  }
+  return m
+}
+
+/**
+ * Упражнений дня по трём каналам: оценки карточек + практика в единицах.
+ * Чтение сюда не входит намеренно - у него своя, отдельная норма (READ_MIN_TEXTS),
+ * а не счёт упражнений: страница текста не оценивается как "верно/неверно".
+ */
+export function dayUnitsByDay(lines: JournalLine[], ratio: number): Map<string, number> {
+  const out = new Map(reviewsByDay(lines))
+  for (const [day, units] of practiceUnitsByDay(lines, ratio)) {
+    out.set(day, (out.get(day) ?? 0) + units)
+  }
+  return out
+}
+
 /** Дни, где очередь была добита до конца.
  *
  *  Требование `reviews > 0` — не придирка. Пустая очередь засчитывалась
@@ -177,9 +247,20 @@ export const RUN_MIN_REVIEWS = 12
  * показывается отдельной строкой. Норма не размывается — она перестаёт быть
  * условием того, чтобы день вообще засчитался.
  */
-export function isDayDone(day: string, minutes: Map<string, number>, empty: Set<string>, reviews?: Map<string, number>): boolean {
+/**
+ * `units` - оценки карточек + практика (dayUnitsByDay, WS6a): пол дня теперь берётся
+ * упражнением любого из двух каналов, а не только карточками. `reviews` - оценки БЕЗ
+ * практики (reviewsByDay); день не закрывается одной практикой без единой карточки -
+ * иначе день, где ни одна карточка не тронута, зачитывался бы наравне с уроком SRS,
+ * а серия и норма дня существуют ради памяти на карточки в первую очередь. Если
+ * `reviews` не передан, он равен `units` (обратная совместимость со старыми вызовами,
+ * где четвёртым аргументом шли чистые оценки без практики и наличие оценки следовало
+ * из самого порога).
+ */
+export function isDayDone(day: string, minutes: Map<string, number>, empty: Set<string>, units?: Map<string, number>, reviews?: Map<string, number>): boolean {
+  const hasReview = (reviews ?? units)?.get(day) ?? 0
   return (minutes.get(day) ?? 0) >= MIN_MINUTES
-    || (reviews?.get(day) ?? 0) >= RUN_MIN_REVIEWS
+    || ((units?.get(day) ?? 0) >= RUN_MIN_REVIEWS && hasReview > 0)
     || empty.has(day)
 }
 
@@ -197,13 +278,14 @@ export function isDayFull(day: string, minutes: Map<string, number>, empty: Set<
  * может изменить сегодня, обязано быть на экране — иначе экран сообщает только
  * то, что всё плохо, и делать с этим нечего.
  */
-export function floorDays(lines: JournalLine[], today: string = dayKey(), window = 14): { done: number; window: number } {
+export function floorDays(lines: JournalLine[], today: string = dayKey(), window = 14, practiceRatio = PRACTICE_UNIT_RATIO_FLOOR): { done: number; window: number } {
   const minutes = minutesByDay(lines)
   const empty = emptyDays(lines)
   const reviews = reviewsByDay(lines)
+  const units = dayUnitsByDay(lines, practiceRatio)
   let done = 0
   for (let i = 0; i < window; i++) {
-    if (isDayDone(addDaysKey(today, -i), minutes, empty, reviews)) done++
+    if (isDayDone(addDaysKey(today, -i), minutes, empty, units, reviews)) done++
   }
   return { done, window }
 }
@@ -225,11 +307,12 @@ export interface PauseRange { from: string; to: string }
  * пропущенный день сжигает заморозку вместо серии; сегодня не судим до конца дня.
  * Дни плановой паузы прозрачны: серия не рвётся, не растёт, заморозки не тратятся.
  */
-export function streak(lines: JournalLine[], today: string = dayKey(), pause?: PauseRange | null): StreakInfo {
+export function streak(lines: JournalLine[], today: string = dayKey(), pause?: PauseRange | null, practiceRatio = PRACTICE_UNIT_RATIO_FLOOR): StreakInfo {
   const minutes = minutesByDay(lines)
   const empty = emptyDays(lines)
   const reviews = reviewsByDay(lines)
-  const done = (d: string) => isDayDone(d, minutes, empty, reviews)
+  const units = dayUnitsByDay(lines, practiceRatio)
+  const done = (d: string) => isDayDone(d, minutes, empty, units, reviews)
   const inPause = (d: string) => !!(pause && pause.from && pause.to && d >= pause.from && d <= pause.to)
   const activeDays = [...new Set(lines.map(l => l.day))].filter(Boolean).sort()
   if (!activeDays.length) return { days: 0, todayDone: false, freezes: 0, toFreeze: 7, pausedToday: inPause(today), freezeSpentYesterday: false }
@@ -522,6 +605,18 @@ export function readTextSlugs(lines: JournalLine[]): Set<string> {
   const s = new Set<string>()
   for (const l of lines) if (l.type === 'reading' && l.slug) s.add(l.slug)
   return s
+}
+
+/**
+ * Сколько РАЗНЫХ текстов прочитано за конкретный учебный день - основа достижимой
+ * нормы чтения READ_MIN_TEXTS. Считается по строкам `reading` того дня, как и
+ * readTextSlugs по всей истории; повторное прочтение того же текста в тот же день
+ * не даёт второй единицы (текст - это текст, а не минута над ним).
+ */
+export function readTextsToday(lines: JournalLine[], today: string = dayKey()): number {
+  const s = new Set<string>()
+  for (const l of lines) if (l.type === 'reading' && l.day === today && l.slug) s.add(l.slug)
+  return s.size
 }
 
 /**
