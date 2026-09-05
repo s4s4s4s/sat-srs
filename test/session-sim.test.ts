@@ -24,7 +24,8 @@ import {
   homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal,
   MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS
 } from '../src/lib/scheduler'
-import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, type OrderCtx } from '../src/lib/session'
+import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, INTRO_GAP_FLOOR_MS, type OrderCtx } from '../src/lib/session'
+import { screenSource } from './screen-source'
 import { lessonProgress, estimateShowsLeft, DRILL_PER_SESSION, type ProgressInput } from '../src/lib/progress'
 import { endOfStudyDay, dayKey, addDaysKey } from '../src/lib/daytime'
 import { sessionAccuracy, matureRetention, forcedTodaySlugs, CARD_TIME_CAP_MS, liveMarkedLemmas } from '../src/lib/journal'
@@ -87,9 +88,25 @@ interface Show {
   path: string; format: string; skill: string; graded: Grade | null; at: number; key: string
   reps: number      // fsrs.reps на момент показа — по нему проверяется C1
   wasNew: boolean   // слово было New на момент показа (знакомство, а не «Подзабылось» зрелого слова)
+  /* Экран выбран аварийным полом разрыва (последняя ступень лестницы B4). Без этого поля
+     проверка A2 не отличала законный показ на тридцатой секунде от обычного показа раньше
+     срока: она мерила ВСЕ показы полом и молчала там, где урок сокращал разрыв, имея
+     чем его выдержать. */
+  byFloor: boolean
 }
 
-interface DayOpts { budget: number; introLimit: number; failWords?: Set<string>; lessons?: number; dayNew?: number }
+interface DayOpts {
+  budget: number
+  introLimit: number
+  failWords?: Set<string>
+  lessons?: number
+  /** дневная норма новых слов: считается НА ДЕНЬ, а не на урок (Review.tsx: dayNewLeft) */
+  dayNew?: number
+  /** секунд на экран: короткий экран приближает разрывы A2 и включает аварийный пол */
+  screenMs?: number
+  /** слаги, на знакомстве которых ученик жмёт «Уже знаю это слово» (Rating.Easy) */
+  knownWords?: Set<string>
+}
 
 /**
  * Кадр полоски прогресса — ровно то, что Review.tsx рисует в `.progress` в момент кадра.
@@ -127,12 +144,20 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
   const lessons: Show[][] = []
   const allBars: Bar[][] = []
   const dayNew = opts.dayNew ?? 15
+  const screenMs = opts.screenMs ?? SCREEN_MS
+  const knownWords = opts.knownWords ?? new Set<string>()
+  /* Слаги, получившие сегодня оценку из состояния New. Дневная норма живёт на ДЕНЬ, а не на
+     урок: в приложении её считает newIntroducedOn по журналу, здесь - это множество.
+     Без него второй урок дня начинал норму заново, и симуляция не видела бы перерасхода. */
+  const ratedNewToday = new Set<string>()
   // эмуляция forcedTodaySlugs: slug → { первый урок со знакомством, уроки с отработкой после него }
   const introAt = new Map<string, number>()
   const practiceAt = new Map<string, Set<number>>()
   const kindOf = new Map(deck.map(v => [v.slug, v.kind]))
 
   for (let lesson = 0; lesson < lessonsN; lesson++) {
+    // остаток дневной нормы новых на начало урока - ровно то, что Review.tsx кладёт в dayNewLeft
+    const dayLeft = Math.max(0, dayNew - ratedNewToday.size)
     const introduced = new Set<string>()
     const lapsed = new Set<string>()
     let introShown = 0
@@ -151,6 +176,8 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
     const introPending = new Set<string>()
     const shows: Show[] = []
     const bars: Bar[] = []
+    // byFloor последнего выбора proceed: им помечается показ, попавший на экран по аварийному полу
+    let lastByFloor = false
     // Review.tsx: `shown` — закрытые показы (числитель полоски), pctFloor — храповик
     let shownCount = 0
     let pctFloor = 0
@@ -195,7 +222,8 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       const inQueue = new Set(q.map(itemKey))
       const pending = topUp().filter(i => !deferred.has(i.view.path) && !inQueue.has(itemKey(i)))
       // весь остаток ступени bonusNew — столько экранов урок ещё вправе себе добавить
-      const bonusSlots = Math.min(MAX_INTRO_BONUS - introBonus, dayNew - freshIntros)
+      const pendingNew = new Set(q.filter(i => i.fsrs.state === State.New && !introduced.has(itemKey(i))).map(itemKey)).size
+      const bonusSlots = Math.min(MAX_INTRO_BONUS - introBonus, dayLeft - freshIntros - pendingNew)
       const bonusItems = bonusSlots > 0
         ? nextNewItems(deck, new Set(q.map(itemKey)), bonusSlots).filter(i => !deferred.has(i.view.path))
         : []
@@ -223,24 +251,33 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       }
     }
 
-    /** Лестница добора из Review.tsx::proceed. [] = урок закончен. Ожидания нет по построению. */
+    /**
+     * Лестница добора из Review.tsx::proceed, ступень в ступень (B4):
+     * готовая единица пула → недоработанные сегодняшние → батч знакомств A4-bis →
+     * заполнитель → лишнее новое слово → аварийный пол разрыва. [] = урок закончен.
+     * Ожидания нет по построению.
+     */
     function proceed(list: StudyItem[]): StudyItem[] {
       let rest = list
-      let pick = pickNext(rest, ctx(rest))
+      let pick = pickNext(rest, ctx(rest), { batch: false })
       if (pick.idx < 0) {
         const extra = topUp().filter(i => !deferred.has(i.view.path) && !rest.some(r => itemKey(r) === itemKey(i)))
-        if (extra.length) { rest = [...rest, ...extra]; pick = pickNext(rest, ctx(rest)) }
+        if (extra.length) { rest = [...rest, ...extra]; pick = pickNext(rest, ctx(rest), { batch: false }) }
       }
+      if (pick.idx < 0) pick = pickNext(rest, ctx(rest))          // батч знакомств A4-bis
       if (pick.idx < 0) {
         const fill = availableFillers(rest)
         if (fill.length) { rest = [...rest, ...fill]; fillersUsed += fill.length; pick = pickNext(rest, ctx(rest)) }
       }
-      if (pick.idx < 0 && freshIntros < dayNew && introBonus < MAX_INTRO_BONUS) {
+      // новые слова, уже стоящие в очереди урока, тратят дневную норму наравне с показанными
+      const pendingNew = new Set(rest.filter(i => i.fsrs.state === State.New && !introduced.has(itemKey(i))).map(itemKey)).size
+      if (pick.idx < 0 && freshIntros + pendingNew < dayLeft && introBonus < MAX_INTRO_BONUS) {
         const bonus = nextNewItems(deck, new Set(rest.map(itemKey)), 1).filter(i => !deferred.has(i.view.path))
         if (bonus.length) { rest = [...rest, ...bonus]; introBonus += bonus.length; pick = pickNext(rest, ctx(rest)) }
       }
-      if (pick.idx < 0) pick = pickNext(rest, ctx(rest), true)   // аварийный пол разрыва
-      if (pick.idx < 0) return []
+      if (pick.idx < 0) pick = pickNext(rest, ctx(rest), { floor: true })   // аварийный пол разрыва
+      if (pick.idx < 0) { lastByFloor = false; return [] }
+      lastByFloor = pick.byFloor
       const q = [...rest]
       if (pick.idx > 0) { const [it] = q.splice(pick.idx, 1); q.unshift(it) }
       return q
@@ -251,12 +288,19 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       if (deferred.size) rest = rest.filter(i => !deferred.has(i.view.path))
       if (next && !deferred.has(next.view.path)) {
         if (insertAt !== undefined) rest.splice(Math.min(rest.length, insertAt), 0, next)
-        else if (shouldRequeue(next.fsrs, new Date(now))) rest.splice(requeuePosition(rest.length, next.fsrs, new Date(now)), 0, next)
+        else if (shouldRequeue(next.fsrs, new Date(now))) {
+          /* null от requeuePosition означает «очередь короче, чем нужно ждать»: боевой advance
+             карточку в этом случае НЕ возвращает. Мок передавал null прямо в splice, а тот
+             приводит его к нулю - карточка вставала в голову остатка и показывалась раньше
+             срока там, где приложение её не показывает вовсе. */
+          const pos = requeuePosition(rest.length, next.fsrs, new Date(now))
+          if (pos !== null) rest.splice(pos, 0, next)
+        }
       }
       return proceed(rest)
     }
 
-    let queue = buildQueue(deck, opts.budget, new Date(now), forced())
+    let queue = buildQueue(deck, Math.min(opts.budget, dayLeft), new Date(now), forced())
     // старт урока — тот же выбор экрана, что и дальше (иначе первый экран обходил бы инвариант)
     if (queue.length) queue = proceed(queue)
     let guard = 0
@@ -281,27 +325,36 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       bars.push(barNow(queue))
       shows.push({
         path: head.view.path, format: fmt, skill: head.skill, graded: null, at: now, key: itemKey(head),
-        reps: head.fsrs.reps, wasNew: head.fsrs.state === State.New
+        reps: head.fsrs.reps, wasNew: head.fsrs.state === State.New, byFloor: lastByFloor
       })
       const show = shows[shows.length - 1]
-      now += SCREEN_MS
+      now += screenMs
       shownCount++
 
+      // «Уже знаю это слово»: знакомство сразу получает Rating.Easy и идёт общим путём оценки
+      const known = fmt === 'intro' && knownWords.has(head.view.slug)
+
       if (fmt === 'intro') {
+        // зеркалит grade() в Review.tsx: окно тратит урочный лимит и урочный счётчик новых
+        // при ЛЮБОЙ оценке знакомства, включая Easy - иначе bonusNew вводит слово сверх нормы
         introShown++
         if (head.fsrs.state === State.New) freshIntros++
         lapsed.delete(itemKey(head))
-        introduced.add(itemKey(head))
-        sinceIntro = 0
-        batchIntros++
         if (!introAt.has(head.view.slug)) introAt.set(head.view.slug, lesson)
-        queue = advance(queue, head, 2)
-        continue
+        if (!known) {
+          introduced.add(itemKey(head))
+          sinceIntro = 0
+          batchIntros++
+          queue = advance(queue, head, 2)
+          continue
+        }
       }
 
       const willFail = failWords.has(head.view.word)
-      const g: Grade = willFail ? Rating.Again : Rating.Good
+      const g: Grade = known ? Rating.Easy : willFail ? Rating.Again : Rating.Good
       show.graded = g
+      // дневная норма: слово, получившее оценку из New, потрачено на весь день, а не на урок
+      if (head.fsrs.state === State.New) ratedNewToday.add(head.view.slug)
 
       let rated = f.next(head.fsrs, new Date(now), g).card
       // A1 (зеркалит store.rateItem): слово, введённое сегодня, не выходит в Review внутри дня —
@@ -361,10 +414,19 @@ function fmtSeq(shows: Show[]): string {
 }
 
 /**
- * A2 — между двумя показами одной единицы не меньше минуты; аварийный пол 30 c допустим
- * только когда уроку было нечего показать вместо этой карточки (лестница добора пуста).
- * Пол проверяем жёстко, число показов в окне 30–60 c печатаем: раньше вместо такого показа
- * рисовался экран ожидания с отсчётом, и это оказалось хуже, чем показ на тридцатой секунде.
+ * A2 и A2-bis - три разрыва, а не один.
+ *
+ * Строгий разрыв пары «оценка → оценка» - минута (MIN_SHOW_GAP_MS), пары
+ * «знакомство → первая отработка» - двадцать секунд (INTRO_GAP_MS): показ значения не
+ * извлечение из памяти, остывать нечему. Ниже строгого разрыва показ законен ТОЛЬКО как
+ * аварийный пол (MIN_SHOW_GAP_FLOOR_MS / INTRO_GAP_FLOOR_MS), то есть когда урок прошёл всю
+ * лестницу добора и показать вместо этой карточки было нечего - ровно это и означает
+ * `byFloor` выбора pickNext.
+ *
+ * Раньше проверка мерила ВСЕ показы полом и не спрашивала, откуда взялся короткий разрыв:
+ * урок, сокративший минуту до тридцати секунд при полной очереди, тест проходил молча, а
+ * пол после знакомства не проверялся вовсе (там стоял строгий INTRO_GAP_MS, и появление
+ * INTRO_GAP_FLOOR_MS сделало бы проверку красной без разбора причины).
  */
 function checkA2(shows: Show[], tag: string): number {
   const last = new Map<string, number>()
@@ -375,10 +437,16 @@ function checkA2(shows: Show[], tag: string): number {
     if (prev !== undefined) {
       const gap = s.at - prev
       const afterIntro = prevFmt.get(s.key) === 'intro'
-      const need = afterIntro ? INTRO_GAP_MS : MIN_SHOW_GAP_FLOOR_MS
-      assert(gap >= need,
-        `[${tag}] A2 нарушено: ${s.key} показан через ${gap / 1000} c (минимум ${need / 1000} c).\n  ${fmtSeq(shows)}`)
-      if (!afterIntro && gap < MIN_SHOW_GAP_MS) byFloor++
+      const strict = afterIntro ? INTRO_GAP_MS : MIN_SHOW_GAP_MS
+      const floor = afterIntro ? INTRO_GAP_FLOOR_MS : MIN_SHOW_GAP_FLOOR_MS
+      assert(gap >= floor,
+        `[${tag}] A2 нарушено: ${s.key} показан через ${gap / 1000} c (пол ${floor / 1000} c).\n  ${fmtSeq(shows)}`)
+      if (gap < strict) {
+        assert(s.byFloor,
+          `[${tag}] A2 нарушено: ${s.key} показан через ${gap / 1000} c (строгий разрыв ${strict / 1000} c), ` +
+          `а выбор не аварийный - уроку было что показать вместо него.\n  ${fmtSeq(shows)}`)
+        byFloor++
+      }
     }
     last.set(s.key, s.at)
     prevFmt.set(s.key, s.format)
@@ -611,6 +679,19 @@ function dontKnowChecks(): void {
   // числовой ответ (math) однозначен сам по себе — остаётся type даже без meaning и без настройки
   const numCard: CardView = { ...withoutMeaning, answerNum: '15', kind: 'math' }
   assert(fmt(numCard) === 'type', 'C5: числовой ответ остаётся type без meaning и без настройки ввода')
+
+  /* C3 (S8): выход «не помню» есть и у форматов с вариантами (mc/prep).
+     Кнопка была только у reveal и type, а выбор из четырёх ученик обязан был чем-то закрыть -
+     то есть ткнуть наугад, и угаданный вариант уезжал в FSRS как вспомненное слово.
+     React в node нет, поэтому свойство проверяется по исходнику экрана: между стопкой
+     вариантов и подсказкой клавиш стоит вызов giveUp(). */
+  const источник = screenSource('Review.tsx')
+  const стопка = источник.indexOf('className="mc-stack">')
+  assert(стопка > 0, 'C3: в Review.tsx не найдена стопка вариантов (mc-stack)')
+  const подсказка = источник.indexOf('hint-keys', стопка)
+  assert(подсказка > стопка, 'C3: после стопки вариантов не найдена подсказка клавиш (hint-keys)')
+  assert(источник.slice(стопка, подсказка).includes('giveUp()'),
+    'C3: у формата с вариантами нет выхода «не помню» - ученику остаётся гадать, а угаданный вариант засчитывается как знание')
 
   /* Дистракторы пересобираются: авторские confusables больше не занимают всю
      четвёрку. На живой колоде confusables ровно по три у 415 карточек из 450 —
@@ -1584,6 +1665,174 @@ function leechQuarantineChecks(): void {
   passed++
 }
 
+/**
+ * B2 (S4): обязательная отработка введённого сегодня стоит в очереди РАНЬШЕ новых слов.
+ *
+ * `buildQueue` возвращала `[...learning, ...mixed, ...drills]`, то есть добор шёл последним
+ * слагаемым - урок сначала знакомил с новыми словами и лишь потом отрабатывал уже введённые.
+ * Приоритет B2 обратный: созревший learning-шаг, просроченный повтор, отработка сегодняшнего,
+ * и только затем новое. Проверяем на боевом buildQueue и повторяем прогон: порядок внутри
+ * групп перемешан (`shuffle`), а свойство обязано держаться на каждом.
+ */
+function queueOrderChecks(): void {
+  // слово, введённое сегодня: Learning со сроком на завтра (в learning-ветку очереди не
+  // попадает - до него дальше LEARN_AHEAD_MS), в урок его тянет только forced
+  const drill = learningCard('drill-today', BASE + 20 * 3600_000)
+  const deck = [reviewCard('r1'), reviewCard('r2'), reviewCard('r3'), drill,
+                newCard('n1'), newCard('n2'), newCard('n3')]
+  const forced = new Set([drill.slug])
+
+  for (let i = 0; i < 50; i++) {
+    const q = buildQueue(deck, 2, new Date(BASE), forced)
+    const slugs = q.map(it => it.view.slug).join(',')
+    const drillAt = q.findIndex(it => it.view.slug === drill.slug)
+    const newAt = q.map((it, idx) => (it.fsrs.state === State.New ? idx : -1)).filter(idx => idx >= 0)
+    assert(drillAt >= 0, `B2: обязательная отработка не попала в очередь: ${slugs}`)
+    assert(newAt.length === 2, `B2: при бюджете 2 ожидались два новых слова, получили ${newAt.length}: ${slugs}`)
+    assert(newAt.every(idx => drillAt < idx),
+      `B2 нарушено: отработка сегодняшнего стоит на #${drillAt}, новое слово - на #${Math.min(...newAt)}: ${slugs}`)
+  }
+
+  // без forced очередь прежняя: добор не берётся сам по себе, а состав не меняется
+  const plain = buildQueue(deck, 2, new Date(BASE))
+  assert(!plain.some(it => it.view.slug === drill.slug),
+    'B2: карточка добора попала в очередь без forced - обязательная отработка считается по журналу')
+  assert(plain.length === 5 && plain.filter(it => it.fsrs.state === State.New).length === 2,
+    `B2: без forced очередь обязана остаться прежней (3 повтора + 2 новых), получили ${plain.map(it => it.view.slug).join(',')}`)
+
+  console.log('  ✓ порядок очереди (B2): обязательная отработка сегодняшнего идёт раньше новых, без forced очередь прежняя')
+  passed++
+}
+
+/**
+ * S10: карточка, которую боевой `advance` в очередь НЕ возвращает, не возвращается и в моке.
+ *
+ * `requeuePosition` отдаёт null, когда ждать нужно дольше, чем остаток очереди: показывать
+ * раньше срока нельзя, так решила модель. Мок передавал этот null прямо в `splice`, а тот
+ * приводит его к нулю - карточка вставала в ГОЛОВУ остатка и получала лишний показ.
+ * Проваленный повтор уходит в Relearning на десять минут, ждать его в очереди из трёх
+ * карточек нечем, значит показ ровно один.
+ */
+function requeueDropChecks(): void {
+  const deck = [reviewCard('s1'), reviewCard('s2'), reviewCard('s3'), reviewCard('flaky')]
+  const shows = runSession(deck, { budget: 0, introLimit: 0, failWords: new Set(['flaky']) })
+  checkAll(shows, 'S10/возврат-в-очередь')
+  const flaky = shows.filter(s => s.path === 'deck/flaky.md')
+  assert(flaky.length === 1,
+    `S10: карточка, которую очередь принять не может, показана ${flaky.length} раз(а) вместо одного.\n  ${fmtSeq(shows)}`)
+  console.log('  ✓ возврат в очередь (S10): null от requeuePosition означает «не возвращать», а не «в начало»')
+  passed++
+}
+
+/**
+ * S11 (A2-bis): пол разрыва после знакомства - половина INTRO_GAP_MS, и показ по нему
+ * помечается как аварийный.
+ *
+ * `Math.min(gap, INTRO_GAP_MS)` делал аварийный проход бессмысленным ровно там, где он нужен:
+ * у слова, которому урок только что показал знакомство. Короткий экран (5 c) приближает
+ * разрывы, поэтому урок вынужден закрывать первую отработку полом, а не строгим разрывом.
+ */
+function introFloorChecks(): void {
+  assert(INTRO_GAP_FLOOR_MS === INTRO_GAP_MS / 2,
+    `A2-bis: пол после знакомства обязан быть половиной строгого разрыва, получили ${INTRO_GAP_FLOOR_MS} при ${INTRO_GAP_MS}`)
+
+  const deck = [reviewCard('concede'), newCard('hypothesis'), newCard('derive'), newCard('imply'),
+                newCard('yield'), newCard('viable'), newCard('adhere')]
+  const shows = runSession(deck, { budget: 3, introLimit: 3, screenMs: 5_000 })
+  checkAll(shows, 'S11/пол-после-знакомства')
+
+  const last = new Map<string, { at: number; format: string }>()
+  let found = 0
+  for (const s of shows) {
+    const prev = last.get(s.key)
+    if (prev && prev.format === 'intro' && s.at - prev.at < INTRO_GAP_MS) {
+      assert(s.at - prev.at >= INTRO_GAP_FLOOR_MS,
+        `S11: первая отработка ${s.key} пришла через ${(s.at - prev.at) / 1000} c - ниже пола`)
+      assert(s.byFloor, `S11: показ ${s.key} раньше строгого разрыва не помечен аварийным`)
+      found++
+    }
+    last.set(s.key, { at: s.at, format: s.format })
+  }
+  assert(found > 0,
+    `S11: на коротком экране (5 c) урок обязан хоть раз закрыть первую отработку полом, иначе пол не проверен.\n  ${fmtSeq(shows)}`)
+  console.log(`  ✓ пол после знакомства (S11/A2-bis): ${found} отработок закрыто полом ${INTRO_GAP_FLOOR_MS / 1000} c, ниже пола показов нет`)
+  passed++
+}
+
+/**
+ * S2: «Уже знаю это слово» тратит дневную норму новых.
+ *
+ * Инкремент урочного счётчика знакомств стоял в ветке `g !== Rating.Easy`, мимо которой
+ * проходит кнопка «Уже знаю это слово». Слово получало оценку из состояния New (то есть по A7
+ * считалось введённым), но остаток дня не уменьшало, и ступень bonusNew вводила сверх нормы
+ * ещё одно - NEW_PER_DAY превышался ровно на число «уже знаю» за урок.
+ *
+ * Колода не из одних новых: два созревших повтора дают уроку материал, на котором лестница
+ * добора доходит до ступени bonusNew. На колоде из одних новых урок упирается в A6 раньше,
+ * ступень не срабатывает вовсе, и перерасход нормы не воспроизводится - тест был бы зелёным
+ * и до правки. Дневная норма 3 при бюджете урока 3 по той же причине: на норме 2 очередь
+ * первого урока забирает её целиком и добирать сверх становится нечего.
+ */
+function knownWordChecks(): void {
+  const dayNew = 3
+  const knownWords = new Set(['k1'])
+  /* Прогонов несколько: состав и порядок очереди перемешаны (`shuffle` в buildQueue), и
+     перерасход виден не на каждом раскладе - один прогон ловил бы регресс через раз.
+     Свойство проверяется на КАЖДОМ прогоне: дневная норма не превышается никогда. */
+  const ПРОГОНОВ = 30
+  let сEasy = 0
+  let максимум = 0
+  for (let run = 0; run < ПРОГОНОВ; run++) {
+    // колода собирается заново: runDay мутирует состояние карточек, как store.rateItem
+    const deck = [reviewCard('rv1'), reviewCard('rv2'),
+      ...['k1', 'k2', 'k3', 'k4', 'k5', 'k6'].map(w => newCard(w))]
+    const { lessons } = runDay(deck, { budget: 3, introLimit: 3, dayNew, lessons: 2, knownWords })
+    lessons.forEach((shows, i) => checkAll(shows, `S2/прогон${run + 1}/урок${i + 1}`))
+    if (lessons.flat().some(s => s.path === 'deck/k1.md' && s.graded === Rating.Easy)) сEasy++
+
+    const введено = new Set<string>()
+    for (const shows of lessons) for (const s of shows) if (s.wasNew && s.graded !== null) введено.add(s.path)
+    максимум = Math.max(максимум, введено.size)
+    assert(введено.size <= dayNew,
+      `S2: за день оценку из состояния New получили ${введено.size} слов при дневной норме ${dayNew} ` +
+      `(${[...введено].join(', ')}). «Уже знаю это слово» не потратило урочный счётчик знакомств, ` +
+      `и ступень bonusNew ввела слово сверх нормы.`)
+  }
+  assert(сEasy > 0,
+    'S2: ни в одном прогоне слово из knownWords не дошло до знакомства - проверять нечего, поправьте раскладку колоды')
+
+  console.log(`  ✓ «уже знаю это слово» (S2): ${ПРОГОНОВ} прогонов, Easy на знакомстве в ${сEasy}, ` +
+    `за день введено не больше ${максимум} слов при норме ${dayNew}`)
+  passed++
+}
+
+/**
+ * S5 (B4): во втором уроке дня отработка сегодняшнего слова идёт раньше первого знакомства.
+ *
+ * Свойство держится двумя правками сразу: порядком очереди в buildQueue (drills перед новыми)
+ * и порядком ступеней лестницы proceed (батч знакомств A4-bis включается только после того,
+ * как строгий проход и недоработанные сегодняшние слова ничего не дали).
+ */
+function ladderOrderChecks(): void {
+  const deck = ['l1', 'l2', 'l3', 'l4', 'l5', 'l6'].map(w => newCard(w))
+  const { lessons } = runDay(deck, { budget: 2, introLimit: 2, lessons: 2 })
+  lessons.forEach((shows, i) => checkAll(shows, `S5/урок${i + 1}`))
+
+  const вчерашние = new Set(lessons[0].map(s => s.path))
+  const второй = lessons[1]
+  const отработка = второй.findIndex(s => вчерашние.has(s.path) && s.format !== 'intro')
+  const знакомство = второй.findIndex(s => !вчерашние.has(s.path) && s.format === 'intro')
+  assert(отработка >= 0,
+    `S5: во втором уроке нет ни одной отработки слов первого урока.\n  ${fmtSeq(второй)}`)
+  assert(знакомство >= 0,
+    `S5: во втором уроке нет ни одного знакомства с новым словом - сравнивать не с чем.\n  ${fmtSeq(второй)}`)
+  assert(отработка < знакомство,
+    `S5 нарушено: знакомство нового слова (#${знакомство}) идёт раньше отработки сегодняшнего (#${отработка}).\n  ${fmtSeq(второй)}`)
+
+  console.log(`  ✓ порядок лестницы (S5/B4): во втором уроке отработка сегодняшнего (#${отработка}) раньше знакомства (#${знакомство})`)
+  passed++
+}
+
 function main(): void {
   console.log('SRS session simulation — A2/A3/A4-bis/A6/B4/C1/C2')
 
@@ -1665,6 +1914,11 @@ function main(): void {
 
   progressBarChecks()
 
+  queueOrderChecks()
+  ladderOrderChecks()
+  requeueDropChecks()
+  introFloorChecks()
+  knownWordChecks()
   logicSectionChecks()
   sectionBudgetChecks()
   fillerChecks()

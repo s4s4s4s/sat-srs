@@ -527,8 +527,10 @@ export function nextNewItems(cards: CardView[], exclude: Set<string>, limit = 1,
 }
 
 /**
- * Очередь сессии: Learning/Relearning → Review (due сегодня) → New (лимит).
- * Review и New перемешаны interleaving-ом, learning — впереди по due.
+ * Очередь сессии по приоритету B2: Learning/Relearning, созревшие Review, обязательная
+ * отработка введённого сегодня (drills по `forced`), новые.
+ * Review и New перемешаны interleaving-ом, learning стоит впереди по due, а drills встают
+ * перед первым новым словом очереди - отработка сегодняшнего идёт раньше знакомств.
  */
 export function buildQueue(cards: CardView[], newBudget: number, now: Date = new Date(), forced?: Set<string>, marked: ReadonlySet<string> = new Set()): StudyItem[] {
   const eod = endOfStudyDay(now)
@@ -570,6 +572,17 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
   const effectiveBudget = newIntroAllowed(now) ? newBudget : 0
   const newItems = shuffle(fresh.slice(0, Math.max(0, effectiveBudget)))
 
+  // point 3: обязательный добор. Слова, введённые сегодня и ещё не отработанные в двух
+  // последующих сессиях (список forced считает вызывающий по журналу), принудительно
+  // попадают в урок — даже если их due перенесён на завтра (см. point 1, держим в Learning).
+  // Берём только recall-единицы в Learning/Relearning: New уже в пуле новых, Review-слова
+  // (напр. «уже знаю это слово») отработки не требуют.
+  const already = new Set([...learning, ...review, ...newItems].map(itemKey))
+  const drills = forced?.size
+    ? shuffle(items.filter(i =>
+        i.skill === 'recall' && forced.has(i.view.slug) && isLearning(i.fsrs.state) && !already.has(itemKey(i))))
+    : []
+
   // interleaving с разрядкой: новые распределяем среди review, но не ближе чем через
   // NEW_GAP других карточек; позицию 0 не занимаем — сессия начинается с повтора, если он есть.
   // Если повторов мало и слова всё равно встают рядом, очередь дополнительно разряжается
@@ -583,17 +596,18 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
     })
   }
 
-  // point 3: обязательный добор. Слова, введённые сегодня и ещё не отработанные в двух
-  // последующих сессиях (список forced считает вызывающий по журналу), принудительно
-  // попадают в урок — даже если их due перенесён на завтра (см. point 1, держим в Learning).
-  // Берём только recall-единицы в Learning/Relearning: New уже в пуле новых, Review-слова
-  // (напр. «уже знаю это слово») отработки не требуют. Добор — в хвост, перемешанный.
-  const already = new Set([...learning, ...review, ...newItems].map(itemKey))
-  const drills = forced?.size
-    ? shuffle(items.filter(i =>
-        i.skill === 'recall' && forced.has(i.view.slug) && isLearning(i.fsrs.state) && !already.has(itemKey(i))))
-    : []
-  return [...learning, ...mixed, ...drills]
+  /* B2: отработка сегодняшнего идёт РАНЬШЕ новых. Добор стоял в хвосте (`...drills` последним
+     слагаемым return), то есть урок сначала знакомил с новыми словами и лишь потом отрабатывал
+     уже введённые - обратный приоритету порядок.
+
+     Место вставки - перед первой единицей в состоянии New, а не в голову очереди: новые
+     разнесены по review шагом NEW_GAP (A4), и вставка перед review сдвинула бы весь разнос.
+     Новых в очереди нет (бюджет нулевой или колода их не даёт) - добор идёт в хвост. */
+  if (drills.length) {
+    const firstNew = mixed.findIndex(i => i.fsrs.state === State.New)
+    mixed.splice(firstNew < 0 ? mixed.length : firstNew, 0, ...drills)
+  }
+  return [...learning, ...mixed]
 }
 
 /**
@@ -751,6 +765,11 @@ export function isExercise(v: { kind: string }): boolean {
  * задача правила — не дать показать сегодня, а не приблизить показ. Состояние и ступень
  * лестницы не трогаются: упражнение, отвеченное неверно, остаётся в Relearning и завтра
  * придёт с той же ступени — ошибка не прощается, она откладывается до следующего дня.
+ *
+ * `scheduled_days` здесь - план вперёд (показ назначен на завтра), а не прожитый интервал:
+ * поднимаем его до единицы, чтобы отложенное упражнение не выглядело картой с нулевым планом.
+ * Бакеты retention (metrics.ts) считают по прожитому интервалу и это поле не читают, поэтому
+ * правка срока статистику повторений не искажает.
  */
 export function holdExerciseToNextDay(next: FsrsCard, now: Date, kind: string): FsrsCard {
   if (!isExercise({ kind })) return next

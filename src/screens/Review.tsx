@@ -477,10 +477,20 @@ export default function Review() {
    */
   function bonusNew(exclude: StudyItem[], n = 1): StudyItem[] {
     if (app.sessionReviewOnly) return []              // режим «только повторение» — новых не вводим
+    /* Новые слова, которые урок уже держит в очереди, но ещё не показал, тратят дневную норму
+       так же, как показанные знакомства: показ им предстоит в этом же уроке. Без их учёта
+       ступень добора считала остаток по одним показанным окнам и вводила слово сверх нормы
+       ровно тогда, когда очередное новое слово в очереди было временно закрыто разносом A4:
+       лестница видела пустой экран, добирала ещё одно слово, а следом выходило и то, что
+       ждало в очереди. NEW_PER_DAY по B4 не превышается никогда, поэтому счёт ведётся по
+       обязательствам урока, а не по его истории. */
+    const pending = new Set(exclude
+      .filter(i => i.fsrs.state === State.New && !introduced.current.has(itemKey(i)))
+      .map(itemKey)).size
     // сколько слов эта ступень ещё вправе поднять: урочный запас и дневной остаток. Лестница
     // берёт по одному (n = 1), полоске нужен весь остаток — она считает будущие экраны урока
     const slots = Math.min(MAX_INTRO_BONUS - introBonus.current,
-      dayNewLeft.current - freshIntros.current, n)
+      dayNewLeft.current - freshIntros.current - pending, n)
     if (slots <= 0) return []
     const used = new Set(exclude.map(itemKey))
     return nextNewItems(deck, used, slots, new Date(), liveMarkedLemmas(currentJournal())).filter(i => !deferredToday.current.has(i.view.path))
@@ -506,25 +516,36 @@ export default function Review() {
 
   /**
    * Лестница добора (B3/B4): показать следующий экран, а если сейчас показывать нечего —
-   * сначала добрать, а не заканчивать урок.
-   *   1) первая допустимая единица очереди (A2/A3/A4, затем батч знакомств A4-bis);
-   *   2) недоработанные сегодняшние слова (в т.ч. New после знакомства);
-   *   3) заполнитель — повтор со сроком в пределах суток, поднятый заранее;
-   *   4) единственное препятствие — 60-секундный разрыв A2 → короткая пауза, не конец урока;
-   *   5) и только если добирать действительно нечего — урок завершён.
+   * сначала добрать, а не заканчивать урок. Порядок ступеней задан B4 и обязателен:
+   *   1) готовая единица пула - строгий проход по очереди (A2/A3/A4), без батча знакомств;
+   *   2) недоработанные сегодняшние слова (в т.ч. New после знакомства), тем же строгим проходом;
+   *   3) знакомство следующего слова в пределах батча A4-bis;
+   *   4) заполнитель - повтор со сроком в пределах 72 ч, поднятый заранее;
+   *   5) ещё одно новое слово сверх УРОЧНОГО лимита (дневной не превышается никогда);
+   *   6) аварийный пол разрыва A2 - показ на тридцатой секунде вместо простоя;
+   *   и только после всей лестницы урок завершён.
+   *
+   * Батч знакомств (ступень 3) отключён на ступенях 1 и 2 намеренно: иначе урок вводит
+   * новое слово раньше, чем отработает уже введённое сегодня, и B4 держится только на
+   * порядке очереди, который к этому моменту уже исчерпан.
    *
    * `counted` = был ли закрыт настоящий показ. Пропуск непоказанного знакомства — тоже
    * переход к следующему экрану, но полоску он двигать не имеет права.
    */
   async function proceed(list: StudyItem[], counted = true) {
     let rest = list
-    let pick = pickNext(rest, orderCtx(rest))
+    // (1) готовая единица пула
+    let pick = pickNext(rest, orderCtx(rest), { batch: false })
     if (pick.idx < 0) {
+      // (2) недоработанные сегодняшние слова
       const extra = topUp().filter(i =>
         !deferredToday.current.has(i.view.path) && !rest.some(r => itemKey(r) === itemKey(i)))
-      if (extra.length) { rest = [...rest, ...extra]; pick = pickNext(rest, orderCtx(rest)) }
+      if (extra.length) { rest = [...rest, ...extra]; pick = pickNext(rest, orderCtx(rest), { batch: false }) }
     }
+    // (3) батч знакомств A4-bis: знакомство сразу за знакомством, когда разбавлять нечем
+    if (pick.idx < 0) pick = pickNext(rest, orderCtx(rest))
     if (pick.idx < 0) {
+      // (4) заполнитель: повтор со сроком в пределах 72 ч, поднятый заранее
       const fill = availableFillers(rest)
       if (fill.length) {
         rest = [...rest, ...fill]
@@ -533,7 +554,7 @@ export default function Review() {
       }
     }
     if (pick.idx < 0) {
-      // последняя ступень: лишнее новое слово сверх УРОЧНОГО лимита (дневной не трогаем).
+      // (5) лишнее новое слово сверх УРОЧНОГО лимита (дневной не трогаем).
       // Лучше ввести четвёртое слово, чем оставить ученика без экрана
       const bonus = bonusNew(rest)
       if (bonus.length) {
@@ -542,9 +563,9 @@ export default function Review() {
         pick = pickNext(rest, orderCtx(rest))
       }
     }
-    // лестница пройдена: если и теперь ничего — разрешаем аварийный пол разрыва (30 c),
+    // (6) лестница пройдена: если и теперь ничего - разрешаем аварийный пол разрыва (30 c),
     // чтобы вместо простоя или потери введённого слова дать показ на тридцатой секунде
-    if (pick.idx < 0) pick = pickNext(rest, orderCtx(rest), true)
+    if (pick.idx < 0) pick = pickNext(rest, orderCtx(rest), { floor: true })
     if (pick.idx < 0) {
       // добирать нечего и всё, что осталось, нарушило бы инвариант — урок закончен (B3)
       setQueue([])
@@ -651,15 +672,23 @@ export default function Review() {
       const elapsed = Date.now() - shownAt.current
 
       // окно-знакомство показано (новое ИЛИ «Подзабылось») — тратит урочный лимит, флаг провала снят
-      if (task.format === 'intro') { introShown.current++; lapsed.current.delete(itemKey(task.item)) }
+      if (task.format === 'intro') {
+        introShown.current++
+        lapsed.current.delete(itemKey(task.item))
+        /* Знакомства новых слов считаем отдельно: дневной лимит про них, а не про «Подзабылось».
+           Счётчик растёт на ЛЮБОЙ оценке знакомства, включая «Уже знаю это слово» (Rating.Easy).
+           Раньше инкремент стоял в ветке ниже, мимо которой Easy проходит, и урочный счётчик
+           такое слово не тратил: остаток дня (dayNewLeft - freshIntros) оставался прежним, а
+           ступень bonusNew вводила сверх него ещё одно слово - дневная норма NEW_PER_DAY
+           превышалась ровно на число «уже знаю» за урок. */
+        if (task.item.fsrs.state === State.New) freshIntros.current++
+      }
       // интро — знакомство, не вспоминание: FSRS не трогаем; отработка через пару карточек
       if (task.format === 'intro' && g !== Rating.Easy) {
         introduced.current.add(itemKey(task.item))
         sinceIntro.current = 0
         // A4-bis: счётчик батча растёт до первой оценённой отработки
         batchIntros.current++
-        // знакомства новых слов считаем отдельно: дневной лимит про них, а не про «Подзабылось»
-        if (task.item.fsrs.state === State.New) freshIntros.current++
         await markIntroduced(task.item)
         await advance(task.item, false, 2)
         return
@@ -1143,6 +1172,11 @@ export default function Review() {
                   </button>
                 ))}
               </div>
+              {/* C3: явный выход «не помню» обязан быть у КАЖДОГО формата, включая выбор из
+                  вариантов: без него незнающий ученик тыкает наугад, и угаданный вариант
+                  уезжает в FSRS как вспомненное слово. giveUp() фиксирует Again и раскрывает
+                  ответ, ряд «Хорошо/Легко» после этого не показывается. */}
+              <button className="intro-know" onClick={() => giveUp()}>Не помню, показать ответ</button>
               <div className="hint-keys kb-only">Клавиши 1–{Math.min(4, task.options.length)} — выбрать</div>
             </>
           )
