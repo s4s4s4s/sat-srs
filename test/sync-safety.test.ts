@@ -27,10 +27,10 @@ import 'fake-indexeddb/auto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { State, type Card as FsrsCard } from 'ts-fsrs'
-import { parseMd, mergeCard, pickFsrsBlock } from '../src/lib/yamlfm'
+import { parseMd, mergeCard, pickFsrsBlock, serializeMd } from '../src/lib/yamlfm'
 import {
   deletionPlan, massDeleteConfirmed, massDeleteNeedsConfirm, journalUnchanged, nfcPath,
-  applyPull, putCard, getAllCards, clearLocalData,
+  applyPull, putCard, getAllCards, clearLocalData, confirmPushed,
   MASS_DELETE_CONFIRM_MS, MassDeleteError, type MassDeletePending
 } from '../src/lib/db'
 import { isCardPath, isJournalPath, massDeleteMessage, isStuck, stuckCards, stuckMessage, joinWarnings, STUCK_SHOW } from '../src/lib/sync'
@@ -604,6 +604,73 @@ async function quarantineChecks(): Promise<void> {
   await clearLocalData()
 }
 
+// ---- 9b. E-синк: битая локальная запись не уезжает на недостижимый -N путь ---
+
+/**
+ * Судьба записи, у которой есть и неотправленная работа, и битое содержимое, и НЕТ sha
+ * (в репозиторий она ещё не уезжала). Ветка create/create переселяла такую запись на
+ * свободный `-2.md`: push её не берёт (`dirty && !broken`), файла с таким именем в
+ * репозитории нет, тьютор его не видит - работа оставалась дома навсегда, а счётчик
+ * несинхронизированного и статус `warning` не гасли уже ничем.
+ */
+async function brokenLocalCreateChecks(): Promise<void> {
+  const P = 'Учёба/Карточки/venerate.md'
+  const localFsrs = block({ reps: 6, stability: 9.5, last_review: '2026-09-05T18:00:00.000Z' })
+
+  await clearLocalData()
+  await putCard(cardRec({ word: 'venerate', fsrs: localFsrs },
+    { path: P, sha: null, dirty: 1, broken: 1, body: '<<<<<<< HEAD' }))
+
+  // тьютор кладёт в репозиторий целый файл того же слага
+  await pullOne(P, 'sha1',
+    { word: 'venerate', meaning_ru: 'почитать', fsrs: block({ reps: 2, stability: 1.1, last_review: '2026-08-01T10:00:00.000Z' }) },
+    'тело от тьютора', 0)
+
+  const all = await getAllCards()
+  assert(!all.some(c => /-\d+\.md$/.test(c.path)),
+    `битая локальная запись не должна порождать -N путь: ${all.map(c => c.path).join(', ')}`)
+  assert(all.length === 1, `запись должна остаться одна, получено: ${all.map(c => c.path).join(', ')}`)
+  const cur = await stored(P)
+  assert(cur.broken === 0, 'целый файл тьютора снимает карантин с записи')
+  assert(cur.dirty === 1, 'оценка ещё не уехала - запись остаётся dirty')
+  assert(cur.fm.fsrs?.reps === 6 && cur.fm.fsrs?.stability === 9.5,
+    `локальная оценка обязана пережить слияние, получено reps=${cur.fm.fsrs?.reps}`)
+  assert(cur.sha === 'sha1', `после слияния запись знает свой файл в репозитории, получено sha=${cur.sha}`)
+  assert(cur.body === 'тело от тьютора' && cur.fm.meaning_ru === 'почитать', 'содержимое берётся у тьютора')
+
+  /* Эквивалент push-половины doSync: тот же фильтр отправки и то же подтверждение.
+     Запись обязана в него попасть - иначе несинхронизированное так и висит. */
+  const toPush = (await getAllCards()).filter(c => c.dirty && !c.broken)
+  assert(toPush.length === 1, `push обязан взять починенную запись, взято ${toPush.length}`)
+  await confirmPushed(
+    toPush.map(c => ({ path: c.path, sha: 'sha2', content: serializeMd(c.fm, c.body) })),
+    rec => serializeMd(rec.fm, rec.body)
+  )
+  const after = await getAllCards()
+  assert(after.every(c => !c.dirty), `после отправки несинхронизированного не остаётся: ${after.filter(c => c.dirty).map(c => c.path).join(', ')}`)
+  assert(stuckCards(after).length === 0, 'застрявших после отправки быть не должно')
+  group('E-синк: битая локальная запись без sha сливается с файлом тьютора и уезжает push-ем, а не оседает на -N пути')
+
+  /* Второй исход: файл тьютора тоже битый. Запись честно застревает - но под РЕАЛЬНЫМ путём,
+     который есть в репозитории, и предупреждение называет слаг, который человек найдёт в vault. */
+  await clearLocalData()
+  await putCard(cardRec({ word: 'venerate', fsrs: localFsrs },
+    { path: P, sha: null, dirty: 1, broken: 1, body: '<<<<<<< HEAD' }))
+  const remotePaths = new Set([P])
+  await applyPull([{ path: P, sha: 'sha1', fm: {}, body: '<<<<<<< HEAD от тьютора', broken: 1 }], remotePaths, mergeCard)
+
+  const all2 = await getAllCards()
+  assert(all2.length === 1 && all2[0].path === P, `битый remote не должен раздваивать запись: ${all2.map(c => c.path).join(', ')}`)
+  const stuck = stuckCards(all2)
+  assert(stuck.length === 1 && stuck[0].path === P, `застрявшая должна быть одна и под своим путём: ${stuck.map(c => c.path).join(', ')}`)
+  assert(remotePaths.has(stuck[0].path), 'путь застрявшей карточки обязан существовать в репозитории - иначе чинить нечего')
+  assert(stuck[0].fm.fsrs?.reps === 6, 'оценка ждёт починки файла внутри записи, а не пропадает')
+  assert(stuckMessage(stuck.map(c => c.path)).includes('venerate'), 'предупреждение обязано назвать слаг реального файла')
+  group('E-синк: если и файл тьютора битый, запись застревает под реальным путём и видна предупреждением, а не молча')
+
+  await clearLocalData()
+}
+
 // ---- 10. F30: застрявшая карточка не молчит --------------------------------
 
 function stuckChecks(): void {
@@ -687,6 +754,7 @@ async function main(): Promise<void> {
   movingCapChecks()
   leechChecks()
   await quarantineChecks()
+  await brokenLocalCreateChecks()
   stuckChecks()
   corpusKeyChecks()
   const live = liveDeckChecks()
