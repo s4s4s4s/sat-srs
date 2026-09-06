@@ -13,7 +13,7 @@ import type { JournalLine } from '../src/lib/types'
 import {
   isGraded, reviewsByDay, isDayDone, minutesByDay, emptyDays, floorDays, RUN_MIN_REVIEWS,
   dayUnitsByDay, practiceUnitsByDay, practiceMinutesByDay, PRACTICE_UNIT_RATIO_FLOOR,
-  readTextsToday, READ_MIN_TEXTS
+  readTextsToday, READ_MIN_TEXTS, stemEn, deckHasWord, markDigest, readingSrc
 } from '../src/lib/journal'
 
 let passed = 0
@@ -172,6 +172,54 @@ function readTextsTodayChecks(): void {
   group('readTextsToday: прочтение другого дня не считается за сегодня')
 }
 
+// ---- stemEn / deckHasWord / markDigest (F41) ------------------------------
+
+function stemEnChecks(): void {
+  // формы, отмеченные в тексте, обязаны сойтись основой со словом карточки колоды
+  const pairs: [string, string][] = [
+    ['assumptions', 'assumption'],
+    ['distinctive', 'distinct'],
+    ['praised', 'praise'],
+    ["treaty's", 'treaty'],
+    ['depletion', 'deplete'],
+    ['cited', 'cite'],
+    ['citing', 'cite']
+  ]
+  for (const [form, base] of pairs) {
+    assert(stemEn(form) === stemEn(base), `stemEn(${form})=${stemEn(form)} обязан совпасть с stemEn(${base})=${stemEn(base)}`)
+  }
+  // разные слова не обязаны схлопываться в одну основу
+  const distinctPairs: [string, string][] = [
+    ['arbitrary', 'justify'], ['cite', 'city'], ['deplete', 'delete'], ['assumption', 'assume']
+  ]
+  for (const [a, b] of distinctPairs) {
+    assert(stemEn(a) !== stemEn(b), `stemEn(${a}) и stemEn(${b}) не должны совпасть, оба дали ${stemEn(a)}`)
+  }
+  group('stemEn: формы слова из живой находки F41 сходятся основой, посторонние слова не схлопываются')
+}
+
+function deckHasWordChecks(): void {
+  const deck = new Set(['assumption', 'praise', 'treaty', 'deplete', 'cite'])
+  assert(deckHasWord(deck, 'assumptions'), 'assumptions обязано найтись в колоде через основу assumption')
+  assert(deckHasWord(deck, 'praised'), 'praised обязано найтись в колоде через основу praise')
+  assert(deckHasWord(deck, "treaty's"), "treaty's обязано найтись в колоде через основу treaty")
+  assert(deckHasWord(deck, 'depletion'), 'depletion обязано найтись в колоде через основу deplete')
+  assert(deckHasWord(deck, 'cited', 'citing'), 'cited/citing обязаны найтись в колоде через основу cite')
+  assert(!deckHasWord(deck, 'bolster'), 'слово, которого в колоде нет ни в одной форме, не должно находиться')
+  group('deckHasWord: сравнение по основе находит формы слов колоды (F41), посторонние слова остаются не найдены')
+}
+
+function markDigestChecks(): void {
+  const deck = new Set(['assumption'])
+  const lines: JournalLine[] = [
+    { id: 'm1', type: 'mark', ts: `${DAY}T11:00:00+03:00`, day: DAY, src: readingSrc('t1'), word: 'assumptions', lemma: 'assumptions', sentence: 'Some assumptions were wrong.', on: true } as JournalLine
+  ]
+  const md = markDigest(lines, deck)
+  assert(md.entries.length === 1 && md.entries[0].inDeck === true,
+    `отметка формы assumptions при карточке assumption обязана дать inDeck=true, получено ${JSON.stringify(md.entries)}`)
+  group('markDigest: отметка формы слова с уже заведённой карточкой не уезжает в кандидаты (F41)')
+}
+
 function main(): void {
   console.log('SRS journal: reviewsByDay/isGraded/isDayDone/floorDays (A7: показ знакомства не упражнение)')
   reviewsByDayChecks()
@@ -179,6 +227,9 @@ function main(): void {
   floorDaysChecks()
   dayUnitsChecks()
   readTextsTodayChecks()
+  stemEnChecks()
+  deckHasWordChecks()
+  markDigestChecks()
   console.log(`\nВсе проверки журнала пройдены (${passed} групп).`)
 }
 

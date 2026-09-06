@@ -505,12 +505,110 @@ export function normWord(w: string): string {
   return w.trim().toLowerCase().replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '')
 }
 
-/** Есть ли слово в колоде — по любой из известных форм (леммы и той, что стояла в тексте). */
+/* Английская гласная в позиции i: обычная гласная, либо `y`, перед которой стоит согласная
+   (`sky` - согласная, `happy` - гласная в `y`, потому что перед ней `p`). Рекурсия по левому
+   соседу - то же правило, что использует алгоритм Портера для меры m(). */
+function isVowelEn(w: string, i: number): boolean {
+  const c = w[i]
+  if ('aeiou'.includes(c)) return true
+  if (c !== 'y') return false
+  return i === 0 ? false : !isVowelEn(w, i - 1)
+}
+
+function containsVowelEn(w: string): boolean {
+  for (let i = 0; i < w.length; i++) if (isVowelEn(w, i)) return true
+  return false
+}
+
+/** Мера m() по Портеру: сколько раз согласная последовательность сменяется гласной внутри слова. */
+function measureEn(w: string): number {
+  let pattern = ''
+  for (let i = 0; i < w.length; i++) pattern += isVowelEn(w, i) ? 'v' : 'c'
+  let collapsed = ''
+  for (const ch of pattern) if (collapsed[collapsed.length - 1] !== ch) collapsed += ch
+  if (collapsed[0] === 'c') collapsed = collapsed.slice(1)
+  if (collapsed[collapsed.length - 1] === 'v') collapsed = collapsed.slice(0, -1)
+  return collapsed.length / 2
+}
+
+function doubleConsonantEn(w: string): boolean {
+  const n = w.length
+  return n >= 2 && w[n - 1] === w[n - 2] && !isVowelEn(w, n - 1)
+}
+
+/** Слово оканчивается на согласная-гласная-согласная, последняя не w/x/y («hop», «cit»). */
+function cvcEn(w: string): boolean {
+  const n = w.length
+  if (n < 3) return false
+  return !isVowelEn(w, n - 3) && isVowelEn(w, n - 2) && !isVowelEn(w, n - 1) && !'wxy'.includes(w[n - 1])
+}
+
+/**
+ * Основа английского слова - сокращённые шаги алгоритма Портера (Porter, 1980): 1a (мн. число
+ * и притяжательное 's), 1b (глагольные -ed/-ing со стандартной чисткой хвоста), 1c (терминальная
+ * y → i), плюс отглагольные -ion/-ive при мере m>1 и финальная -e при m>1 (или m=1 без cvc-хвоста).
+ * Дальних деривационных таблиц Портера (Step 2/3, «-ational» → «-ate» и подобные) здесь нет -
+ * колода SAT-словаря их не даёт, а добавлять правило без примера, который его требует, - не чинить
+ * баг, а гадать. Нужно это ровно для одного: чтобы отмеченная форма слова («assumptions»,
+ * «praised», «treaty's», «depletion», «cited»/«citing») совпадала основой с карточкой колоды
+ * («assumption», «praise», «treaty», «deplete», «cite»), см. F41 в контракте.
+ */
+export function stemEn(word: string): string {
+  let w = word.toLowerCase().replace(/^[^a-z]+|[^a-z]+$/g, '')
+  w = w.replace(/['’]s$/, '') // притяжательное 's: treaty's -> treaty
+  if (w.length < 3) return w
+  // 1a: множественное число
+  if (w.endsWith('sses') || w.endsWith('ies')) w = w.slice(0, -2)
+  else if (!w.endsWith('ss') && w.endsWith('s')) w = w.slice(0, -1)
+  // 1b: -ed/-ing со стандартной чисткой (double-consonant, «at/bl/iz», cvc)
+  if (w.endsWith('eed')) {
+    if (measureEn(w.slice(0, -3)) > 0) w = w.slice(0, -1)
+  } else {
+    let stripped = false
+    if (w.endsWith('ed') && containsVowelEn(w.slice(0, -2))) { w = w.slice(0, -2); stripped = true }
+    else if (w.endsWith('ing') && containsVowelEn(w.slice(0, -3))) { w = w.slice(0, -3); stripped = true }
+    if (stripped) {
+      if (w.endsWith('at') || w.endsWith('bl') || w.endsWith('iz')) w += 'e'
+      else if (doubleConsonantEn(w) && !/[lsz]$/.test(w)) w = w.slice(0, -1)
+      else if (measureEn(w) === 1 && cvcEn(w)) w += 'e'
+    }
+  }
+  // 1c: терминальная y после согласной, при наличии гласной раньше в слове
+  if (w.endsWith('y') && containsVowelEn(w.slice(0, -1))) w = w.slice(0, -1) + 'i'
+  // отглагольные -ion (после s/t)/-ive при m>1
+  if (w.endsWith('ion')) {
+    const stem = w.slice(0, -3)
+    if (/[st]$/.test(stem) && measureEn(stem) > 1) w = stem
+  } else if (w.endsWith('ive')) {
+    const stem = w.slice(0, -3)
+    if (measureEn(stem) > 1) w = stem
+  }
+  // финальная e
+  if (w.endsWith('e')) {
+    const stem = w.slice(0, -1)
+    const m = measureEn(stem)
+    if (m > 1 || (m === 1 && !cvcEn(stem))) w = stem
+  }
+  return w
+}
+
+/**
+ * Есть ли слово в колоде - по любой из известных форм (леммы и той, что стояла в тексте).
+ *
+ * Точное совпадение по `normWord` - первый и самый дешёвый заход. Форма, отмеченная в
+ * тексте (мн. число, притяжательное 's, причастие, отглагольное существительное), точным
+ * совпадением с карточкой не сойдётся никогда: `assumptions` и `assumption` - разные строки.
+ * Второй заход сравнивает английскую ОСНОВУ (`stemEn`) отметки с основой каждого слова
+ * колоды - без него ровно такие формы уезжали в «кандидаты (в колоде нет)», хотя карточка
+ * уже есть (F41 в контракте, 24% списка добавления на живой колоде до правки).
+ */
 export function deckHasWord(deck: ReadonlySet<string>, ...forms: (string | undefined)[]): boolean {
-  return forms.some(f => {
-    const n = f ? normWord(f) : ''
-    return !!n && deck.has(n)
-  })
+  const candidates = forms.map(f => (f ? normWord(f) : '')).filter(Boolean)
+  if (!candidates.length) return false
+  if (candidates.some(n => deck.has(n))) return true
+  const stems = new Set(candidates.map(stemEn))
+  for (const d of deck) if (stems.has(stemEn(d))) return true
+  return false
 }
 
 /**

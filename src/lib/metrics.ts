@@ -573,14 +573,22 @@ function dueDayKey(iso: string): string {
 }
 
 /**
- * План vs факт: по каждой паре соседних ревью одного (слово×навык) — планировался день X,
+ * План vs факт: по каждой паре соседних ревью одного (слово×навык) - планировался день X,
  * случился день Y. До 17.08.2026 реконструкция жила только внутри report.ts как локальная
- * функция; экрану статистики те же числа были не нужны формально, но нужны фактически —
+ * функция; экрану статистики те же числа были не нужны формально, но нужны фактически -
  * поэтому единственное определение теперь здесь, и report.ts, и Stats.tsx берут его отсюда,
  * а не пишут вторую копию join-логики.
  *
- * Учебные шаги внутри дня (learning) не считаются планом/просрочкой — интересуют только
- * межднёвные интервалы. Окно — последние `daysBack + 1` дней, включая `today`.
+ * Учебные шаги внутри дня (learning) не считаются планом/просрочкой - интересуют только
+ * межднёвные интервалы. Признак того же рода, что и у `retentionByLateness` (та же пара
+ * slug#skill, тот же `dueDayKey` от `due` предыдущей строки): считается только зрелый
+ * показ (`isMatureShow` - предыдущее состояние Review, не опечатка, не близнец). До
+ * 06.09.2026 отсекался лишь частный случай - когда сам `due` предыдущего показа выпадал
+ * на день предыдущего показа; повтор того же слова в тот же день ПОСЛЕ показа с due на
+ * будущее (пришедшего из learning, `prev_state` ещё не Review) под эту отсечку не попадал
+ * и засчитывался «вовремя» с отрицательной просрочкой - на живом журнале это были все 13
+ * «вовремя» отчёта при нуле настоящих межднёвных попаданий в срок.
+ * Окно - последние `daysBack + 1` дней, включая `today`.
  */
 export function planVsFact(journal: JournalLine[], today: string, daysBack = 6): Map<string, PlanVsFactDay> {
   const from = addDaysKey(today, -daysBack)
@@ -595,10 +603,11 @@ export function planVsFact(journal: JournalLine[], today: string, daysBack = 6):
   for (const seq of byItem.values()) {
     seq.sort(byTime)
     for (let i = 1; i < seq.length; i++) {
+      const cur = seq[i]
+      if (!isMatureShow(cur)) continue
       const planned = seq[i - 1].due ? dueDayKey(seq[i - 1].due!) : ''
-      const actual = seq[i].day
+      const actual = cur.day
       if (!planned || !actual || actual < from || actual > today) continue
-      if (planned === seq[i - 1].day && actual === planned) continue
       const delay = Math.round((Date.parse(actual) - Date.parse(planned)) / 86400_000)
       const d = perDay.get(actual) ?? { done: 0, onTime: 0, delaySum: 0 }
       d.done++

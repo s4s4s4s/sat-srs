@@ -15,6 +15,7 @@ import { fsrs, generatorParameters, State, type Card as FsrsCard } from 'ts-fsrs
 import type { CardView, JournalLine } from '../src/lib/types'
 import {
   examReady, maturity, pace, reviewCount, retentionByInterval, retentionByLateness, retentionByLevel, retentionByDomain,
+  planVsFact,
   speedStats, typoSplit, gaveUpShare, cuedStats, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
   intervalBucketOf, enoughForPct, isLeechCard, orphanedLines,
   PRIMARY_DATE, EXAM_DATE, NEW_STOP_DATE, NEW_STOP_BY_SECTION, nextAttempt, TARGET_REVIEW, TARGET_MATURE, MIN_N_FOR_PCT,
@@ -260,6 +261,45 @@ function latenessChecks(): void {
     `learning-строка обязана быть вне счёта, получено onTime=${rl3.onTime.n} overdue=${rl3.overdue.n}`)
 
   group('retentionByLateness: onTime/overdue по due предыдущей строки того же ключа, средняя просрочка, learning вне счёта')
+}
+
+// ---- planVsFact -------------------------------------------------------------
+
+function planVsFactChecks(): void {
+  // due предыдущей строки - в будущем (2026-09-25), но повтор случился в тот же день,
+  // что и сама предыдущая строка (learning-шаг, prev_state ещё не Review): не должен
+  // засчитываться ни как выполненный, ни тем более как "вовремя" - живой баг F38
+  // (пара 'acknowledge' из журнала: два mc-показа 12 минут друг от друга).
+  const jIntraday: JournalLine[] = [
+    rev({ slug: 'acknowledge', day: '2026-09-04', ts: '2026-09-04T10:00:00+03:00',
+      prev_state: State.Learning, due: '2026-09-25T10:00:00+03:00', rating: 3 }),
+    rev({ slug: 'acknowledge', day: '2026-09-04', ts: '2026-09-04T10:12:00+03:00',
+      prev_state: State.Learning, rating: 3 })
+  ]
+  const pvf1 = planVsFact(jIntraday, '2026-09-04', 6)
+  assert(!pvf1.has('2026-09-04') || pvf1.get('2026-09-04')!.done === 0,
+    `внутридневной повтор learning-шага не должен попадать в план/факт, получено ${JSON.stringify(pvf1.get('2026-09-04'))}`)
+
+  // настоящий межднёвный показ вовремя: prev_state следующей строки - Review
+  const jOnTime: JournalLine[] = [
+    rev({ slug: 'q', day: '2026-09-01', prev_state: State.Learning, due: '2026-09-04T10:00:00+03:00', rating: 3 }),
+    rev({ slug: 'q', day: '2026-09-04', prev_state: State.Review, rating: 3 })
+  ]
+  const pvf2 = planVsFact(jOnTime, '2026-09-04', 6)
+  const d2 = pvf2.get('2026-09-04')
+  assert(!!d2 && d2.done === 1 && d2.onTime === 1, `межднёвный показ вовремя ожидался done=1 onTime=1, получено ${JSON.stringify(d2)}`)
+
+  // настоящий межднёвный показ с просрочкой
+  const jOverdue: JournalLine[] = [
+    rev({ slug: 'p', day: '2026-09-01', prev_state: State.Learning, due: '2026-09-04T10:00:00+03:00', rating: 3 }),
+    rev({ slug: 'p', day: '2026-09-06', prev_state: State.Review, rating: 3 })
+  ]
+  const pvf3 = planVsFact(jOverdue, '2026-09-06', 6)
+  const d3 = pvf3.get('2026-09-06')
+  assert(!!d3 && d3.done === 1 && d3.onTime === 0 && d3.delaySum === 2,
+    `межднёвный показ с просрочкой ожидался done=1 onTime=0 delaySum=2, получено ${JSON.stringify(d3)}`)
+
+  group('planVsFact: внутридневной learning-повтор с future due не считается выполненным (F38), межднёвные показы вовремя/с просрочкой считаются как раньше')
 }
 
 // ---- retentionByLevel / Domain -------------------------------------------
@@ -584,6 +624,7 @@ function main(): void {
   intervalChecks()
   cuedChecks()
   latenessChecks()
+  planVsFactChecks()
   levelDomainChecks()
   speedTypoChecks()
   paceChecks()
