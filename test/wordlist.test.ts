@@ -20,6 +20,8 @@ import {
 import { isLevelled } from '../src/lib/scheduler'
 import { maturity, LEECH_REPS, LEECH_STABILITY_DAYS, MATURE_STABILITY_DAYS } from '../src/lib/metrics'
 import { screenSource } from './screen-source'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 
 let passed = 0
 function assert(cond: boolean, msg: string): void {
@@ -367,6 +369,25 @@ function homeEmptySectionButtonChecks(): void {
   group('Home.tsx: кнопка пустого раздела показывает «Нет карточек», а не «Всё повторено»')
 }
 
+/**
+ * D7 (06.09.2026): «отстаёшь на N дн» - отменённая формулировка (та же ошибка, что
+ * «400 готовых слов» 17.08.2026, см. комментарий у capacityEstimate в metrics.ts).
+ * Главное число экранов и отчёта - готовность к экзамену/измеренная ёмкость, а не
+ * дефицит темпа в днях. `report.ts` не экран - читаем его тем же способом, что
+ * `screenSource` читает экраны (текстом, из src/lib), а не через собственный формат.
+ */
+function noDaysBehindWordingChecks(): void {
+  const reportSrc = readFileSync(path.join(process.cwd(), 'src', 'lib', 'report.ts'), 'utf8').replace(/\r\n/g, '\n')
+  const statsSrc = screenSource('Stats.tsx')
+  const homeSrc = screenSource('Home.tsx')
+
+  for (const [name, src] of [['report.ts', reportSrc], ['Stats.tsx', statsSrc], ['Home.tsx', homeSrc]] as const) {
+    assert(!src.includes('отстаёшь на'), `${name}: формулировка «отстаёшь на» отменена (D7) - главное число теперь ёмкость/готовность, а не дефицит темпа`)
+  }
+
+  group('D7: «отстаёшь на» не встречается в report.ts, Stats.tsx и Home.tsx')
+}
+
 function main(): void {
   console.log('SRS wordstatus — единый источник правды о состоянии слова')
   agreementWithHomeChecks()
@@ -384,6 +405,7 @@ function main(): void {
   homeUsesDayplanChecks()
   homePracticeSummaryChecks()
   homeEmptySectionButtonChecks()
+  noDaysBehindWordingChecks()
   console.log(`\nВсе проверки статуса слова пройдены (${passed} групп).`)
 }
 

@@ -6,7 +6,7 @@ import {
 } from '../lib/journal'
 import { DAY_NORMS, NORM_LEVELS, NORM_TITLE_GENITIVE, dayNormFill, dayNormStatus, newPerDay } from '../lib/norms'
 import { sectionOrder, nextSection, SECTION_REASON, SECTION_TITLE } from '../lib/dayplan'
-import { examReady, nextAttempt, practiceUnitRatio } from '../lib/metrics'
+import { examReady, nextAttempt, practiceUnitRatio, ddmm } from '../lib/metrics'
 import { stageCounts, type WordStage } from '../lib/wordstatus'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt, Book } from '../components/Icon'
@@ -223,12 +223,15 @@ export default function Home() {
   const attempt = nextAttempt()
   const daysToExam = Math.ceil((attempt.getTime() - Date.now()) / 86400_000)
 
-  /* Числа главного экрана. `examReady` остаётся — но за ним теперь ходят в
-     «Статистику»: здесь от него берётся только `total` (размер словарной
-     колоды). На витрине — введено, закрепилось и дни с закрытым полом.
-     Оба числа берутся из ОДНОЙ сводки (`stageCounts`, wordstatus.ts) — единого
-     источника правды о состоянии слова, а не из двух самостоятельных выражений,
-     которые могли бы разъехаться, как только у них появится третий потребитель. */
+  /* Числа главного экрана. Первое число витрины (D7, 06.09.2026) - готовность
+     к БЛИЖАЙШЕЙ попытке по прогнозной retrievability (`examReady().ready`), а
+     не «введено»: то же решение, что и в отчёте/«Статистике» - главным
+     числом становится то, что реально предсказывает экзамен, а не то, что
+     формально сделано. `total` из той же сводки - знаменатель полосы.
+     Закрепилось и дни с закрытым полом берутся из ОДНОЙ сводки (`stageCounts`,
+     wordstatus.ts) - единого источника правды о состоянии слова, а не из двух
+     самостоятельных выражений, которые могли бы разъехаться, как только у них
+     появится третий потребитель. */
   const er = examReady(all, attempt)
   const stages = stageCounts(all)
   // тип стадии, а не строка: опечатка в имени иначе тихо дала бы ноль на витрине
@@ -345,16 +348,16 @@ export default function Home() {
         type="button"
         className="card hero hero-slim hero-link"
         onClick={() => setScreen('words')}
-        aria-label={`Список слов: ${introduced} из ${er.total} введено, ${matureCount} закрепилось`}
+        aria-label={`Список слов: вспомнится к ${ddmm(attempt)} ${er.ready} из ${er.total}, введено ${introduced}, ${matureCount} закрепилось`}
       >
         <div className="hero-head" style={{ marginBottom: 6 }}>
           <span className="hero-title">Слова</span>
-          <span className="hero-sub"><b>{introduced}</b> из {er.total} введено <span className="path-chip-arr">›</span></span>
+          <span className="hero-sub"><b>{er.ready}</b> из {er.total} вспомнится {ddmm(attempt)} <span className="path-chip-arr">›</span></span>
         </div>
         <div className="minbar-row" style={{ marginTop: 0, marginBottom: 4 }}>
-          <div className="minbar"><div style={{ width: `${er.total ? Math.min(100, (introduced / er.total) * 100) : 0}%` }} /></div>
+          <div className="minbar"><div style={{ width: `${er.total ? Math.min(100, (er.ready / er.total) * 100) : 0}%` }} /></div>
           <span className="minbar-label">
-            {matureCount > 0 ? `${matureCount} закрепилось` : 'закрепившихся пока нет'}
+            {introduced} введено{matureCount > 0 ? ` · ${matureCount} закрепилось` : ''}
           </span>
         </div>
       </button>
