@@ -320,7 +320,10 @@ export default function Review() {
   // C2: сколько раз слово провалено за ЭТУ сессию (по path) и множество отложенных до завтра (провал ×2)
   const sessionFails = useRef(new Map<string, number>())
   const deferredToday = useRef(new Set<string>())
-  const answeredMs = useRef(0)
+  // F20: null значит «для этого показа момент ответа ещё не наступил» - отличать
+  // от 0 обязательно, иначе интро-«Уже знаю это слово» подхватило бы чужое старое
+  // значение с предыдущей карточки как якобы измеренное чистое время ответа.
+  const answeredMs = useRef<number | null>(null)
   // зачётные секунды: тот же кап на карточку, что и в журнале — таймер согласован с минутами дня
   const creditedSec = useRef(0)
   // минуты, уже сделанные сегодня ДО этой сессии — таймер минимума общедневной, не сессионный
@@ -372,6 +375,7 @@ export default function Review() {
     setSaveError('')
     setMarkError('')
     shownAt.current = Date.now()
+    answeredMs.current = null
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [head && `${head.view.path}#${head.skill}#${step}`])
 
@@ -431,7 +435,7 @@ export default function Review() {
   const suggested = task && gaveUp
     ? Rating.Again
     : task && verdict !== null
-    ? suggestedGrade(task.format === 'reveal' ? 'type' : task.format, verdict, answeredMs.current, task.item.view.kind, medianForKind(speed, task.item.view.kind))
+    ? suggestedGrade(task.format === 'reveal' ? 'type' : task.format, verdict, answeredMs.current ?? 0, task.item.view.kind, medianForKind(speed, task.item.view.kind))
     : null
 
   /* Предложение выведено из объективного ответа — значит ученику есть что возразить:
@@ -656,6 +660,10 @@ export default function Review() {
 
   /** Показ ответа без вердикта («не помню», кнопка, пробел) — щелчок переворота карточки */
   function revealAnswer() {
+    // F20: момент ответа для форматов без объективного вердикта (простой показ) -
+    // submitObjective/giveUp фиксируют свой раньше и этим значением не перетираются
+    // (см. их собственные присваивания), здесь только запасной путь для «Показать ответ».
+    if (answeredMs.current === null) answeredMs.current = Date.now() - shownAt.current
     play('reveal')
     setRevealed(true)
   }
@@ -736,7 +744,7 @@ export default function Review() {
       const prevState = task.item.fsrs.state
       let rated
       try {
-        rated = await rateItem(task.item, g, elapsed, task.format, verdict ?? undefined, gaveUp)
+        rated = await rateItem(task.item, g, elapsed, task.format, verdict ?? undefined, gaveUp, answeredMs.current ?? undefined)
       } catch (e) {
         /* Запись оценки не удалась: карточка исчезла (синк удалил, тьютор переименовал)
            либо не отдала IndexedDB. Молча ехать дальше нельзя — ответ ученика пропал бы,

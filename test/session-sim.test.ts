@@ -30,7 +30,7 @@ import { screenSource } from './screen-source'
 import { lessonProgress, estimateShowsLeft, DRILL_PER_SESSION, type ProgressInput } from '../src/lib/progress'
 import { endOfStudyDay, dayKey, addDaysKey } from '../src/lib/daytime'
 import { sessionAccuracy, matureRetention, forcedTodaySlugs, CARD_TIME_CAP_MS, liveMarkedLemmas } from '../src/lib/journal'
-import { isLeech, LEECH_REPS, LEECH_STABILITY_DAYS, SECTION_LABELS } from '../src/lib/metrics'
+import { isLeech, LEECH_REPS, LEECH_STABILITY_DAYS, SECTION_LABELS, speedStats } from '../src/lib/metrics'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
 const RETENTION = 0.9
@@ -695,6 +695,13 @@ function dontKnowChecks(): void {
   assert(источник.slice(стопка, подсказка).includes('giveUp()'),
     'C3: у формата с вариантами нет выхода «не помню» - ученику остаётся гадать, а угаданный вариант засчитывается как знание')
 
+  /* F20: rateItem обязан получать чистое время ответа (answeredMs.current), а не только
+     сырое elapsedMs до кнопки «Дальше» - иначе поле answer_ms в журнале никогда не
+     заполнится, и порог «медленно» продолжит калиброваться по грязному времени. */
+  const rateCall = источник.slice(источник.indexOf('async function grade('), источник.indexOf('async function grade(') + 4000)
+  assert(/rateItem\([^)]*answeredMs\.current/.test(rateCall),
+    'F20: вызов rateItem в grade() обязан передавать answeredMs.current седьмым аргументом')
+
   /* C12: кнопка «подсказка» у формата type рендерится только после первой неверной
      попытки и только пока подсказка не раскрыта - иначе она либо гадание с самого
      начала показа, либо доступна бесконечно и вырождается в кнопку «пропустить».
@@ -918,8 +925,41 @@ function dontKnowChecks(): void {
     byKind: { vocab: { medianMs: 8147, n: 447 }, error: { medianMs: 21_649, n: 15 }, math: { medianMs: 23_898, n: 2 } }
   }
   assert(medianForKind(speedFix, 'error') === 21_649, 'медиана вида берётся, когда набралось наблюдений')
-  assert(medianForKind(speedFix, 'math') === 8360, 'на двух наблюдениях медиана вида — шум, берём общую')
-  assert(medianForKind(speedFix, 'grammar') === 8360, 'вида в журнале нет — общая медиана')
+  assert(medianForKind(speedFix, 'math') === 8360, 'на двух наблюдениях медиана вида - шум, берём общую')
+  assert(medianForKind(speedFix, 'grammar') === 8360, 'вида в журнале нет - общая медиана')
+
+  /* F20 (06.09.2026), сквозной прогон journal -> speedStats -> medianForKind -> slowThresholdMs
+     -> suggestedGrade: часть строк несёт чистое answer_ms, часть - только старое грязное
+     elapsed_ms (с чтением вердикта/разбора внутри). Порог обязан считаться по чистому
+     времени там, где оно есть, а не по завышенному elapsed_ms. */
+  const чистое = 6_000      // настоящее время ответа у строк с answer_ms
+  const грязное = 20_000    // то же самое действие, но с чтением разбора/вердикта внутри elapsed_ms
+  const mixedJournal: JournalLine[] = [
+    // 11 старых строк без answer_ms - только грязное elapsed_ms (было единственным полем до F20)
+    ...Array.from({ length: 11 }, (_, i) => ({
+      id: `old-${i}`, type: 'review' as const, ts: '2026-08-01T10:00:00+03:00', day: '2026-08-01',
+      slug: `слово-${i}`, format: 'type', kind: 'vocab', elapsed_ms: грязное
+    })),
+    // 13 новых строк с чистым answer_ms - тем же грязным elapsed_ms рядом, для контраста
+    ...Array.from({ length: 13 }, (_, i) => ({
+      id: `new-${i}`, type: 'review' as const, ts: '2026-09-06T10:00:00+03:00', day: '2026-09-06',
+      slug: `слово-нов-${i}`, format: 'type', kind: 'vocab', answer_ms: чистое, elapsed_ms: грязное
+    }))
+  ]
+  const spMixed = speedStats(mixedJournal)
+  assert(Math.abs(spMixed.cleanShare - 13 / 24) < 0.01, `сквозной F20: доля чистых замеров ожидалась ~0.54, получено ${spMixed.cleanShare}`)
+  // 24 значения: 13 чистых (6000) занимают младшие индексы 0..12, 11 грязных (20000) - индексы 13..23;
+  // медианные индексы 11 и 12 оба попадают на чистый блок → медиана равна чистому значению 6000, не грязному 20000
+  const médianaSlov = medianForKind(spMixed, 'vocab')
+  assert(médianaSlov === чистое, `сквозной F20: медиана вида vocab обязана считаться по чистому answer_ms, ожидалось ${чистое}, получено ${médianaSlov}`)
+  const порогMixed = slowThresholdMs('vocab', médianaSlov)
+  assert(порогMixed === Math.round(чистое * SLOW_FACTOR), `сквозной F20: порог обязан считаться от чистой медианы (2.5×6000=15000), получено ${порогMixed}`)
+  // ответ за 10000мс - дольше чистой медианы (6000), но ниже порога 2.5× (15000) - должен остаться Good
+  assert(suggestedGrade('type', 'correct', 10_000, 'vocab', médianaSlov) === Rating.Good,
+    'сквозной F20: ответ ниже порога, посчитанного от чистой медианы, не даёт Hard')
+  // ответ за 18000мс - выше порога 2.5×6000=15000 (при завышенной грязной медиане 20000 порог был бы 50000, и Hard не сработал бы никогда)
+  assert(suggestedGrade('type', 'correct', 18_000, 'vocab', médianaSlov) === Rating.Hard,
+    'сквозной F20: ответ выше порога, посчитанного от чистой медианы, даёт Hard (грязная медиана эту заминку маскировала бы)')
 
   console.log('  ✓ dont-know (C3/C4/C5): «не помню»=Again, пустой ввод=«не помню», type только со значением')
   console.log(`  ✓ ротация Review (C8): ${modes.map(sig).join(' → ')} — предложение на одном шаге из четырёх`)

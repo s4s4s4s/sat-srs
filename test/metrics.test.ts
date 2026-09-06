@@ -351,6 +351,23 @@ function speedTypoChecks(): void {
   const ts = typoSplit(jt)
   assert(ts.typos === 1 && ts.realMisses === 2, `typoSplit ожидалось {1,2}, получено {${ts.typos},${ts.realMisses}}`)
   group('speedStats/typoSplit: intro вне скорости, опечатки отделены от незнания')
+
+  /* F20: медиана обязана считаться по answer_ms (чистое время ответа, без чтения
+     вердикта/разбора), где оно есть, а для старых строк без него - по запасному
+     elapsed_ms. Смешанная фикстура: две строки с answer_ms (2000, 4000) и одна
+     старая строка без answer_ms, но с грязным elapsed_ms (30000, включает чтение
+     разбора) - при правильном чтении медиана 3000 (по чистым парам), а не 4000
+     (что дала бы грязная старая формула, читающая elapsed_ms всегда). */
+  const jf: JournalLine[] = [
+    rev({ slug: 'a', format: 'type', answer_ms: 2000, elapsed_ms: 6000 }),  // чистое 2000, грязное 6000
+    rev({ slug: 'b', format: 'type', answer_ms: 4000, elapsed_ms: 9000 }),  // чистое 4000, грязное 9000
+    rev({ slug: 'c', format: 'type', elapsed_ms: 30000 }),                  // старая строка, только грязное
+  ]
+  const spf = speedStats(jf)
+  assert(spf.n === 3, `answer_ms fallback: n ожидалось 3, получено ${spf.n}`)
+  assert(spf.medianMs === 4000, `answer_ms fallback: медиана из {2000,4000,30000} ожидалась 4000, получено ${spf.medianMs}`)
+  assert(Math.abs(spf.cleanShare - 2 / 3) < 0.01, `cleanShare ожидалась ~0.67 (2 из 3 строк с answer_ms), получено ${spf.cleanShare}`)
+  group('speedStats: answer_ms предпочитается elapsed_ms, доля чистых замеров считается верно')
 }
 
 // ---- pace ----------------------------------------------------------------

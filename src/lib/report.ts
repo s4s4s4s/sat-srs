@@ -232,7 +232,11 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
      нигде. «Не помню» — прямой признак того, что ученик перестал пытаться вспомнить. */
   const kindNames: Record<string, string> = { vocab: 'слово', grammar: 'грамматика', math: 'математика', error: 'разбор ошибки' }
   const kindParts = Object.entries(sp.byKind).map(([k, v]) => `${kindNames[k] ?? k} ${(v.medianMs / 1000).toFixed(1)} c (n=${v.n})`)
-  if (kindParts.length) out.push(`- Скорость ответа по видам карточек (медиана): ${kindParts.join(' · ')}`)
+  /* F20: подпись «время ответа», не «скорость» - число уже не время до кнопки «Дальше»
+     (то включало чтение вердикта/разбора), а время до самого ответа, когда оно
+     известно. Доля чистых замеров показывает тьютору, насколько порог «медленно»
+     уже очищен от старых строк, где такого различения не было. */
+  if (kindParts.length) out.push(`- Время ответа по видам карточек (медиана): ${kindParts.join(' · ')} · чистых замеров (без чтения разбора) ${Math.round(sp.cleanShare * 100)}%`)
   out.push(`- «Не помню» вместо попытки вспомнить (вся история, интро не считается): ${pct(gu.gaveUp, gu.n)}`)
   const typoTotal = ts.typos + ts.realMisses
   out.push(`- Ошибки ввода слова: опечаток ${ts.typos} · настоящих незнаний ${ts.realMisses}${typoTotal ? ` (доля опечаток ${Math.round((ts.typos / typoTotal) * 100)}%, n=${typoTotal})` : ''}`)

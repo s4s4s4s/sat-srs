@@ -183,6 +183,15 @@ export interface JournalLine {
   scheduled_days?: number // план до следующего показа; для бакетов интервала не годится, см. elapsed_days
   elapsed_days?: number   // фактический интервал с прошлого показа по FSRS (целые сутки), по нему бакетируется retention
   elapsed_ms?: number
+  /* F20: время от показа до САМОГО ОТВЕТА, без чтения вердикта и разбора после него.
+     elapsed_ms доезжает до кнопки «Дальше» и потому включает чтение объяснения -
+     порог «медленно» (slowThresholdMs), калиброванный по elapsed_ms, оказывался
+     завышен временем чтения, а не ответа: 13% строк живого журнала выше такого
+     порога против 5% реально поставленных Hard. Пишется, только когда у показа
+     есть отдельный момент ответа (submitObjective/giveUp/revealAnswer) - у знакомства
+     (intro) его нет, и поле остаётся пустым. Старые строки без него читаются через
+     запасной elapsed_ms (medianForKind/speedStats, metrics.ts), см. answerTimeOf. */
+  answer_ms?: number
   // session:
   dur_ms?: number
   reviews?: number

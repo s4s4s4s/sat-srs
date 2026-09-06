@@ -437,7 +437,7 @@ export function leechTransition(leech: unknown, next: FsrsCard): 'set' | 'clear'
 }
 
 /** Оценка учебной единицы (карточка × навык): FSRS → запись в свой fsrs-блок файла (dirty) → строка журнала. */
-export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, verdict?: TypeVerdict, gaveUp?: boolean): Promise<{ card: FsrsCard; lineId: string }> {
+export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, verdict?: TypeVerdict, gaveUp?: boolean, answerMs?: number): Promise<{ card: FsrsCard; lineId: string }> {
   const rec = state.cards.find(c => c.path === item.view.path)
   if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${item.view.path}`)
   const fsrsKey = item.skill === 'prep' ? 'fsrs_prep' : 'fsrs'
@@ -494,6 +494,9 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     // именно по нему бакетируется retentionByInterval, не по scheduled_days
     elapsed_days: next.elapsed_days,
     elapsed_ms: journalElapsedMs(elapsedMs, item.view.kind),
+    // F20: чистое время ответа, без чтения вердикта/разбора - есть, только когда у показа
+    // был свой момент ответа (submitObjective/giveUp/revealAnswer); знакомство его не даёт.
+    ...(answerMs !== undefined ? { answer_ms: journalElapsedMs(answerMs, item.view.kind) } : {}),
     synced: 0
   }
 

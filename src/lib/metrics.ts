@@ -443,27 +443,49 @@ export interface SpeedStats {
   slowShare: number
   n: number
   byFormat: Record<string, { medianMs: number; slowShare: number; n: number }>
-  /* Отдельно по видам карточек: словарное узнавание и разбор условия с таблицей
-     — разные работы, и мерить их одной медианой нельзя (см. slowThresholdMs). */
+  /* Отдельно по видам карточек: словарное узнавание и разбор условия с таблицей -
+     разные работы, и мерить их одной медианой нельзя (см. slowThresholdMs). */
   byKind: Record<string, { medianMs: number; n: number }>
+  /* F20: доля строк, вошедших в счёт, где было чистое answer_ms (а не запасной
+     elapsed_ms, засорённый чтением вердикта/разбора). Печатается в отчёте
+     (report.ts), чтобы тьютор видел, насколько уже очищен порог «медленно». */
+  cleanShare: number
 }
 
-/** Скорость ответа: медиана, p90 и доля «медленных» (> 10 c). На SAT узнавание должно быть за 2–3 c. */
+/**
+ * F20 (06.09.2026): elapsed_ms - время до кнопки «Дальше», оно включает чтение
+ * вердикта и разбора после ответа и потому завышает порог «медленно». answer_ms -
+ * то же самое время, но обрезанное на самом моменте ответа (submitObjective /
+ * giveUp / revealAnswer, Review.tsx). Строки, записанные до появления поля, и
+ * показы без отдельного момента ответа (знакомство) его не имеют - для них
+ * запасной путь остаётся прежним elapsed_ms, чтобы старая история не исчезла из
+ * статистики. По мере того как журнал наполняется чистыми строками, доля
+ * запасного пути падает сама - без миграции задним числом.
+ */
+function answerTimeOf(l: JournalLine): number | undefined {
+  if (typeof l.answer_ms === 'number' && l.answer_ms > 0) return l.answer_ms
+  if (typeof l.elapsed_ms === 'number' && l.elapsed_ms > 0) return l.elapsed_ms
+  return undefined
+}
+
+/** Скорость ответа: медиана, p90 и доля «медленных» (> 10 c). На SAT узнавание должно быть за 2-3 c. */
 export function speedStats(journal: JournalLine[]): SpeedStats {
   const rev = journal.filter(l =>
-    l.type === 'review' && typeof l.elapsed_ms === 'number' && l.elapsed_ms > 0 && l.format && l.format !== 'intro')
-  const all = rev.map(l => l.elapsed_ms as number).sort((a, b) => a - b)
+    l.type === 'review' && l.format && l.format !== 'intro' && answerTimeOf(l) !== undefined)
+  const all = rev.map(l => answerTimeOf(l) as number).sort((a, b) => a - b)
+  const clean = rev.filter(l => typeof l.answer_ms === 'number' && l.answer_ms > 0).length
   const byFmt = new Map<string, number[]>()
   const byKnd = new Map<string, number[]>()
   for (const l of rev) {
+    const ms = answerTimeOf(l) as number
     const a = byFmt.get(l.format!) ?? []
-    a.push(l.elapsed_ms as number)
+    a.push(ms)
     byFmt.set(l.format!, a)
-    // kind в строку пишется, только когда он не vocab (store.ts), — отсутствие
+    // kind в строку пишется, только когда он не vocab (store.ts) - отсутствие
     // поля здесь значит «словарная», а не «неизвестно».
     const k = l.kind ?? 'vocab'
     const b = byKnd.get(k) ?? []
-    b.push(l.elapsed_ms as number)
+    b.push(ms)
     byKnd.set(k, b)
   }
   const share = (arr: number[]) => (arr.length ? Math.round((arr.filter(m => m > SLOW_MS).length / arr.length) * 100) / 100 : 0)
@@ -482,7 +504,8 @@ export function speedStats(journal: JournalLine[]): SpeedStats {
     slowShare: share(all),
     n: all.length,
     byFormat,
-    byKind
+    byKind,
+    cleanShare: rev.length ? Math.round((clean / rev.length) * 100) / 100 : 0
   }
 }
 
