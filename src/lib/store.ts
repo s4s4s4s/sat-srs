@@ -784,6 +784,8 @@ export async function finishSession(r: SessionResult) {
     // ретеншном по зрелым карточкам, чтобы старые строки и метрики читались как раньше (D3)
     acc_all: sessionAccuracy(r),
     again: r.again,
+    // D3: схема расширяется добавлением - строка session без session_cued (старые уроки) читается как 0
+    session_cued: r.cued ?? 0,
     queue_empty: r.queueEmpty,
     synced: 0
   }

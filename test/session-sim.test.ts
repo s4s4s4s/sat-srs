@@ -1315,8 +1315,16 @@ function summaryChecks(): void {
   assert(matureRetention(real) === 100, 'итоги: ретеншн по зрелым остаётся отдельным числом (100%)')
   assert(sessionAccuracy({ reviews: 0, again: 0 }) === null, 'итоги: без оценок точности нет (null, а не 0%)')
   assert(matureRetention({ passRev: 0, totalRev: 0 }) === null, 'итоги: без зрелых карточек ретеншна нет')
-  assert(sessionAccuracy({ reviews: 4, again: 4 }) === 0, 'итоги: все провалы — 0%, а не null')
+  assert(sessionAccuracy({ reviews: 4, again: 4 }) === 0, 'итоги: все провалы - 0%, а не null')
+  // L2: подсказанный ввод (cued) не идёт ни в числитель, ни в знаменатель точности урока
+  assert(sessionAccuracy({ reviews: 10, again: 2, cued: 2 }) === 75,
+    `L2: подсказанный ввод обязан выпадать из точности (10 оценок, 2 «Заново», 2 cued -> 75%), получено ${sessionAccuracy({ reviews: 10, again: 2, cued: 2 })}`)
+  assert(sessionAccuracy({ reviews: 3, again: 0, cued: 3 }) === null,
+    'L2: если все оценки урока - подсказанный ввод, знаменатель нулевой и точности нет (null)')
+  assert(sessionAccuracy({ reviews: 41, again: 12 }) === 71,
+    'L2: без поля cued поведение прежнее - точность считается по reviews/again как раньше')
   console.log('  ✓ итоги урока: точность по всем оценкам (репро 25.07: 41 оценка/12 «Заново» → 71%, не 100%)')
+  console.log('  ✓ L2: точность урока отсекает подсказанный ввод (cued) из числителя и знаменателя')
   passed++
 }
 

@@ -234,5 +234,5 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
 }
 
 export function demoSession() {
-  return { day: dayKey(), reviews: 14, newSeen: 4, again: 2, passRev: 8, totalRev: 9, durMs: 754000, queueEmpty: true, goalReached: true, doneToday: 14 }
+  return { day: dayKey(), reviews: 14, newSeen: 4, again: 2, passRev: 8, totalRev: 9, durMs: 754000, queueEmpty: true, goalReached: true, doneToday: 14, cued: 1 }
 }

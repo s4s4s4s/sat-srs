@@ -432,6 +432,47 @@ function sessionGoalScreenChecks(): void {
   group('WS5b: счётчик «N из goal» и закрывающий показ B7 в Review.tsx, «Ещё заход»/«До цели ещё» в Summary.tsx, цена захода в минутах на Home.tsx')
 }
 
+/**
+ * L1 (06.09.2026): списание бюджета окон знакомства (`reintroShown`/`freshIntros`) обязано
+ * идти только внутри `commitIntroBudget` - локального helper в `grade` - и вызываться только
+ * ПОСЛЕ успешной записи, а не до неё. Раньше списание стояло до `rateItem`/`markIntroduced`,
+ * и повторное «Дальше» после ошибки записи списывало бюджет второй раз (см. SKILL.md).
+ * Читаем исходник текстом тем же способом, что и `wordListScreenChecks` выше.
+ */
+function reviewIntroBudgetChecks(): void {
+  const src = screenSource('Review.tsx')
+
+  assert(src.includes('commitIntroBudget'), 'Review.tsx обязан содержать helper commitIntroBudget')
+
+  // инкременты бюджета встречаются РОВНО там, где определён helper - нигде больше в файле
+  const reintroIncrements = (src.match(/reintroShown\.current\+\+/g) ?? []).length
+  const freshIncrements = (src.match(/freshIntros\.current\+\+/g) ?? []).length
+  assert(reintroIncrements === 1, `reintroShown.current++ обязан встречаться ровно один раз (внутри commitIntroBudget), найдено ${reintroIncrements}`)
+  assert(freshIncrements === 1, `freshIntros.current++ обязан встречаться ровно один раз (внутри commitIntroBudget), найдено ${freshIncrements}`)
+
+  const helperStart = src.indexOf('commitIntroBudget = ')
+  assert(helperStart >= 0, 'Review.tsx обязан определять commitIntroBudget как функцию')
+  const helperEnd = src.indexOf('}', src.indexOf('}', helperStart) + 1)
+  const helperBody = src.slice(helperStart, helperEnd)
+  assert(helperBody.includes('reintroShown.current++') && helperBody.includes('freshIntros.current++'),
+    'оба инкремента бюджета обязаны стоять внутри тела commitIntroBudget')
+
+  // вызовы helper стоят ПОСЛЕ await rateItem( и ПОСЛЕ await markIntroduced( по позиции в файле
+  const rateItemPos = src.indexOf('await rateItem(')
+  const markIntroducedPos = src.indexOf('await markIntroduced(')
+  const callPositions = [...src.matchAll(/commitIntroBudget\?\.\(\)/g)].map(m => m.index ?? -1)
+  assert(rateItemPos >= 0 && markIntroducedPos >= 0, 'Review.tsx обязан звать rateItem и markIntroduced')
+  assert(callPositions.some(p => p > markIntroducedPos && p < rateItemPos),
+    'commitIntroBudget обязан вызываться после await markIntroduced( и до общей ветки rateItem')
+  assert(callPositions.some(p => p > rateItemPos), 'commitIntroBudget обязан вызываться после await rateItem(')
+
+  // L2: cued растёт ровно там, где известен вердикт после успешной записи
+  assert(/verdict === 'cued'\)\s*r\.cued/.test(src) || /if \(verdict === 'cued'\)/.test(src),
+    'res.current.cued обязан инкрементироваться при verdict === \'cued\'')
+
+  group('L1/L2: списание бюджета окон только внутри commitIntroBudget после записи, cued растёт по verdict')
+}
+
 function main(): void {
   console.log('SRS wordstatus - единый источник правды о состоянии слова')
   agreementWithHomeChecks()
@@ -452,6 +493,7 @@ function main(): void {
   noDaysBehindWordingChecks()
   reportKnowledgePredicateChecks()
   sessionGoalScreenChecks()
+  reviewIntroBudgetChecks()
   console.log(`\nВсе проверки статуса слова пройдены (${passed} групп).`)
 }
 

@@ -47,6 +47,11 @@ export default function Summary() {
           {!r.goalReached && !r.queueEmpty && (
             <div className="sum-sub">До цели ещё {toGoal} упражнений</div>
           )}
+          {/* L2: подсказанный ввод не входит в точность урока (sessionAccuracy) - показываем
+              его отдельной строкой, а не молчим о том, что часть ответов была со скелета */}
+          {(r.cued ?? 0) > 0 && (
+            <div className="sum-sub">с подсказкой: {r.cued}</div>
+          )}
         </div>
         <div className="tiles">
           <div className="tile tile-new">

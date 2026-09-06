@@ -200,8 +200,13 @@ export interface JournalLine {
   reviews?: number
   new_seen?: number
   acc?: number | null      // ретеншн по ЗРЕЛЫМ карточкам (prev_state = Review); null, если их не было
-  acc_all?: number | null  // точность за урок по ВСЕМ оценкам — то, что видит ученик на итогах
+  acc_all?: number | null  // точность за урок по ВСЕМ оценкам - то, что видит ученик на итогах
   again?: number           // сколько раз за урок нажато «Заново» (включая честное «не помню»)
+  /* L2: сколько ответов за урок угадано со скелета слова (не входит в acc_all). Названо не
+     `cued`, чтобы не столкнуться по типу с полем review-строки выше (`cued?: boolean` -
+     C12, признак ОДНОГО ответа): JournalLine - плоский интерфейс на все типы строк, и то же
+     имя с другим типом (`number`) TS не пропускает (Duplicate identifier). */
+  session_cued?: number
   queue_empty?: boolean
   // read:
   read_min?: number        // засчитанные минуты чтения
@@ -330,4 +335,8 @@ export interface SessionResult {
    *  сессии) - та же величина, что показывает счётчик «N из goal» на экране. Summary.tsx
    *  печатает по ней «до цели ещё K», K = sessionGoal - doneToday, не пересчитывая заново. */
   doneToday: number
+  /* L2: сколько раз за урок ввод угадан со скелета слова (verdict === 'cued', оценка Hard).
+     Необязательное поле - старые вызовы и демо-данные без него читаются как 0, sessionAccuracy
+     (journal.ts) отсекает cued из точности урока вслед за accuracyShare (metrics.ts). */
+  cued?: number
 }

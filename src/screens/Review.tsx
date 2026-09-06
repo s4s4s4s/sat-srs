@@ -786,30 +786,49 @@ export default function Review() {
       const elapsed = Date.now() - shownAt.current
 
       // окно-знакомство показано: тратит СВОЙ бюджет (F82), флаг провала снят
+      let commitIntroBudget: (() => void) | null = null
       if (task.format === 'intro') {
-        // порядок важен: признак «Подзабылось» читается ДО снятия флага провала
+        /* Признак «Подзабылось» и признак «новое слово» читаются ДО любых изменений и ДО
+           записи - но само списание бюджета (delete из lapsed, инкремент нужного счётчика)
+           откладывается до успешной записи (L1). Раньше списание стояло здесь же, сразу за
+           чтением признаков: при ошибке записи (rateItem/markIntroduced бросает → setSaveError,
+           return) карточка остаётся на экране с уже снятым флагом провала, повторное «Дальше»
+           проходит эту ветку снова и списывает бюджет второй раз - причём isReintroScreen на
+           повторе даёт уже другой ответ (флаг провала снят первым проходом) и списывает бюджет
+           уже НОВЫХ слов, а не «Подзабылось». */
         const reintro = isReintroScreen(task.item)
-        lapsed.current.delete(itemKey(task.item))
         /* Знакомства новых слов считаем отдельно: дневной лимит про них, а не про «Подзабылось».
            Счётчик растёт на ЛЮБОЙ оценке знакомства, включая «Уже знаю это слово» (Rating.Easy).
            Раньше инкремент стоял в ветке ниже, мимо которой Easy проходит, и урочный счётчик
            такое слово не тратил: остаток дня (dayNewLeft - freshIntros) оставался прежним, а
            ступень bonusNew вводила сверх него ещё одно слово - дневная норма NEW_PER_DAY
            превышалась ровно на число «уже знаю» за урок. */
+        const freshNew = task.item.fsrs.state === State.New && !introduced.current.has(itemKey(task.item))
         /* F82-bis: бюджет «Подзабылось» списывает ТОЛЬКО окно «Подзабылось». Раньше здесь стоял
            else к проверке новизны, и слот REINTRO_PER_LESSON уходил на любое окно, которое не
            прошло эту проверку, - в том числе на повторный показ знакомства уже введённого слова.
            Урок терял окна переznakomства, ни разу их не показав. */
-        if (reintro) reintroShown.current++
-        else if (task.item.fsrs.state === State.New && !introduced.current.has(itemKey(task.item))) freshIntros.current++
+        commitIntroBudget = () => {
+          lapsed.current.delete(itemKey(task.item))
+          if (reintro) reintroShown.current++
+          else if (freshNew) freshIntros.current++
+        }
       }
-      // интро — знакомство, не вспоминание: FSRS не трогаем; отработка через пару карточек
+      // интро - знакомство, не вспоминание: FSRS не трогаем; отработка через пару карточек
       if (task.format === 'intro' && g !== Rating.Easy) {
         introduced.current.add(itemKey(task.item))
         sinceIntro.current = 0
         // A4-bis: счётчик батча растёт до первой оценённой отработки
         batchIntros.current++
-        await markIntroduced(task.item)
+        try {
+          await markIntroduced(task.item)
+        } catch (e) {
+          // тот же путь отказа, что у rateItem ниже: запись не удалась, бюджет не тронут (L1)
+          setSaveError(e instanceof Error ? e.message : String(e))
+          return
+        }
+        setSaveError('')
+        commitIntroBudget?.()
         await advance(task.item, false, 2)
         return
       }
@@ -832,6 +851,9 @@ export default function Review() {
         return
       }
       setSaveError('')
+      // task.format === 'intro' здесь означает g === Rating.Easy («Уже знаю это слово»,
+      // единственная оценка знакомства, идущая этим путём, а не веткой markIntroduced выше)
+      commitIntroBudget?.()
 
       creditedSec.current += Math.min(elapsed, cardTimeCap(task.item.view.kind)) / 1000
       sinceIntro.current++
@@ -850,6 +872,11 @@ export default function Review() {
       // journal.ts) - интро сюда не доходит (ранний return выше), поэтому lastGrade фиксируется
       // ровно в момент реальной оценки, той же, что уходит в rateItem ниже.
       lastGrade.current = g
+      // L2: ввод с подсказкой (скелет слова) не отсекается точностью урока по счётчикам
+      // reviews/again - без cued sessionAccuracy засчитывал подсказанный ввод попаданием,
+      // хотя accuracyShare (metrics.ts, isAccuracyShow) уже выводит такой показ и из
+      // числителя, и из знаменателя
+      if (verdict === 'cued') r.cued = (r.cued ?? 0) + 1
       if (prevState === State.New) r.newSeen++
       // «Заново» на любой стадии → следующий показ этого слова будет окном-переznakomством «Подзабылось»;
       // вспомнил (не «Заново») → снимаем флаг подзабывания

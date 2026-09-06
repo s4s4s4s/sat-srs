@@ -111,12 +111,20 @@ function stripSynced(l: JournalLine): JournalLine {
 /**
  * Точность УРОКА: доля непровальных ответов среди всех оценок сессии.
  * Итоги урока раньше показывали ретеншн по зрелым карточкам (`passRev/totalRev`), и после
- * 41 упражнения с 13 «Заново» экран выдавал «повторов 1 · точность 100%» — потому что зрелой
+ * 41 упражнения с 13 «Заново» экран выдавал «повторов 1 · точность 100%» - потому что зрелой
  * в том уроке была одна карточка. Ретеншн остаётся отдельной строкой (matureRetention):
  * он нужен FSRS-диагностике, но не описывает проделанную работу.
+ *
+ * L2: ввод, угаданный со скелета слова (`cued`), точность урока раньше засчитывала попаданием
+ * по счётчикам сессии, хотя `accuracyShare` (`metrics.ts`, `isAccuracyShow`) уже отсекает такой
+ * показ и из числителя, и из знаменателя, потому что он уже показан отдельной строкой отчёта
+ * («Ввод с подсказкой», `cuedStats`). `cued` вычитается из обеих частей дроби вслед за тем же
+ * решением. Поле необязательное: старые вызовы и демо-данные без него ведут себя как прежде.
  */
-export function sessionAccuracy(r: { reviews: number; again: number }): number | null {
-  return r.reviews > 0 ? Math.round(((r.reviews - r.again) / r.reviews) * 100) : null
+export function sessionAccuracy(r: { reviews: number; again: number; cued?: number }): number | null {
+  const cued = r.cued ?? 0
+  const denom = r.reviews - cued
+  return denom > 0 ? Math.round(((denom - r.again) / denom) * 100) : null
 }
 
 /** Ретеншн по зрелым карточкам урока (prev_state = Review): null, если зрелых не было. */
