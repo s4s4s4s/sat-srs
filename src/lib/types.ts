@@ -169,6 +169,7 @@ export interface JournalLine {
   correct?: boolean    // объективный результат (mc/type/prep, а также practice); у reveal отсутствует
   typo?: boolean       // ошибка ввода = опечатка (Левенштейн), а не незнание — исключается из retention
   twin?: boolean       // введён синоним из колоды (C10): значение вспомнено, форма — нет; из retention исключается
+  cued?: boolean       // C12: взято со скелета слова после провала, оценка Hard, из retention исключается как typo/twin
   gave_up?: boolean    // C3/C4: пользователь сам признал незнание («не помню» / пустой ввод), не ошибка ввода
   cause?: string       // самоотчёт после ошибки: правило | слово | misread | логика | тайминг
   kind?: string        // тип карточки, если не vocab

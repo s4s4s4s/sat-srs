@@ -1488,7 +1488,7 @@ export function levenshtein(a: string, b: string): number {
  * значение вспомнено, форма — нет. Это не промах и не успех, и именно поэтому
  * оно отдельное значение, а не флаг поверх `wrong`.
  */
-export type TypeVerdict = 'correct' | 'typo' | 'twin' | 'wrong'
+export type TypeVerdict = 'correct' | 'typo' | 'twin' | 'wrong' | 'cued'
 
 /**
  * Проверка ввода по буквам. `synonyms` (fm.synonyms), это явное разрешение тьютора: любая из
@@ -1550,6 +1550,19 @@ export function typedTwin(typed: string, card: CardView, deck: CardView[]): Card
   if (!t || t === card.word.trim().toLowerCase()) return null
   const другое = deck.find(c => c.word.trim().toLowerCase() === t && c.path !== card.path)
   return другое && sharesMeaning(card, другое) ? другое : null
+}
+
+/**
+ * C12 (06.09.2026). Ступенчатая подсказка при вводе: первая буква слова открыта
+ * всегда, дальше открывается по одной букве на каждые четыре позиции (индексы
+ * 0, 4, 8...), остальное скрыто точками. Скелет, а не половина слова: буква
+ * реже, чем в загадках «виселица», иначе ввод превращается в дописывание
+ * хвоста, а не в извлечение слова из памяти.
+ */
+export function skeletonHint(word: string): string {
+  return Array.from(word.trim())
+    .map((ch, i) => (i % 4 === 0 ? ch : '.'))
+    .join('')
 }
 
 /** Парсинг числового ответа: "15", "-2.5", ".75", "3/4", запятая как точка */
@@ -1689,6 +1702,8 @@ export function suggestedGrade(format: Format, verdict: TypeVerdict, elapsedMs =
   if (verdict === 'wrong') return Rating.Again
   // синоним: значение вспомнено, форма — нет; скорость тут уже ничего не решает
   if (verdict === 'twin') return Rating.Hard
+  // C12: слово вспомнено со скелета после провала попытки, а не с нуля
+  if (verdict === 'cued') return Rating.Hard
   if (isMeasured(elapsedMs, kind) && elapsedMs > slowThresholdMs(kind, medianMs)) return Rating.Hard
   return Rating.Good
 }

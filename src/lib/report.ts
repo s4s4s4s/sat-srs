@@ -11,7 +11,7 @@ import {
 import { activeLevel, levelStats, isLevelled, EXAM_DATE, SECTIONS, nextAttempt, dueCap, phase, NEW_STOP_BY_SECTION } from './scheduler'
 import {
   examReady, maturity, pace, retentionByInterval, retentionByLateness, retentionBySection, maturityBySection,
-  speedStats, typoSplit, gaveUpShare, planVsFact, isLeechCard, orphanedLines, ddmm, practiceUnitRatio,
+  speedStats, typoSplit, gaveUpShare, cuedStats, planVsFact, isLeechCard, orphanedLines, ddmm, practiceUnitRatio,
   NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS,
   INTERVAL_LABELS, SECTION_LABELS, type IntervalBucket
 } from './metrics'
@@ -77,6 +77,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   const sp = speedStats(lines)
   const ts = typoSplit(lines)
   const gu = gaveUpShare(lines)   // за всю историю; дневной срез уже копится в _метрики.ndjson
+  const cs = cuedStats(lines, now)   // C12: доля показов type, взятых со ступенчатой подсказки
 
   // прогноз нагрузки: due по учебным дням на 7 дней вперёд (просроченное — в «сегодня»)
   const load = new Map<string, number>()
@@ -235,6 +236,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   out.push(`- «Не помню» вместо попытки вспомнить (вся история, интро не считается): ${pct(gu.gaveUp, gu.n)}`)
   const typoTotal = ts.typos + ts.realMisses
   out.push(`- Ошибки ввода слова: опечаток ${ts.typos} · настоящих незнаний ${ts.realMisses}${typoTotal ? ` (доля опечаток ${Math.round((ts.typos / typoTotal) * 100)}%, n=${typoTotal})` : ''}`)
+  out.push(`- Ввод с подсказкой: ${cs.d7.cued} из ${cs.d7.shown} показов type за 7 дней (за 30 дней: ${cs.d30.cued} из ${cs.d30.shown})`)
   out.push('')
 
   /* Чтение и отметки незнакомых слов появились в приложении 22.08.2026, а в отчёте

@@ -239,7 +239,7 @@ const seal = (b: Bucketed): Bucketed => ({ ...b, pct: b.n ? Math.round((b.pass /
 
 /** Зрелый показ, засчитываемый в retention: review-строка, prev_state=Review, не опечатка. */
 function isMatureShow(l: JournalLine): boolean {
-  return l.type === 'review' && l.prev_state === State.Review && !l.typo && !l.twin
+  return l.type === 'review' && l.prev_state === State.Review && !l.typo && !l.twin && !l.cued
 }
 
 export type IntervalBucket = '<1' | '1-3' | '4-10' | '11-30' | '30+'
@@ -542,6 +542,25 @@ export function gaveUpShare(journal: JournalLine[], day?: string): GaveUp {
   const rev = journal.filter(l => l.type === 'review' && l.format !== 'intro' && (day === undefined || l.day === day))
   const g = rev.filter(l => l.gave_up === true).length
   return { share: rev.length ? Math.round((g / rev.length) * 100) / 100 : 0, gaveUp: g, n: rev.length }
+}
+
+export interface CuedWindow { cued: number; shown: number }
+export interface CuedStats { d7: CuedWindow; d30: CuedWindow }
+
+/**
+ * C12: доля показов формата `type`, взятых со ступенчатой подсказки (`skeletonHint`),
+ * за 7 и 30 дней. Тьютору важно видеть вырождение подсказки в кнопку «пропустить»:
+ * если доля растёт, ученик перестаёт пробовать вспомнить сам ещё до её появления.
+ */
+export function cuedStats(journal: JournalLine[], now: Date = new Date()): CuedStats {
+  const today = dayKey(now)
+  const from7 = addDaysKey(today, -6)
+  const from30 = addDaysKey(today, -29)
+  const win = (from: string): CuedWindow => {
+    const shows = journal.filter(l => l.type === 'review' && l.format === 'type' && l.day >= from && l.day <= today)
+    return { cued: shows.filter(l => l.cued === true).length, shown: shows.length }
+  }
+  return { d7: win(from7), d30: win(from30) }
 }
 
 // ---- план vs факт ---------------------------------------------------------

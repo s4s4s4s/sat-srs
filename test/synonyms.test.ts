@@ -46,8 +46,9 @@ import { createEmptyCard } from 'ts-fsrs'
 import { parseMd, cardView } from '../src/lib/yamlfm'
 import {
   stemRu, sharesMeaning, meaningTwin, blankSentence, blankPhrase, mcDistractors,
-  PHRASE_BEFORE, PHRASE_AFTER, checkTyped, typedTwin
+  PHRASE_BEFORE, PHRASE_AFTER, checkTyped, typedTwin, skeletonHint, suggestedGrade
 } from '../src/lib/scheduler'
+import { Rating } from 'ts-fsrs'
 import type { CardView } from '../src/lib/types'
 
 let passed = 0
@@ -346,6 +347,33 @@ function liveDeckChecks(): void {
   group(`живая колода: ${candidates.length} словарных карточек — у каждой нашлось три дистрактора`)
 }
 
+// ---- C12: skeletonHint / вердикт cued ---------------------------------------
+
+function cuedHintChecks(): void {
+  // 'facilitate' - 10 букв, открыты индексы 0, 4, 8 - три буквы из десяти
+  const hint = skeletonHint('facilitate')
+  const openCount = hint.split('').filter((ch, i) => ch === 'facilitate'[i]).length
+  assert(hint.length === 'facilitate'.length, `скелет обязан сохранять длину слова, получено «${hint}»`)
+  assert(openCount === 3, `у 'facilitate' обязано быть открыто 3 буквы из 10, получено ${openCount} («${hint}»)`)
+  assert(hint[0] === 'f', `первая буква обязана быть открыта всегда, получено «${hint}»`)
+  group('skeletonHint: «facilitate» открывает 3 буквы из 10 (индексы 0, 4, 8), первая буква открыта всегда')
+
+  // короткое слово не открывается целиком - тот же шаг 4, просто дальше нечему открываться
+  const short = skeletonHint('ox')
+  assert(short !== 'ox', `слово короче 4 букв не должно открываться целиком, получено «${short}»`)
+  assert(short[0] === 'o', `первая буква короткого слова тоже открыта, получено «${short}»`)
+  group('skeletonHint: слово короче четырёх букв не открывается целиком, только первая буква')
+
+  // suggestedGrade для cued - Hard, по колее twin, и не путается с ней
+  assert(suggestedGrade('type', 'cued', 1_000, 'vocab', 8_000) === Rating.Hard,
+    'cued обязан давать Hard, как twin')
+  assert(suggestedGrade('type', 'cued', 90_000, 'vocab', 8_000) === Rating.Hard,
+    'cued остаётся Hard независимо от латентности, как twin')
+  assert(suggestedGrade('type', 'cued', 1_000, 'vocab', 8_000) === suggestedGrade('type', 'twin', 1_000, 'vocab', 8_000),
+    'cued и twin дают одну и ту же оценку, но это разные вердикты')
+  group('suggestedGrade: verdict «cued» даёт Hard по колее twin, вердикты не путаются')
+}
+
 function main(): void {
   console.log('SRS синонимы/дистракторы — stemRu, glossKey/glossParts, meaningTwin, blankSentence/blankPhrase')
   stemRuChecks()
@@ -354,6 +382,7 @@ function main(): void {
   blankSentenceChecks()
   blankPhraseChecks()
   checkTypedSynonymsChecks()
+  cuedHintChecks()
   liveDeckChecks()
   console.log(`\nВсе проверки синонимов пройдены (${passed} групп).`)
 }

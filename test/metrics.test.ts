@@ -15,7 +15,7 @@ import { fsrs, generatorParameters, State, type Card as FsrsCard } from 'ts-fsrs
 import type { CardView, JournalLine } from '../src/lib/types'
 import {
   examReady, maturity, pace, reviewCount, retentionByInterval, retentionByLateness, retentionByLevel, retentionByDomain,
-  speedStats, typoSplit, gaveUpShare, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
+  speedStats, typoSplit, gaveUpShare, cuedStats, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
   intervalBucketOf, enoughForPct, isLeechCard, orphanedLines,
   PRIMARY_DATE, EXAM_DATE, NEW_STOP_DATE, NEW_STOP_BY_SECTION, nextAttempt, TARGET_REVIEW, TARGET_MATURE, MIN_N_FOR_PCT,
   MATURE_STABILITY_DAYS, READY_R
@@ -198,6 +198,34 @@ function intervalChecks(): void {
     `elapsed_days должен пережить ndjson roundtrip, получено ${JSON.stringify(rtLines[0])}`)
 
   group('retentionByInterval: бакеты по elapsed_days (не по scheduled_days), ловушка плана закрыта, «меньше суток» отдельно, реконструкция из ts, typo/learning вне зачёта, roundtrip ndjson')
+}
+
+// ---- cued (C12) -------------------------------------------------------------
+
+function cuedChecks(): void {
+  // строка cued исключена из retentionByInterval так же, как twin (C12)
+  const j: JournalLine[] = [
+    rev({ slug: 'a', prev_state: State.Review, elapsed_days: 2, rating: 3 }),                     // 1-3 pass
+    rev({ slug: 'b', prev_state: State.Review, elapsed_days: 2, rating: 2, cued: true }),          // исключить
+  ]
+  const ri = retentionByInterval(j)
+  assert(ri['1-3'].n === 1, `cued обязан выпадать из retentionByInterval, n=${ri['1-3'].n}`)
+
+  // cuedStats: доля показов формата type, взятых со скелета, за 7 и 30 дней
+  const today = '2026-09-06'
+  const jc: JournalLine[] = [
+    rev({ slug: 'w1', day: today, format: 'type', rating: 2, cued: true }),
+    rev({ slug: 'w2', day: today, format: 'type', rating: 3 }),
+    rev({ slug: 'w3', day: addDaysKey(today, -3), format: 'type', rating: 2, cued: true }),
+    rev({ slug: 'w4', day: addDaysKey(today, -20), format: 'type', rating: 2, cued: true }),  // вне 7 дней, внутри 30
+    rev({ slug: 'w5', day: addDaysKey(today, -40), format: 'type', rating: 2, cued: true }),   // вне обоих окон
+    rev({ slug: 'w6', day: today, format: 'mc', rating: 3, cued: true }),                       // не type - вне счёта
+  ]
+  const cs = cuedStats(jc, new Date(today + 'T12:00:00+03:00'))
+  assert(cs.d7.shown === 3 && cs.d7.cued === 2, `d7 ожидалось shown=3 cued=2, получено ${JSON.stringify(cs.d7)}`)
+  assert(cs.d30.shown === 4 && cs.d30.cued === 3, `d30 ожидалось shown=4 cued=3, получено ${JSON.stringify(cs.d30)}`)
+
+  group('C12: cued исключён из retentionByInterval как twin, cuedStats считает окна 7 и 30 дней по format=type')
 }
 
 // ---- retentionByLateness ---------------------------------------------------
@@ -554,6 +582,7 @@ function main(): void {
   goalChecks()
   smallSampleChecks()
   intervalChecks()
+  cuedChecks()
   latenessChecks()
   levelDomainChecks()
   speedTypoChecks()

@@ -4,7 +4,7 @@ import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJo
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, typedTwin, suggestedGrade, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP,
+  pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, typedTwin, suggestedGrade, skeletonHint, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP,
   blankPhrase, blankSentence, markGlosses,
   type TypeVerdict,
   newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
@@ -249,6 +249,12 @@ export default function Review() {
   // C3/C4: карточка раскрыта через «не помню» (или пустой ввод) — ответ показан, но оценку
   // не спрашиваем: рейтинг фиксирован Again. Кнопки «Хорошо»/«Легко» в этом случае не рисуются.
   const [gaveUp, setGaveUp] = useState(false)
+  /* C12: счётчик попыток ввода на текущем показе и флаг «подсказка уже раскрыта».
+     Первая неверная попытка формата `type` не закрывает показ, а открывает кнопку
+     «подсказка» вместо немедленного «Мимо»; после того как подсказка раскрыта,
+     следующий ввод решает исход (cued или Again). Оба сбрасываются на каждый новый показ. */
+  const [attempts, setAttempts] = useState(0)
+  const [hintUsed, setHintUsed] = useState(false)
   /* Разбор «Почему?»: null — панель закрыта. Открытая панель живёт до конца показа,
      поэтому сбрасывается там же, где revealed и picked. `stage` — что происходит,
      пока ждём: разбор пишет машина дома, и молчащая панель на двадцать секунд
@@ -355,6 +361,8 @@ export default function Review() {
     setTyped('')
     setVerdict(null)
     setGaveUp(false)
+    setAttempts(0)
+    setHintUsed(false)
     setWhy(null)
     setNeedConfirm(null)
     setGradesOpen(false)
@@ -624,6 +632,16 @@ export default function Review() {
   }
 
   /**
+   * C12: раскрыть ступенчатую подсказку (skeletonHint) поверх ввода. Доступна только
+   * после первой неверной попытки, ровно один раз на показ: сама кнопка исчезает,
+   * как только подсказка раскрыта (условие в разметке ниже - attempts >= 1 && !hintUsed).
+   */
+  function applyHint() {
+    if (!task || task.format !== 'type' || revealed || hintUsed || attempts < 1) return
+    setHintUsed(true)
+  }
+
+  /**
    * Звук исхода. Веха серии звучит ВМЕСТО «верно», а не вместе с ним: два сигнала
    * в один момент дают кашу вместо награды.
    */
@@ -647,16 +665,30 @@ export default function Review() {
     const ok: TypeVerdict = вводом
       ? (task.item.view.answerNum ? checkNumeric(value, task.answer) : checkTyped(value, task.answer, task.item.view.synonyms))
       : sameAnswer(value, task.answer) ? 'correct' : 'wrong'
-    /* C10: синоним из колоды — законный ответ на то же предложение, и «Мимо» за него
+    /* C10: синоним из колоды - законный ответ на то же предложение, и «Мимо» за него
        отправляло карточку в переучивание за верно вспомненное значение. Вариантам это
        не нужно: там двойник не попадает в список (C9). */
-    const итог: TypeVerdict = ok === 'wrong' && вводом && !task.item.view.answerNum
+    let итог: TypeVerdict = ok === 'wrong' && вводом && !task.item.view.answerNum
       && typedTwin(value, task.item.view, deck) ? 'twin' : ok
+
+    /* C12: провал ввода перестаёт быть окончательным сам по себе. Первая неверная попытка
+       формата `type` (не typo, не twin, не числовой ответ - там скелет слова бессмыслен)
+       не закрывает показ: копится счётчик попыток, кнопка «подсказка» становится доступна
+       (см. разметку ниже), а поле остаётся открытым для повторного ввода. После того как
+       подсказка раскрыта, следующий ввод уже решает исход: верный переходит в вердикт
+       cued (оценка Hard - слово вспомнено не с нуля), неверный закрывается как обычно. */
+    if (task.format === 'type' && итог === 'wrong' && !task.item.view.answerNum && !hintUsed) {
+      setAttempts(a => a + 1)
+      setPicked(value)
+      return
+    }
+    if (task.format === 'type' && итог === 'correct' && hintUsed) итог = 'cued'
+
     answeredMs.current = Date.now() - shownAt.current
     setPicked(value)
     setVerdict(итог)
     if (итог === 'typo' || итог === 'twin') play('typo')
-    else soundOutcome(итог === 'correct')
+    else soundOutcome(итог === 'correct' || итог === 'cued')
     setRevealed(true)
   }
 
@@ -1054,7 +1086,7 @@ export default function Review() {
             value={typed}
             onChange={e => setTyped(e.target.value)}
             onFocus={e => e.currentTarget.scrollIntoView({ block: 'nearest' })}
-            placeholder={isNumeric ? 'Ваш ответ…' : 'Введите слово…'}
+            placeholder={hintUsed && task.format === 'type' ? skeletonHint(task.answer) : isNumeric ? 'Ваш ответ…' : 'Введите слово…'}
             inputMode={isNumeric ? 'decimal' : 'text'}
             autoFocus={task.format === 'type'}
             autoCapitalize="none"
@@ -1069,11 +1101,12 @@ export default function Review() {
           <div className="rev-answer">
             {verdict && (
               <div className={`verdict verdict-${verdict} verdict-row`}>
-                <FlameBuddy size={34} mood={verdict === 'correct' ? 'happy' : verdict === 'typo' || verdict === 'twin' ? 'idle' : 'sad'} />
+                <FlameBuddy size={34} mood={verdict === 'correct' ? 'happy' : verdict === 'typo' || verdict === 'twin' || verdict === 'cued' ? 'idle' : 'sad'} />
                 <span>
                   {verdict === 'correct' ? (combo >= 3 ? `Верно! Серия ×${combo + 1}` : 'Верно!')
-                    : verdict === 'typo' ? `Почти — опечатка: вы ввели «${typed.trim()}»`
-                    : verdict === 'twin' ? `Не мимо: «${typed.trim()}» значит то же — но здесь загадано ${card.word}`
+                    : verdict === 'cued' ? `Верно со скелета: «${typed.trim()}»`
+                    : verdict === 'typo' ? `Почти - опечатка: вы ввели «${typed.trim()}»`
+                    : verdict === 'twin' ? `Не мимо: «${typed.trim()}» значит то же, но здесь загадано ${card.word}`
                     : isPrep ? `Правильно: ${card.word} ${card.prep}`
                     : isNumeric ? <>Мимо — ответ: <Tex text={task.answer} /></>
                     : task.format === 'type' ? <>Мимо — вы ввели «{typed.trim()}»</>
@@ -1159,8 +1192,14 @@ export default function Review() {
               <button className="btn btn-green" onClick={() => submitObjective(typed)}>
                 Проверить
               </button>
-              {/* C3: в форматах с вводом кнопка «не помню» обязательна — не заставляем гадать вслепую */}
-              <button className="intro-know" onClick={() => giveUp()}>Не помню — показать ответ</button>
+              {/* C12: подсказка доступна только после первой неверной попытки и ровно один раз
+                  на показ - как только она раскрыта, кнопка исчезает (условие ниже держит оба
+                  флага сразу, structural-тест ищет их именно в этом виде). */}
+              {attempts >= 1 && hintUsed === false && (
+                <button className="intro-know hint-btn" onClick={applyHint}>Подсказка</button>
+              )}
+              {/* C3: в форматах с вводом кнопка «не помню» обязательна - не заставляем гадать вслепую */}
+              <button className="intro-know" onClick={() => giveUp()}>Не помню - показать ответ</button>
             </>
           ) : (
             <>

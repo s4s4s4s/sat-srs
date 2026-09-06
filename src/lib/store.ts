@@ -393,6 +393,8 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     ...(verdict === 'typo' ? { typo: true } : {}),
     // C10: синоним вместо загаданного слова — тоже не незнание, и тоже не чистый сигнал retention
     ...(verdict === 'twin' ? { twin: true } : {}),
+    // C12: слово взято со скелета после провала попытки, а не вспомнено с нуля
+    ...(verdict === 'cued' ? { cued: true } : {}),
     // C3/C4: «не помню» / пустой ввод — честное признание незнания, семантически ≠ неверный ответ
     ...(gaveUp ? { gave_up: true } : {}),
     ...(item.view.kind !== 'vocab' ? { kind: item.view.kind } : {}),
