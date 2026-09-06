@@ -301,6 +301,23 @@ function planVsFactChecks(): void {
     `межднёвный показ с просрочкой ожидался done=1 onTime=0 delaySum=2, получено ${JSON.stringify(d3)}`)
 
   group('planVsFact: внутридневной learning-повтор с future due не считается выполненным (F38), межднёвные показы вовремя/с просрочкой считаются как раньше')
+
+  // J1: пунктуальность повтора к опечатке отношения не имеет. Два межднёвных ревью пришли
+  // вовремя (prev_state=Review), у одного из них вердикт typo - оба обязаны засчитаться в
+  // done, иначе фильтр isMatureShow (который заодно выбрасывал typo/twin/cued) занижал обе
+  // половины «план vs факт» ровно в тот день, когда карточки пришли в срок, но с опечаткой.
+  const jTypo: JournalLine[] = [
+    rev({ slug: 'x', day: '2026-09-01', prev_state: State.Learning, due: '2026-09-04T10:00:00+03:00', rating: 3 }),
+    rev({ slug: 'x', day: '2026-09-04', prev_state: State.Review, rating: 1, typo: true }),
+    rev({ slug: 'y', day: '2026-09-01', prev_state: State.Learning, due: '2026-09-04T10:00:00+03:00', rating: 3 }),
+    rev({ slug: 'y', day: '2026-09-04', prev_state: State.Review, rating: 3 })
+  ]
+  const pvf4 = planVsFact(jTypo, '2026-09-04', 6)
+  const d4 = pvf4.get('2026-09-04')
+  assert(!!d4 && d4.done === 2 && d4.onTime === 2,
+    `повтор в срок с опечаткой обязан засчитываться в план/факт, ожидался done=2 onTime=2, получено ${JSON.stringify(d4)}`)
+
+  group('planVsFact: зрелый повтор с вердиктом typo/twin/cued тоже считается в план/факт (J1) - пунктуальность не зависит от вердикта')
 }
 
 // ---- retentionByLevel / Domain -------------------------------------------
