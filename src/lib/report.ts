@@ -12,7 +12,8 @@ import { activeLevel, levelStats, isLevelled, EXAM_DATE, SECTIONS, nextAttempt, 
 import {
   examReady, maturity, pace, retentionByInterval, retentionByLateness, retentionBySection, maturityBySection,
   speedStats, typoSplit, gaveUpShare, cuedStats, planVsFact, isLeechCard, orphanedLines, ddmm, practiceUnitRatio,
-  NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS,
+  capacityEstimate,
+  NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS, READY_R,
   INTERVAL_LABELS, SECTION_LABELS, type IntervalBucket
 } from './metrics'
 
@@ -139,12 +140,20 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   out.push('# SRS-отчёт (автогенерация)', '')
   out.push('> Файл пишет приложение SAT SRS при каждой синхронизации — не редактировать. Источник сырых данных: `_журнал/*.ndjson` (каждая оценка: ts, слово, навык, формат, correct, rating, план следующего показа) и frontmatter карточек.', '')
 
-  /* Цель сменилась 17.08.2026. Было «400 готовых слов к 03.10» по прогнозной
-     retrievability — снято как арифметически недостижимое (слово созревает за 21 день
-     стабильности, значит введённое после ~12.09 к первой попытке не успевает).
-     Стало: довести 250–300 карточек до review и сделать 150+ из них зрелыми.
-     Готовность по retrievability осталась справочной строкой — тьютору она полезна,
-     но планом больше не является и ни с какой целевой цифрой не сравнивается. */
+  /* Главное число сменилось 06.09.2026. Цель TARGET_REVIEW и измеренная ёмкость
+     разъехались вчетверо: отчёт требовал «довести ещё 219, +14,6/день, отстаёшь
+     на 68 дн» при 28 днях до попытки и медиане 2,4 доведения в день - тот же
+     прецедент, что и «400 готовых слов» 17.08.2026 (см. комментарий у
+     capacityEstimate в metrics.ts). Цифра, которую нельзя выполнить измеренным
+     темпом, не мотивирует, а деморализует, и держать её главной строкой отчёта -
+     повторять уже отменённую ошибку.
+
+     Главное число теперь - готовность к БЛИЖАЙШЕЙ попытке по прогнозной
+     retrievability (D7): вспомнится слово или нет при выполнении плана повторов,
+     а не сколько карточек формально доведено до состояния review. Цель ниже
+     строится не как желаемое число, а как то, на что хватает измеренной ёмкости
+     (capacityEstimate/wordsAffordable/rulesAffordable, metrics.ts) - недостижимая
+     цель на экране и в отчёте больше не показывается. */
   /* Даты берутся у планировщика в момент отчёта (E3), а не у константы первой попытки:
      отчёт уезжает тьютору и после 03.10, и «готовность к 03.10» в нём была бы отчётом
      о прошедшем дне. attempt - ближайшая попытка, cap - потолок сроков на сегодня. */
@@ -153,20 +162,17 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   const erP = examReady(active, attempt)
   const erE = examReady(active, EXAM_DATE)
   const pc = pace(active, lines, NEW_STOP_DATE, now)
+  const ce = capacityEstimate(lines, now, NEW_STOP_DATE)
   const mat = maturity(active)
-  const verdictStr = pc.verdict === 'ahead'
-    ? 'идёшь с опережением'
-    : pc.daysBehind === null ? 'темпа нет — 0 слов за 14 дн' : `отстаёшь на ${pc.daysBehind} дн`
   out.push('## Прогресс к экзамену', '')
   const stopsStr = SECTIONS.map(s2 => `${SECTION_LABELS[s2]} ${ddmm(NEW_STOP_BY_SECTION[s2])}`).join(' · ')
-  out.push(`> Цель (с 17.08.2026): довести **${TARGET_REVIEW}** карточек до состояния review, коридор 250-300, и сделать **${TARGET_MATURE}+** из них зрелыми (стабильность ≥ ${MATURE_STABILITY_DAYS} дн) к ближайшей попытке ${ddmm(attempt)}. Ввод новых закрывается у каждого раздела своей датой (A8): ${stopsStr}; последний рабочий день ввода - накануне, дальше только дозревание введённого. Потолок сроков на сегодня: ${ddmm(dueCapNow)}.`, '')
-  out.push(`- В review (словарные карточки, числитель цели): **${mat.reviewCount} из ${TARGET_REVIEW}** · зрелых (стаб.≥${MATURE_STABILITY_DAYS}дн): **${mat.matureCount} из ${TARGET_MATURE}** · медианная стабильность ${mat.medianStability} дн`)
-  out.push(pc.verdict === 'closed'
-    ? `- Ввод новых закрыт с ${ddmm(NEW_STOP_DATE)}: добор объёма окончен, темп ввода больше не считается`
-    : `- Ввод новых закрывается ${ddmm(NEW_STOP_DATE)}: довести ещё **${pc.remaining}** · нужно **+${pc.neededPerDay}/день** (осталось ${pc.daysLeft} дн ввода) · **${verdictStr}**`)
-  out.push(`- Темп: +${pc.actual7} за 7 дн · +${pc.actual14} за 14 дн (выход в review по журналу)`)
+  out.push(`> Главное число сменилось 06.09.2026 (прецедент 17.08.2026 с «400 готовых слов»): цель, которую измеренная ёмкость не вытягивает, на экране и в отчёте больше не показывается. Ввод новых закрывается у каждого раздела своей датой (A8): ${stopsStr}; последний рабочий день ввода - накануне, дальше только дозревание введённого. Потолок сроков на сегодня: ${ddmm(dueCapNow)}.`, '')
   const readyTail = attempt.getTime() === EXAM_DATE.getTime() ? '' : ` · к ${ddmm(EXAM_DATE)} ${erE.ready}`
-  out.push(`- Справочно, готовность по прогнозной retrievability (R ≥ 0.90, без будущих повторов): к ${ddmm(attempt)} ${erP.ready}${readyTail} · всего словарных карточек ${erP.total}`)
+  out.push(`- Вспомнится к ${ddmm(attempt)}: **${erP.ready}** из ${erP.total} слов (прогноз R ≥ ${READY_R} при выполнении плана повторов)${readyTail}`)
+  out.push(`- Ёмкости до ${ddmm(NEW_STOP_DATE)} хватит на **~${pc.wordsAffordable} слов** или **~${pc.rulesAffordable} правил SEC** (измерено по журналу занятий, capacity=${pc.capacity} оценок)`)
+  out.push(`- Выполнимый дневной объём: **${ce.gradesPerStudyDay}** оценок (медиана в учебный день, ${Math.round(ce.studyFrequency * 100)}% дней с занятиями)`)
+  out.push(`- В review (словарные карточки, справочный коридор): ${mat.reviewCount} из ${TARGET_REVIEW} · зрелых к ${ddmm(EXAM_DATE)} (стаб.≥${MATURE_STABILITY_DAYS}дн): ${mat.matureCount} из ${TARGET_MATURE} · медианная стабильность ${mat.medianStability} дн`)
+  out.push(`- Темп: +${pc.actual7} за 7 дн · +${pc.actual14} за 14 дн (выход в review по журналу)`)
   /* Финальный проход: в последнюю неделю потолок сроков стоит на кануне попытки, и весь
      этот объём обязан пройти перед экзаменом. Тьютору нужна не сама дата, а число: это
      нагрузка, которую ученик либо возьмёт, либо не возьмёт. */

@@ -4,9 +4,9 @@ import { множ } from '../lib/plural'
 import { homeCounts, loadForecast, sectionOf, newBudgetTotal, SECTIONS } from '../lib/scheduler'
 import { streak, trueRetention30, minutesToday, retentionByFormat, minutesByDay, emptyDays, isDayDone } from '../lib/journal'
 import {
-  pace, maturity, retentionByInterval, retentionByLevel, retentionByDomain,
+  pace, maturity, examReady, retentionByInterval, retentionByLevel, retentionByDomain,
   retentionBySection, maturityBySection, speedStats, typoSplit, gaveUpShare, planVsFact,
-  orphanedLines, enoughForPct, ddmm, nextAttempt, NEW_STOP_DATE,
+  orphanedLines, enoughForPct, ddmm, nextAttempt, NEW_STOP_DATE, EXAM_DATE, READY_R,
   TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS, INTERVAL_LABELS, SECTION_LABELS, SLOW_MS,
   type Bucketed, type IntervalBucket, type MetricSnapshot, type PlanVsFactDay
 } from '../lib/metrics'
@@ -161,10 +161,15 @@ export default function Stats() {
   const days28 = Array.from({ length: 28 }, (_, i) => addDaysKey(today, i - 27))
   const firstDay = [...minutes.keys(), ...empty].sort()[0] ?? today
 
-  /* Прогресс к экзамену. Цель с 17.08.2026 — не «400 готовых слов» (снята как
-     недостижимая: слово созревает за 21 день стабильности, и введённое после ~12.09
-     к 03.10 не успевает), а две величины: сколько карточек доведено до повторов и
-     сколько из них зрелых. Темп считается к стопу ввода новых, а не к экзамену. */
+  /* Прогресс к экзамену. Главное число сменилось 06.09.2026 (D7): не «довести N
+     карточек» (та цель разъехалась с измеренной ёмкостью вчетверо - прецедент
+     17.08.2026 с «400 готовых слов»), а готовность к БЛИЖАЙШЕЙ попытке по
+     прогнозной retrievability. TARGET_REVIEW/TARGET_MATURE остаются справочным
+     коридором ниже, темп печатает то, на что хватает измеренной ёмкости
+     (capacity/wordsAffordable/rulesAffordable, metrics.ts), а не недостижимый
+     дефицит в днях. */
+  const attempt = nextAttempt()
+  const er = examReady(all, attempt)
   const pc = pace(all, app.journal, NEW_STOP_DATE)
   const mat = maturity(all)
   const ri = retentionByInterval(app.journal)
@@ -179,9 +184,9 @@ export default function Stats() {
   const week7 = Array.from({ length: 7 }, (_, i) => addDaysKey(today, -6 + i))
   const pvf = planVsFact(app.journal, today)
   const hist: MetricSnapshot[] = app.metricsHistory
-  const paceVerdict = pc.verdict === 'ahead'
-    ? 'идёшь с опережением'
-    : pc.daysBehind === null ? 'темпа нет' : `отстаёшь на ${pc.daysBehind} дн`
+  // D7: цель не как желаемое число, а как то, на что хватает измеренной ёмкости -
+  // прежняя строка про дефицит в днях на экране больше не показывается (06.09.2026).
+  const paceVerdict = `хватит на ~${pc.wordsAffordable} слов / ~${pc.rulesAffordable} правил`
   const intervalRows = (Object.keys(ri) as IntervalBucket[]).map(k => ({ label: INTERVAL_LABELS[k], b: ri[k] }))
   const levelRows = [...rl.entries()].sort((a, b) => a[0] - b[0]).map(([lv, b]) => ({ label: app.levelNames[String(lv)] ?? `Уровень ${lv}`, b }))
   const domainRows = [...rd.entries()].sort((a, b) => b[1].n - a[1].n).map(([d, b]) => ({ label: d, b }))
@@ -218,20 +223,27 @@ export default function Stats() {
 
       <div className="card" style={{ marginBottom: 14 }}>
         <h2 className="sec">Прогресс к экзамену</h2>
+        {/* Главное число (D7, 06.09.2026): готовность к ближайшей попытке по прогнозной
+            retrievability, а не «доведено до повторов» - см. комментарий у `pc`/`er` выше. */}
         <div className="minbar-row" style={{ marginTop: 2 }}>
+          <div className="minbar"><div style={{ width: `${er.total ? Math.min(100, (er.ready / er.total) * 100) : 0}%` }} /></div>
+          <span className="minbar-label"><b>{er.ready}</b> / {er.total}</span>
+        </div>
+        <div className="syncline" style={{ marginBottom: 6 }}>вспомнится к ближайшей попытке {ddmm(attempt)} (прогноз R ≥ {READY_R} при выполнении плана повторов)</div>
+        <div className="minbar-row">
           <div className="minbar"><div style={{ width: `${Math.min(100, (mat.reviewCount / TARGET_REVIEW) * 100)}%` }} /></div>
           <span className="minbar-label"><b>{mat.reviewCount}</b> / {TARGET_REVIEW}</span>
         </div>
-        <div className="syncline" style={{ marginBottom: 6 }}>доведено до повторов, цель 250-300 слов к ближайшей попытке {ddmm(nextAttempt())}</div>
+        <div className="syncline" style={{ marginBottom: 6 }}>доведено до повторов, справочный коридор 250-300 слов к горизонту {ddmm(EXAM_DATE)}</div>
         <div className="minbar-row">
           <div className="minbar"><div style={{ width: `${Math.min(100, (mat.matureCount / TARGET_MATURE) * 100)}%` }} /></div>
           <span className="minbar-label"><b>{mat.matureCount}</b> / {TARGET_MATURE}</span>
         </div>
-        <div className="syncline" style={{ marginBottom: 6 }}>из них зрелых — стабильность ≥ {MATURE_STABILITY_DAYS} дн, держатся без повторов</div>
+        <div className="syncline" style={{ marginBottom: 6 }}>из них зрелых к горизонту {ddmm(EXAM_DATE)} - стабильность ≥ {MATURE_STABILITY_DAYS} дн, держатся без повторов</div>
         <div className="syncline">
           {pc.verdict === 'closed'
-            ? <>ввод новых закрыт с {ddmm(NEW_STOP_DATE)} — дальше только дозревание</>
-            : <>ввод новых закрывается {ddmm(NEW_STOP_DATE)}: довести ещё {pc.remaining} · нужно +{pc.neededPerDay}/день (осталось {pc.daysLeft} дн) · <b>{paceVerdict}</b></>}
+            ? <>ввод новых закрыт с {ddmm(NEW_STOP_DATE)} - дальше только дозревание</>
+            : <>ввод новых закрывается {ddmm(NEW_STOP_DATE)}: <b>{paceVerdict}</b></>}
         </div>
         <div className="syncline">
           темп: +{pc.actual7} за 7 дн · +{pc.actual14} за 14 дн · медиана стаб. {mat.medianStability} дн
