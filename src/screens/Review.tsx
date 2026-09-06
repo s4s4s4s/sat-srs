@@ -9,7 +9,7 @@ import {
   type TypeVerdict,
   newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
 } from '../lib/scheduler'
-import { pickNext, hasSeparator, screenFormat, isGiveUp, type OrderCtx } from '../lib/session'
+import { pickNext, hasSeparator, screenFormat, isGiveUp, REINTRO_PER_LESSON, type OrderCtx } from '../lib/session'
 import { lessonProgress, DRILL_PER_SESSION } from '../lib/progress'
 import Tex from '../components/Tex'
 import Markable from '../components/Markable'
@@ -288,14 +288,17 @@ export default function Review() {
   const introduced = useRef(new Set<string>())
   // слова, только что помеченные «Заново» (не вспомнил): следующий показ — окно-переznakomство «Подзабылось»
   const lapsed = useRef(new Set<string>())
-  // окон-знакомств за урок (новые intro + «Подзабылось»): «Подзабылось» для мозга — та же нагрузка,
-  // поэтому входит в общий урочный лимит. Новые приоритетны, переznakomство берёт остаток.
-  const introShown = useRef(0)
-  // урочный лимит окон-знакомств; introBonus поднимает его, когда иначе уроку нечего показать
+  /* Бюджета окон два, и они не сообщаются (F82). Знакомства НОВЫХ слов тратят свой
+     (`freshIntros` против `introLimitNow()`), окна «Подзабылось» - свой (`reintroShown`
+     против REINTRO_PER_LESSON). Счётчик был один на оба, и переznakomства съедали лимит
+     целиком: 04.09.2026 девять окон за день, все по знакомым словам, новых введено ноль.
+     Причина и цена - в комментарии к REINTRO_PER_LESSON (session.ts). */
+  const reintroShown = useRef(0)
+  // урочный лимит знакомств новых слов; introBonus поднимает его, когда иначе уроку нечего показать
   const baseIntroLimit = Math.max(1, NEW_PER_LESSON)
   const introBonus = useRef(0)
   const introLimitNow = () => baseIntroLimit + introBonus.current
-  // знакомств НОВЫХ слов за сессию и остаток дневного лимита — граница для добора сверх урочного
+  // знакомств НОВЫХ слов за сессию (он же счётчик урочного лимита) и остаток дневного
   const freshIntros = useRef(0)
   const dayNewLeft = useRef(0)
   // сколько отработок прошло с прошлого знакомства (новые слова не идут пачкой)
@@ -339,14 +342,14 @@ export default function Review() {
     //   числится введённым, не выучено, и следующий урок повторяет его один в один.
     if (screenFormat(head, orderCtx(queue ?? [])) === 'intro') {
       const freshNew = head.fsrs.state === State.New && !introduced.current.has(itemKey(head))
-      const overLimit = freshNew && introShown.current >= introLimitNow()
+      const overLimit = freshNew && freshIntros.current >= introLimitNow()
       if (overLimit || !hasSeparator(queue ?? [head], 0, orderCtx(queue ?? []))) {
         // экран не показан — переход есть, ПОКАЗА нет: полоску это двигать не должно
         void proceed((queue ?? []).slice(1), false)
         return
       }
     }
-    const shown = makeTask(head, deck, introduced.current, lapsed.current, introShown.current < introLimitNow(), app.settings.typing)
+    const shown = makeTask(head, deck, introduced.current, lapsed.current, reintroShown.current < REINTRO_PER_LESSON, app.settings.typing)
     setTask(shown)
     if (shown.format === 'intro') play('intro')
     // point 2/A2: отметка момента показа этой единицы — pickNextIndex держит 60-секундный разрыв
@@ -396,6 +399,7 @@ export default function Review() {
       pending,
       isIntro: it => screenFormat(it, ctx) === 'intro',
       introsLeft: ctx.introsLeft,
+      reintroLeft: ctx.reintroLeft,
       introduced: introduced.current,
       forced: forcedTodaySlugs(currentJournal(), dayKey()),
       drilled: drilled.current,
@@ -450,9 +454,9 @@ export default function Review() {
       deck,
       introduced: introduced.current,
       lapsed: lapsed.current,
-      reintroAllowed: introShown.current < introLimitNow(),
       typing: app.settings.typing,
-      introsLeft: introLimitNow() - introShown.current,
+      introsLeft: introLimitNow() - freshIntros.current,
+      reintroLeft: REINTRO_PER_LESSON - reintroShown.current,
       shownTimes: shownTimes.current,
       drilled: drilled.current,
       introPending: introPending.current,
@@ -703,9 +707,8 @@ export default function Review() {
     try {
       const elapsed = Date.now() - shownAt.current
 
-      // окно-знакомство показано (новое ИЛИ «Подзабылось») — тратит урочный лимит, флаг провала снят
+      // окно-знакомство показано: тратит СВОЙ бюджет (F82), флаг провала снят
       if (task.format === 'intro') {
-        introShown.current++
         lapsed.current.delete(itemKey(task.item))
         /* Знакомства новых слов считаем отдельно: дневной лимит про них, а не про «Подзабылось».
            Счётчик растёт на ЛЮБОЙ оценке знакомства, включая «Уже знаю это слово» (Rating.Easy).
@@ -713,7 +716,8 @@ export default function Review() {
            такое слово не тратил: остаток дня (dayNewLeft - freshIntros) оставался прежним, а
            ступень bonusNew вводила сверх него ещё одно слово - дневная норма NEW_PER_DAY
            превышалась ровно на число «уже знаю» за урок. */
-        if (task.item.fsrs.state === State.New) freshIntros.current++
+        if (task.item.fsrs.state === State.New && !introduced.current.has(itemKey(task.item))) freshIntros.current++
+        else reintroShown.current++
       }
       // интро — знакомство, не вспоминание: FSRS не трогаем; отработка через пару карточек
       if (task.format === 'intro' && g !== Rating.Easy) {

@@ -12,10 +12,10 @@ import { pickFormat, itemKey, MIN_SHOW_GAP_MS, MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_
 export interface OrderCtx {
   deck: CardView[]
   introduced: Set<string>          // itemKey слов, которым уже показано знакомство в этой сессии
-  lapsed: Set<string>              // itemKey «подзабытых» в этой сессии (следующий показ — окно)
-  reintroAllowed: boolean          // остался ли лимит окон-знакомств за урок (== introsLeft > 0)
+  lapsed: Set<string>              // itemKey «подзабытых» в этой сессии (следующий показ: окно)
   typing?: boolean                 // ввод по буквам разрешён настройкой (по умолчанию нет)
-  introsLeft: number               // сколько окон-знакомств урок ещё может выдать
+  introsLeft: number               // сколько знакомств НОВЫХ слов урок ещё может выдать
+  reintroLeft: number              // сколько окон «Подзабылось» урок ещё может выдать (REINTRO_PER_LESSON)
   shownTimes: Map<string, number>  // itemKey → мс последнего показа (A2)
   drilled: Map<string, number>     // itemKey → сколько раз слово ОЦЕНЕНО в этой сессии
   introPending: Set<string>        // itemKey, чей ПОСЛЕДНИЙ показ был окном-знакомством
@@ -37,6 +37,27 @@ export interface OrderCtx {
  * слово батча не получило оценку, новых знакомств не будет.
  */
 export const INTRO_BATCH_MAX = 3
+
+/**
+ * F82: окон «Подзабылось» за урок, и бюджет у них СВОЙ.
+ *
+ * Счётчик окон-знакомств был один на две разные вещи: знакомство с новым словом и окно
+ * «Подзабылось» уже знакомого. Ворота стояли только на новых (`overIntroLimit`), а окно
+ * провала молча вычитало слот из того же бюджета. Дальше складывалось так: очередь ставит
+ * весь пул Relearning впереди новых (buildQueue), провалов в колоде тем больше, чем хуже
+ * идут дела, и первые же окна «Подзабылось» съедали лимит целиком. Живой журнал 04.09.2026:
+ * девять показов format intro за день, все девять по словам, знакомым с июля-августа, ноль
+ * новых; new_seen = 0 в трёх уроках подряд, последнее действительно новое слово введено
+ * 26.08 - при том что до первой попытки оставался месяц, а число пиявок росло 15 -> 20.
+ *
+ * Поэтому бюджета теперь два. Ввод новых не отменяется тем, что день выдался тяжёлым: это
+ * ровно тот случай, когда откладывать ввод дороже всего. Своя граница у окна провала нужна
+ * по исходной причине, ради которой лимит вводился: окно - это чтение материала заново, и
+ * десять таких окон подряд превращают урок повторения в перечитывание колоды. Двух за урок
+ * хватает на самые свежие провалы, остальные отрабатываются обычным упражнением (при
+ * исчерпанном бюджете `pickTask` отдаёт им не окно, а очередной формат ротации).
+ */
+export const REINTRO_PER_LESSON = 2
 
 /**
  * Аварийный пол разрыва между знакомством и первой отработкой слова — то же, чем
@@ -66,7 +87,7 @@ export function isGiveUp(value: string): boolean {
 
 /** Формат, которым единица отрисуется прямо сейчас — тот же расчёт, что и в UI (makeTask). */
 export function screenFormat(item: StudyItem, ctx: OrderCtx): Format {
-  return pickFormat(item, ctx.deck, ctx.introduced, ctx.lapsed, ctx.reintroAllowed, ctx.typing ?? false)
+  return pickFormat(item, ctx.deck, ctx.introduced, ctx.lapsed, ctx.reintroLeft > 0, ctx.typing ?? false)
 }
 
 /** True, если показ единицы будет окном-знакомством: новое слово (intro) или «Подзабылось». */
@@ -93,11 +114,13 @@ function overIntroLimit(item: StudyItem, ctx: OrderCtx): boolean {
  */
 function afterIntro(item: StudyItem, ctx: OrderCtx): OrderCtx {
   const key = itemKey(item)
+  // окно тратит СВОЙ бюджет: знакомство нового слова - бюджет знакомств, «Подзабылось» - свой (F82)
+  const fresh = isFreshNew(item, ctx)
   return {
     ...ctx,
     introduced: new Set(ctx.introduced).add(key),
-    reintroAllowed: ctx.introsLeft - 1 > 0,
-    introsLeft: ctx.introsLeft - 1,
+    introsLeft: fresh ? ctx.introsLeft - 1 : ctx.introsLeft,
+    reintroLeft: fresh ? ctx.reintroLeft : ctx.reintroLeft - 1,
     batchIntros: ctx.batchIntros + 1,
     lastWasIntro: true,
     lastPath: item.view.path,

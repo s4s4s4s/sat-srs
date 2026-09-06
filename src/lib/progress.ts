@@ -45,8 +45,10 @@ export interface ProgressInput {
   pending: readonly StudyItem[]
   /** Отрисуется ли единица окном-знакомством (`screenFormat(...) === 'intro'`). */
   isIntro: (item: StudyItem) => boolean
-  /** Сколько окон-знакомств урок ещё может выдать (`OrderCtx.introsLeft`). */
+  /** Сколько знакомств НОВЫХ слов урок ещё может выдать (`OrderCtx.introsLeft`). */
   introsLeft: number
+  /** Сколько окон «Подзабылось» урок ещё может выдать (`OrderCtx.reintroLeft`, F82). */
+  reintroLeft: number
   /** `itemKey` слов, которым знакомство уже показано в этой сессии. */
   introduced: ReadonlySet<string>
   /** Слова, которые урок обязан отработать сегодня (`forcedTodaySlugs`). */
@@ -117,11 +119,13 @@ export function estimateShowsLeft(input: ProgressInput): number {
   const wantsIntro = units.map(it => input.isIntro(it))
   const freshNew = units.map(it => isFreshNew(it, input))
 
-  // 1) бюджет окон-знакомств тратится по порядку очереди — как его тратит сам урок
+  // 1) бюджеты окон тратятся по порядку очереди, как их тратит сам урок. Бюджета два:
+  // знакомства новых слов и окна «Подзабылось» (F82), и окно списывается со своего
   let introsLeft = input.introsLeft
+  let reintroLeft = input.reintroLeft
   const shows = units.map((it, i) => {
-    if (wantsIntro[i] && introsLeft > 0) {
-      introsLeft--
+    if (wantsIntro[i] && (freshNew[i] ? introsLeft > 0 : reintroLeft > 0)) {
+      if (freshNew[i]) introsLeft--; else reintroLeft--
       return drillsLeftFor(it, input, i >= input.queue.length) + (SHOWS_PER_INTRO - SHOWS_PER_REPEAT)
     }
     // окно не влезло в лимит: новое слово ждёт следующего урока и показов не даст,

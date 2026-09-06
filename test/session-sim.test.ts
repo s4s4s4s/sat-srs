@@ -25,7 +25,7 @@ import {
   homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal,
   MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS, leechReturned, MAX_LEECH_PER_LESSON
 } from '../src/lib/scheduler'
-import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, INTRO_GAP_FLOOR_MS, type OrderCtx } from '../src/lib/session'
+import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, INTRO_GAP_FLOOR_MS, REINTRO_PER_LESSON, type OrderCtx } from '../src/lib/session'
 import { screenSource } from './screen-source'
 import { lessonProgress, estimateShowsLeft, DRILL_PER_SESSION, type ProgressInput } from '../src/lib/progress'
 import { endOfStudyDay, dayKey, addDaysKey } from '../src/lib/daytime'
@@ -134,7 +134,7 @@ interface DayRun { lessons: Show[][]; bars: Bar[][] }
 /**
  * Прогон учебного дня: несколько уроков подряд по одной колоде (состояние карточек мутирует,
  * как в store.rateItem). Зеркалит Review.tsx: тот же контекст выбора, те же обновления
- * introduced/lapsed/sinceIntro/introShown/batchIntros, та же лестница добора proceed
+ * introduced/lapsed/sinceIntro/freshIntros/reintroShown/batchIntros, та же лестница добора proceed
  * (очередь → недоработанные сегодняшние → заполнители → пауза A2 → конец урока).
  */
 function runDay(deck: CardView[], opts: DayOpts): DayRun {
@@ -161,7 +161,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
     const dayLeft = Math.max(0, dayNew - ratedNewToday.size)
     const introduced = new Set<string>()
     const lapsed = new Set<string>()
-    let introShown = 0
+    let reintroShown = 0
     let introBonus = 0
     let freshIntros = 0
     const introLimit = () => opts.introLimit + introBonus
@@ -203,7 +203,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
     }
 
     const ctx = (extra: StudyItem[] = []): OrderCtx => ({
-      deck, introduced, lapsed, reintroAllowed: introShown < introLimit(), introsLeft: introLimit() - introShown,
+      deck, introduced, lapsed, introsLeft: introLimit() - freshIntros, reintroLeft: REINTRO_PER_LESSON - reintroShown,
       shownTimes, drilled, introPending, now, lastPath, lastWasIntro, sinceIntro, batchIntros,
       hasFiller: availableFillers(extra).length > 0
     })
@@ -234,6 +234,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
         pending,
         isIntro: it => screenFormat(it, c) === 'intro',
         introsLeft: c.introsLeft,
+        reintroLeft: c.reintroLeft,
         introduced,
         forced: forced(),
         drilled,
@@ -311,7 +312,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       // render-эффект Review: окно-знакомство не показываем, если его нельзя отработать
       if (fmt === 'intro') {
         const freshNew = head.fsrs.state === State.New && !introduced.has(itemKey(head))
-        if ((freshNew && introShown >= introLimit()) || !hasSeparator(queue, 0, ctx(queue))) {
+        if ((freshNew && freshIntros >= introLimit()) || !hasSeparator(queue, 0, ctx(queue))) {
           // кадр отрисован, показа не было: полоска двигаться не имеет права
           bars.push({ ...barNow(queue), kind: 'skip' })
           queue = proceed(queue.slice(1))
@@ -336,10 +337,10 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       const known = fmt === 'intro' && knownWords.has(head.view.slug)
 
       if (fmt === 'intro') {
-        // зеркалит grade() в Review.tsx: окно тратит урочный лимит и урочный счётчик новых
-        // при ЛЮБОЙ оценке знакомства, включая Easy - иначе bonusNew вводит слово сверх нормы
-        introShown++
-        if (head.fsrs.state === State.New) freshIntros++
+        /* зеркалит grade() в Review.tsx: окно тратит СВОЙ бюджет (F82) при ЛЮБОЙ оценке
+           знакомства, включая Easy - иначе bonusNew вводит слово сверх нормы */
+        if (head.fsrs.state === State.New && !introduced.has(itemKey(head))) freshIntros++
+        else reintroShown++
         lapsed.delete(itemKey(head))
         if (!introAt.has(head.view.slug)) introAt.set(head.view.slug, lesson)
         if (!known) {
@@ -2244,7 +2245,7 @@ function progressBarChecks(): void {
   const призракКолода = [newCard('g1'), newCard('g2'), newCard('g3'), newCard('g4')]
   const стартовая = buildQueue(призракКолода, 2, new Date(BASE), new Set())
   const стартCtx: OrderCtx = {
-    deck: призракКолода, introduced: new Set(), lapsed: new Set(), reintroAllowed: true,
+    deck: призракКолода, introduced: new Set(), lapsed: new Set(), reintroLeft: REINTRO_PER_LESSON,
     introsLeft: 1, shownTimes: new Map(), drilled: new Map(), introPending: new Set(),
     now: BASE, lastPath: '', lastWasIntro: false, sinceIntro: Number.MAX_SAFE_INTEGER,
     batchIntros: 0, hasFiller: false
