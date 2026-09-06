@@ -1,4 +1,4 @@
-import { useApp, setScreen } from '../lib/store'
+import { useApp, setScreen, startLesson } from '../lib/store'
 import { streak, sessionAccuracy, matureRetention } from '../lib/journal'
 import { Timer, Check, Bolt } from '../components/Icon'
 import FlameBuddy from '../components/FlameBuddy'
@@ -19,6 +19,9 @@ export default function Summary() {
   const ret = matureRetention(r)
   const mm = Math.floor(r.durMs / 60000)
   const ss = Math.floor((r.durMs % 60000) / 1000)
+  // WS5b (часть 2): «до цели ещё K» - K из sessionGoal и doneToday, посчитанных Review.tsx
+  // в той же точке, где выставлен goalReached (finish()), а не заново на этом экране.
+  const toGoal = Math.max(0, app.sessionGoal - r.doneToday)
 
   return (
     <div className="screen s-summary">
@@ -34,6 +37,15 @@ export default function Summary() {
           {/* зрелые повторы — отдельной строкой: это сигнал FSRS, а не описание проделанной работы */}
           {ret !== null && (
             <div className="sum-sub">зрелых повторов {r.totalRev} · ретеншн {ret}%</div>
+          )}
+          {/* WS5b (часть 2): цель дня закрыта - предлагаем ещё заход того же раздела вместо
+              немедленного выхода на главную; цель не закрыта, а очередь не пуста - честно
+              говорим, сколько осталось, а не молчим об этом. */}
+          {r.goalReached && (
+            <div className="sum-sub">Заход закрыт: цель дня выполнена</div>
+          )}
+          {!r.goalReached && !r.queueEmpty && (
+            <div className="sum-sub">До цели ещё {toGoal} упражнений</div>
           )}
         </div>
         <div className="tiles">
@@ -56,7 +68,14 @@ export default function Summary() {
             <div className="tile-body"><Timer size={16} />{mm}:{String(ss).padStart(2, '0')}</div>
           </div>
         </div>
-        <button className="btn btn-green btn-lg" onClick={() => setScreen('home')}>Дальше</button>
+        {r.goalReached ? (
+          <>
+            <button className="btn btn-green btn-lg" onClick={() => startLesson(app.sessionSection, false, false)}>Ещё заход</button>
+            <button className="btn btn-lg" onClick={() => setScreen('home')}>На главную</button>
+          </>
+        ) : (
+          <button className="btn btn-green btn-lg" onClick={() => setScreen('home')}>Дальше</button>
+        )}
       </div>
     </div>
   )

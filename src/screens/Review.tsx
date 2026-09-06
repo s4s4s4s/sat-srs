@@ -341,7 +341,7 @@ export default function Review() {
      двумя строками выше, только не про минуты, а про упражнения. */
   const baseUnits = useMemo(() => dayUnitsByDay(currentJournal(), practiceUnitRatio(currentJournal())).get(dayKey()) ?? 0, [])
   const goal = app.sessionGoal
-  const res = useRef<SessionResult>({ day: dayKey(), reviews: 0, newSeen: 0, again: 0, passRev: 0, totalRev: 0, durMs: 0, queueEmpty: false, goalReached: false })
+  const res = useRef<SessionResult>({ day: dayKey(), reviews: 0, newSeen: 0, again: 0, passRev: 0, totalRev: 0, durMs: 0, queueEmpty: false, goalReached: false, doneToday: 0 })
   // B7: последняя выставленная оценка сессии - решает, положен ли закрывающий показ на выходе
   const lastGrade = useRef<Grade | null>(null)
   // B7: строго один закрывающий показ за сессию (флаг), closingCard - что сейчас на экране он и есть
@@ -472,7 +472,8 @@ export default function Review() {
     // WS5b: цель захода - по дневному счётчику упражнений (до сессии плюс эта сессия),
     // не по одной этой сессии - заход, начатый после утренней практики, обязан засчитать
     // и её (тот же счётчик, что показывает счётчик «N из goal» на экране)
-    res.current.goalReached = baseUnits + res.current.reviews >= goal
+    res.current.doneToday = baseUnits + res.current.reviews
+    res.current.goalReached = res.current.doneToday >= goal
     await finishSession(res.current)
   }
 

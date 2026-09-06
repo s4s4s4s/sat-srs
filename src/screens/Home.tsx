@@ -6,7 +6,7 @@ import {
 } from '../lib/journal'
 import { DAY_NORMS, NORM_LEVELS, NORM_TITLE_GENITIVE, dayNormFill, dayNormStatus, newPerDay } from '../lib/norms'
 import { sectionOrder, nextSection, SECTION_REASON, SECTION_TITLE } from '../lib/dayplan'
-import { examReady, nextAttempt, practiceUnitRatio, ddmm } from '../lib/metrics'
+import { examReady, nextAttempt, practiceUnitRatio, ddmm, speedStats } from '../lib/metrics'
 import { stageCounts, type WordStage } from '../lib/wordstatus'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt, Book } from '../components/Icon'
@@ -192,6 +192,14 @@ export default function Home() {
   const extraLogic = newBudgetFor(logic, newPerDay('logic', 'max'), app.journal, today)
   const extraGrammar = newBudgetFor(grammar, newPerDay('grammar', 'max'), app.journal, today)
   const extraMath = newBudgetFor(math, newPerDay('math', 'max'), app.journal, today)
+  /* WS5b (часть 2): цена захода в минутах - RUN_MIN_REVIEWS умноженное на личную медиану
+     ответа (speedStats.medianMs, тот же источник, что порог "медленно" в Review.tsx). Нет
+     ни одной пригодной строки (n === 0) - медиана вернётся нулём, и минуты не печатаются
+     вовсе, а не как "0 мин". */
+  const speed = speedStats(app.journal)
+  const runMinutes = speed.n > 0 && speed.medianMs > 0
+    ? Math.ceil((RUN_MIN_REVIEWS * speed.medianMs) / 60000)
+    : null
   const pause: PauseRange | null = app.settings.pauseFrom && app.settings.pauseTo
     ? { from: app.settings.pauseFrom, to: app.settings.pauseTo } : null
   const st = streak(app.journal, today, pause)
@@ -369,7 +377,7 @@ export default function Home() {
         </div>
         <div className="minbar-row" style={{ marginTop: 0, marginBottom: 4 }}>
           <div className="minbar"><div style={{ width: `${Math.min(100, (fd.done / fd.window) * 100)}%` }} /></div>
-          <span className="minbar-label">пол дня — {RUN_MIN_REVIEWS} упражнений</span>
+          <span className="minbar-label">пол дня — {RUN_MIN_REVIEWS} упражнений{runMinutes !== null ? ` ≈ ${runMinutes} мин` : ''}</span>
         </div>
       </div>
 

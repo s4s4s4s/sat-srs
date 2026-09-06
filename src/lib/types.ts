@@ -326,4 +326,8 @@ export interface SessionResult {
    *  плюс эта сессия), не по одному lock r.reviews сессии. Summary.tsx решает по этому
    *  полю, показывать ли «заход закрыт» и кнопку «ещё заход». */
   goalReached: boolean
+  /** WS5b (часть 2): дневной счётчик упражнений на момент финиша (baseUnits + reviews этой
+   *  сессии) - та же величина, что показывает счётчик «N из goal» на экране. Summary.tsx
+   *  печатает по ней «до цели ещё K», K = sessionGoal - doneToday, не пересчитывая заново. */
+  doneToday: number
 }

@@ -406,6 +406,32 @@ function reportKnowledgePredicateChecks(): void {
   group('K2/K3: report.ts решает ошибку знания и закрытие пробела через isKnowledgeMiss/isKnowledgePass, не через сырой correct')
 }
 
+/**
+ * WS5b (часть 2): структура экранов цели захода - счётчик "N из goal" и закрывающий показ
+ * B7 в Review.tsx, кнопка "Ещё заход" на Summary.tsx, цена захода в минутах на Home.tsx.
+ * Как и `wordListScreenChecks` выше, эти проверки читают исходник текстом (screenSource) -
+ * живого рендера в node нет, а закрепить, что правки не срежут одну из веток выхода или
+ * подпись, всё равно нужно.
+ */
+function sessionGoalScreenChecks(): void {
+  const reviewSrc = screenSource('Review.tsx')
+  const closingCalls = reviewSrc.split('tryClosing()').length - 1
+  assert(closingCalls >= 2, 'Review.tsx обязан звать tryClosing() минимум в двух местах - обе ветки выхода (пустая очередь и крестик)')
+  assert(reviewSrc.includes('лёгкое на прощание'), 'Review.tsx обязан показывать подпись «лёгкое на прощание» у закрывающего показа B7')
+  assert(reviewSrc.includes('из ${goal}'), 'Review.tsx обязан считать счётчик дня по шаблону «N из ${goal}»')
+
+  const summarySrc = screenSource('Summary.tsx')
+  assert(summarySrc.includes('goalReached'), 'Summary.tsx обязан решать по r.goalReached, показывать ли «заход закрыт»')
+  assert(summarySrc.includes('Ещё заход'), 'Summary.tsx обязан предлагать кнопку «Ещё заход» при достигнутой цели')
+  assert(summarySrc.includes('До цели ещё'), 'Summary.tsx обязан показывать «До цели ещё K», когда цель не достигнута, а очередь не пуста')
+
+  const homeSrc = screenSource('Home.tsx')
+  assert(homeSrc.includes('speedStats('), 'Home.tsx обязан звать speedStats (lib/metrics.ts) для цены захода в минутах')
+  assert(/RUN_MIN_REVIEWS[\s\S]{0,200}мин/.test(homeSrc), 'Home.tsx обязан показывать «мин» рядом с RUN_MIN_REVIEWS - цену захода')
+
+  group('WS5b: счётчик «N из goal» и закрывающий показ B7 в Review.tsx, «Ещё заход»/«До цели ещё» в Summary.tsx, цена захода в минутах на Home.tsx')
+}
+
 function main(): void {
   console.log('SRS wordstatus - единый источник правды о состоянии слова')
   agreementWithHomeChecks()
@@ -425,6 +451,7 @@ function main(): void {
   homeEmptySectionButtonChecks()
   noDaysBehindWordingChecks()
   reportKnowledgePredicateChecks()
+  sessionGoalScreenChecks()
   console.log(`\nВсе проверки статуса слова пройдены (${passed} групп).`)
 }
 
