@@ -59,6 +59,15 @@ export interface ProgressInput {
   fillerAvailable: boolean
   /** Все лишние новые слова, которые лестница ещё вправе ввести сверх плана (`bonusNew`). */
   bonusNew: readonly StudyItem[]
+  /**
+   * Цель захода (упражнений), WS5b: `RUN_MIN_REVIEWS` по умолчанию, из состояния сессии
+   * (`goal` в `store.ts`). Знаменатель полоски не может быть БОЛЬШЕ цели: заход из
+   * двадцати карточек в очереди не должен растягивать полоску на двадцать, если ученик
+   * закрывает день двенадцатью, `min(goal, estimateShowsLeft + shown)`. Если реальный
+   * остаток МЕНЬШЕ цели (короткий урок грамматики на пять карточек), цель ничего не
+   * подменяет: знаменатель остаётся точным, как и раньше.
+   */
+  goal: number
 }
 
 /**
@@ -191,6 +200,9 @@ export function lessonProgress(input: ProgressInput): number {
   /* Заполнитель — обычное упражнение; сколько их поднимется, заранее не известно (лестница
      берёт пачку `MAX_EARLY_FILLERS`, когда иначе показывать нечего), но не меньше одного. */
   if (input.fillerAvailable) total = Math.max(total, numerator + SHOWS_PER_REPEAT)
+
+  // WS5b: цель захода зажимает знаменатель сверху, не подменяя точную оценку снизу
+  total = Math.min(total, input.goal)
 
   return numerator / Math.max(total, numerator)
 }

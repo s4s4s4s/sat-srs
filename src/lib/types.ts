@@ -321,4 +321,9 @@ export interface SessionResult {
   totalRev: number  // всего оценок карт в состоянии Review
   durMs: number
   queueEmpty: boolean
+  /** WS5b: цель захода (goal в состоянии сессии, store.ts) достигнута к моменту финиша -
+   *  считает Review.tsx по дневному счётчику упражнений (reviewsByDay/practiceUnitsByDay
+   *  плюс эта сессия), не по одному lock r.reviews сессии. Summary.tsx решает по этому
+   *  полю, показывать ли «заход закрыт» и кнопку «ещё заход». */
+  goalReached: boolean
 }

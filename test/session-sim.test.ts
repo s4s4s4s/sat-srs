@@ -109,6 +109,9 @@ interface DayOpts {
   screenMs?: number
   /** слаги, на знакомстве которых ученик жмёт «Уже знаю это слово» (Rating.Easy) */
   knownWords?: Set<string>
+  /** WS5b: цель захода, зажимающая знаменатель полоски (ProgressInput.goal); по умолчанию
+   *  Infinity - прежнее поведение симуляции, не зависящее от цели */
+  goal?: number
 }
 
 /**
@@ -241,7 +244,11 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
         forced: forced(),
         drilled,
         fillerAvailable: c.hasFiller,
-        bonusNew: bonusItems
+        bonusNew: bonusItems,
+        // WS5b: по умолчанию симуляция проверяет полоску от точного объёма урока, не от
+        // цели захода - Infinity держит прежнее поведение; клетка на конечную цель ниже
+        // (goalProgressChecks) передаёт opts.goal явно
+        goal: opts.goal ?? Infinity
       }
       pctFloor = Math.max(pctFloor, lessonProgress(input))
       return {
@@ -2722,6 +2729,7 @@ function main(): void {
   passed++
 
   progressBarChecks()
+  goalProgressChecks()
 
   queueOrderChecks()
   warmupChecks()
@@ -2824,6 +2832,92 @@ function progressBarChecks(): void {
     'предпосылка призрачного шага: это знакомство урок выдать не может (нет разделителя A6)')
 
   console.log(`  ✓ полоска: доходит до 100% (${наборы.length} набора), кадр непоказанного знакомства достижим и числитель не двигает`)
+  passed++
+}
+
+/**
+ * WS5b: цель захода (`ProgressInput.goal`) зажимает знаменатель полоски сверху.
+ *
+ * Два свойства формулы `min(goal, estimateShowsLeft + shown)`, не покрытые остальными
+ * сценариями (там `goal: Infinity` - прежнее поведение):
+ *   1. реальный остаток БОЛЬШЕ цели - знаменатель зажат целью, а не точной оценкой;
+ *   2. реальный остаток МЕНЬШЕ цели - цель ничего не подменяет, знаменатель точен как раньше.
+ * Отдельно - храповик: при зажатой цели рост числителя по ходу урока не даёт полоске
+ * откатиться назад (`checkProgress` на прогоне с конечным `goal`, а не только с Infinity).
+ */
+function goalProgressChecks(): void {
+  const item = (word: string): StudyItem => {
+    const view = reviewCard(word)
+    return { view, skill: 'recall', fsrs: view.fsrs }
+  }
+  const baseInput = (queueLen: number, shown: number, goal: number): ProgressInput => ({
+    shown,
+    queue: Array.from({ length: queueLen }, (_, i) => item(`q${i}`)),
+    pending: [],
+    isIntro: () => false,
+    introsLeft: 0,
+    reintroLeft: 0,
+    introduced: new Set(),
+    forced: new Set(),
+    drilled: new Map(),
+    fillerAvailable: false,
+    bonusNew: [],
+    goal
+  })
+
+  // 1. Остаток БОЛЬШЕ цели: 8 карточек в очереди, 2 показа сделано - без цели знаменатель
+  //    был бы 10, с целью 5 - ровно 5, числитель 3 (сделано + текущий экран).
+  const clamped = lessonProgress(baseInput(8, 2, 5))
+  assert(Math.abs(clamped - 3 / 5) < 1e-9,
+    `[цель/зажим] ожидалось 3/5=0.6 при goal=5 и точном остатке 10, получено ${clamped}`)
+
+  // 2. Остаток МЕНЬШЕ цели: тот же урок, goal=20 - цель не должна подменять точную оценку.
+  const unclamped = lessonProgress(baseInput(8, 2, 20))
+  const noGoal = lessonProgress(baseInput(8, 2, Infinity))
+  assert(Math.abs(unclamped - noGoal) < 1e-9,
+    `[цель/не подменяет] goal=20 при точном остатке 10 изменил долю: ${unclamped} vs ${noGoal}`)
+
+  // 3. Храповик под зажатой целью: по ходу урока очередь укорачивается на одну карточку за
+  //    показ (точный остаток не меняется, 10 весь урок), goal=5 держит знаменатель на месте,
+  //    а числитель растёт - доля обязана идти только вверх и после достижения 100% там и
+  //    оставаться, хотя карточек в колоде вдвое больше цели.
+  let floor = 0
+  for (let shown = 0; shown <= 8; shown++) {
+    const pct = lessonProgress(baseInput(8 - shown, shown, 5))
+    assert(pct + 1e-9 >= floor,
+      `[цель/храповик] доля откатилась на показе ${shown}: было ${floor}, стало ${pct}`)
+    floor = pct
+  }
+  assert(Math.abs(floor - 1) < 1e-9, `[цель/храповик] урок вдвое длиннее цели не дошёл до 100%: ${floor}`)
+
+  // 4. Тот же клинч на боевой симуляции: колода с доборами и лишним новым словом (та же,
+  //    что «повторы и новые» в progressBarChecks) под целью, которая заведомо меньше
+  //    точного объёма урока - внешний храповик barNow не должен позволить полоске упасть.
+  const deck = [reviewCard('gq1'), reviewCard('gq2'), reviewCard('gq3'), reviewCard('gq4'),
+    reviewCard('gq7'), reviewCard('gq8'), reviewCard('gq9'), reviewCard('gq10'),
+    reviewCard('gq13'), reviewCard('gq14'),
+    newCard('gq5'), newCard('gq6'), newCard('gq11'), newCard('gq12')]
+  const { bars } = runDay(deck, { budget: 2, introLimit: 2, dayNew: 2, goal: 6 })
+  /* Не переиспользуем checkProgress целиком: его правило «100% только на последнем кадре»
+     писано под безграничную (Infinity) оценку и здесь неверно намеренно - цель короче
+     урока обязана закрыть полоску РАНЬШЕ конца (это и есть «заход закрыт», см. Summary.tsx),
+     а не соврать о недоделанной работе. Годятся только монотонность и диапазон. */
+  const clampedBars = bars[0]
+  for (let i = 1; i < clampedBars.length; i++) {
+    assert(clampedBars[i].pct >= clampedBars[i - 1].pct - 1e-9,
+      `[цель/боевая-симуляция] полоска пошла назад на кадре ${i + 1}: ` +
+      `${(clampedBars[i - 1].pct * 100).toFixed(1)}% -> ${(clampedBars[i].pct * 100).toFixed(1)}%`)
+    assert(clampedBars[i].pct > 0 && clampedBars[i].pct <= 1 + 1e-9,
+      `[цель/боевая-симуляция] полоска вне диапазона на кадре ${i + 1}: ${(clampedBars[i].pct * 100).toFixed(1)}%`)
+  }
+  const last = clampedBars[clampedBars.length - 1]
+  assert(Math.abs(last.pct - 1) < 1e-9,
+    `[цель/боевая-симуляция] урок длиннее цели (goal=6) не дошёл до 100%: ${(last.pct * 100).toFixed(1)}%`)
+  const reachedAt = clampedBars.findIndex(b => b.pct >= 1 - 1e-9)
+  assert(reachedAt >= 0 && reachedAt < clampedBars.length - 1,
+    '[цель/боевая-симуляция] цель короче урока обязана закрыть полоску раньше последнего кадра')
+
+  console.log('  ✓ цель захода: знаменатель зажат сверху, не подменяет точный остаток снизу, храповик держит')
   passed++
 }
 

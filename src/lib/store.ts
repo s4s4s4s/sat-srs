@@ -11,7 +11,8 @@ import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay, startOfStudyDay, calendarKey, addDaysKey } from './daytime'
 import {
   newId, matureRetention, sessionAccuracy, cardTimeCap, READ_CAP_MINUTES,
-  readingSrc, isMarked, markCount, readingPassed, deckHasWord, normWord, MARK_SENTENCE_MAX
+  readingSrc, isMarked, markCount, readingPassed, deckHasWord, normWord, MARK_SENTENCE_MAX,
+  RUN_MIN_REVIEWS
 } from './journal'
 import type { CardRec, CardView, Format, JournalRec, QuestionRec, QuestionView, ReadingRec, ReadingView, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS } from './types'
@@ -32,6 +33,10 @@ interface AppState {
      носу. Оценки такого урока пишутся как обычные повторения: это занятие, а не
      тренажёр. */
   sessionOverNorm: boolean
+  /** Цель текущего захода в упражнениях (WS5b), по умолчанию RUN_MIN_REVIEWS. Задаётся
+   *  необязательным аргументом startLesson; Review.tsx сверяет с ней дневной счётчик
+   *  упражнений, а progress.ts зажимает знаменатель полоски. */
+  sessionGoal: number
   settings: Settings
   cards: CardRec[]
   /* Тексты для чтения — отдельный список, а не подмножество cards: у текста нет FSRS-графика
@@ -62,6 +67,7 @@ let state: AppState = {
   sessionSection: 'rw',
   sessionReviewOnly: false,
   sessionOverNorm: false,
+  sessionGoal: RUN_MIN_REVIEWS,
   settings: loadSettings(),
   cards: [],
   readings: [],
@@ -156,10 +162,11 @@ export function setScreen(s: Screen) {
  * reviewOnly — только повторения, без ввода новых слов;
  * overNorm — урок сверх дневного оптимума: квота новых идёт до максимума дня.
  */
-export function startLesson(section: Section, reviewOnly = false, overNorm = false) {
+export function startLesson(section: Section, reviewOnly = false, overNorm = false, goal = RUN_MIN_REVIEWS) {
   state.sessionSection = section
   state.sessionReviewOnly = reviewOnly
   state.sessionOverNorm = overNorm
+  state.sessionGoal = goal
   state.screen = 'review'
   emit()
 }

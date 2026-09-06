@@ -470,6 +470,13 @@ body::before {
 }
 .rev-timer.done { color: var(--green-text); }
 
+/* B7: подпись закрывающего показа после «Заново» - последний экран перед выходом, а не
+   начало нового разбора */
+.rev-closing-caption {
+  font-size: 13px; font-weight: 700; color: var(--text2); text-align: center;
+  margin: -10px 0 8px;
+}
+
 /* верхняя треть, не центр: пузырь не прыгает при ревиле, длинный ответ скроллится */
 .rev-body {
   flex: 1; display: flex; flex-direction: column; justify-content: flex-start;

@@ -7,16 +7,17 @@ import {
   pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, typedTwin, suggestedGrade, skeletonHint, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP, leechReturned,
   blankPhrase, blankSentence, markGlosses,
   type TypeVerdict,
-  newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
+  newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue,
+  closingShow
 } from '../lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, objectiveOutcome, REINTRO_PER_LESSON, type OrderCtx } from '../lib/session'
 import { lessonProgress, DRILL_PER_SESSION } from '../lib/progress'
 import Tex from '../components/Tex'
 import Markable from '../components/Markable'
 import { markedLemmas, type Segment } from '../lib/reading'
-import { minutesToday, MIN_MINUTES, cardTimeCap, forcedTodaySlugs, cardSrc, liveMarkedLemmas } from '../lib/journal'
+import { minutesToday, cardTimeCap, forcedTodaySlugs, cardSrc, liveMarkedLemmas, dayUnitsByDay } from '../lib/journal'
 import { NEW_PER_DAY, NEW_PER_LESSON } from '../lib/norms'
-import { speedStats } from '../lib/metrics'
+import { speedStats, practiceUnitRatio } from '../lib/metrics'
 import { dayKey } from '../lib/daytime'
 import type { Format, SessionResult, StudyItem } from '../lib/types'
 import { Close, Sprout, Timer, Speaker, Flame } from '../components/Icon'
@@ -332,9 +333,20 @@ export default function Review() {
   const answerFrom = useRef(Date.now())
   // зачётные секунды: тот же кап на карточку, что и в журнале — таймер согласован с минутами дня
   const creditedSec = useRef(0)
-  // минуты, уже сделанные сегодня ДО этой сессии — таймер минимума общедневной, не сессионный
+  // минуты, уже сделанные сегодня ДО этой сессии - таймер минимума общедневной, не сессионный
   const baseSec = useMemo(() => Math.floor(minutesToday(currentJournal()) * 60), [])
-  const res = useRef<SessionResult>({ day: dayKey(), reviews: 0, newSeen: 0, again: 0, passRev: 0, totalRev: 0, durMs: 0, queueEmpty: false })
+  /* WS5b: упражнений дня ДО этой сессии (оценки карточек + практика в единицах, journal.ts) -
+     та же основа, что держит серию (RUN_MIN_REVIEWS/dayUnitsByDay). Счётчик на экране растёт
+     этим числом плюс res.current.reviews текущей сессии - тот же принцип, что у baseSec/creditedSec
+     двумя строками выше, только не про минуты, а про упражнения. */
+  const baseUnits = useMemo(() => dayUnitsByDay(currentJournal(), practiceUnitRatio(currentJournal())).get(dayKey()) ?? 0, [])
+  const goal = app.sessionGoal
+  const res = useRef<SessionResult>({ day: dayKey(), reviews: 0, newSeen: 0, again: 0, passRev: 0, totalRev: 0, durMs: 0, queueEmpty: false, goalReached: false })
+  // B7: последняя выставленная оценка сессии - решает, положен ли закрывающий показ на выходе
+  const lastGrade = useRef<Grade | null>(null)
+  // B7: строго один закрывающий показ за сессию (флаг), closingCard - что сейчас на экране он и есть
+  const closingUsed = useRef(false)
+  const closingCard = useRef(false)
   const shownAt = useRef(Date.now())
   const busy = useRef(false)
   const finished = useRef(false)
@@ -415,7 +427,8 @@ export default function Review() {
       forced: forcedTodaySlugs(currentJournal(), dayKey()),
       drilled: drilled.current,
       fillerAvailable: ctx.hasFiller,
-      bonusNew: bonusNew(queue, MAX_INTRO_BONUS)
+      bonusNew: bonusNew(queue, MAX_INTRO_BONUS),
+      goal
     })
     pctFloor.current = Math.max(pctFloor.current, raw)
     return pctFloor.current
@@ -456,7 +469,31 @@ export default function Review() {
     if (queueEmpty) play('complete') // выход по крестику — не достижение, молчим
     res.current.durMs = activeSec * 1000
     res.current.queueEmpty = queueEmpty
+    // WS5b: цель захода - по дневному счётчику упражнений (до сессии плюс эта сессия),
+    // не по одной этой сессии - заход, начатый после утренней практики, обязан засчитать
+    // и её (тот же счётчик, что показывает счётчик «N из goal» на экране)
+    res.current.goalReached = baseUnits + res.current.reviews >= goal
     await finishSession(res.current)
+  }
+
+  /**
+   * B7: последний шанс не закончить урок на провале. Вызывается из ОБЕИХ веток выхода -
+   * пустая очередь (proceed) и крестик (rev-close) - и пытается вставить один закрывающий
+   * показ вместо немедленного финиша. Возвращает true, если показ вставлен (вызывающий обязан
+   * прервать свою ветку выхода без финиша - оценка закрывающего показа сама доведёт урок до
+   * конца обычным путём proceed()); false, если условий нет (последняя оценка не Again, лимит
+   * уже использован, кандидата не нашлось), и вызывающий обязан финишировать сам.
+   */
+  function tryClosing(): boolean {
+    if (closingUsed.current || lastGrade.current !== Rating.Again) return false
+    const pick = closingShow(deck, new Date(), new Set(shownTimes.current.keys()))
+    if (!pick) return false
+    closingUsed.current = true
+    closingCard.current = true
+    setStep(s => s + 1)
+    setShown(n => n + 1)
+    setQueue([pick])
+    return true
   }
 
   /** Текущий контекст выбора следующего экрана (A2/A3/A4/A4-bis/A6) — снимок refs в момент вызова. */
@@ -590,7 +627,10 @@ export default function Review() {
     // чтобы вместо простоя или потери введённого слова дать показ на тридцатой секунде
     if (pick.idx < 0) pick = pickNext(rest, orderCtx(rest), { floor: true })
     if (pick.idx < 0) {
-      // добирать нечего и всё, что осталось, нарушило бы инвариант — урок закончен (B3)
+      // B7: последняя оценка сессии - Again, закрывающий показ ещё не выдан и есть кандидат -
+      // вставляем его вместо немедленного финиша (см. tryClosing)
+      if (tryClosing()) return
+      // добирать нечего и всё, что осталось, нарушило бы инвариант - урок закончен (B3)
       setQueue([])
       // point 5: finish дожидается finishSession — строка session пишется ПОСЛЕ того,
       // как await rateItem последней карточки уже занёс её review-строку (иначе итоги занижены)
@@ -805,6 +845,10 @@ export default function Review() {
 
       const r = res.current
       r.reviews++
+      // B7: строка session-журнала считается «оценённой» только вживую (rating есть, isGraded в
+      // journal.ts) - интро сюда не доходит (ранний return выше), поэтому lastGrade фиксируется
+      // ровно в момент реальной оценки, той же, что уходит в rateItem ниже.
+      lastGrade.current = g
       if (prevState === State.New) r.newSeen++
       // «Заново» на любой стадии → следующий показ этого слова будет окном-переznakomством «Подзабылось»;
       // вспомнил (не «Заново») → снимаем флаг подзабывания
@@ -829,8 +873,10 @@ export default function Review() {
 
       // причина ошибки — только для зрелых (Review) карточек: провал на learning = «ещё не выучил».
       // C3: честное «не помню» ход не тормозит — разбор причины не спрашиваем (незнание слова само по себе причина).
+      // B7: на закрывающем показе лист причины не открывается - это последний экран перед выходом,
+      // а не начало нового разбора, за которым должно следовать возвращение карточки.
       const wrong = verdict === 'wrong' || (verdict === null && g === Rating.Again && task.format !== 'intro')
-      if (wrong && prevState === State.Review && !gaveUp) {
+      if (wrong && prevState === State.Review && !gaveUp && !closingCard.current) {
         pendingAdvance.current = { next: { ...task.item, fsrs: rated.card }, atFront: false }
         setCauseFor(rated.lineId)
       } else if (verdict === 'typo' || verdict === 'twin') {
@@ -1044,20 +1090,27 @@ export default function Review() {
     : canTypeAnswer ? 'Вспомните слово и впишите — или посмотрите ответ'
     : 'Вспомните слово — потом проверьте себя'
 
-  // зачётное время: база дня + закрытые карточки (с капом) + текущая карточка (с капом)
+  // зачётное время: база дня + закрытые карточки (с капом) + текущая карточка (с капом).
+  // Зачёт секунд (baseSec/creditedSec/cardTimeCap) не связан со счётчиком цели ниже - это
+  // отдельная величина, оставшаяся от прежнего таймера и всё ещё двигающая creditedSec
+  // в rateItem (см. ниже по файлу).
   const currentCardSec = Math.min(Date.now() - shownAt.current, cardTimeCap(card.kind)) / 1000
-  const minLeft = Math.max(0, Math.round(MIN_MINUTES * 60 - baseSec - creditedSec.current - currentCardSec))
-  const mm = String(Math.floor(minLeft / 60)).padStart(2, '0')
-  const ss = String(minLeft % 60).padStart(2, '0')
+  /* WS5b: счётчик вверх «N из goal» вместо обратного отсчёта минут. N - упражнения дня ДО
+     сессии (baseUnits) плюс оценённое в этой сессии (res.current.reviews); тот же счётчик,
+     что кладёт goalReached в finish(). Чек-марка при достижении цели, дальше число не растёт
+     визуально важным способом - оно просто продолжает расти, доделывать нечего. */
+  const doneToday = baseUnits + res.current.reviews
+  const goalDone = doneToday >= goal
 
   return (
     <div className={`screen s-review rev-wash wash-${section}`}>
       <div className="rev-top" style={{ position: 'relative' }}>
-        <button className="rev-close" onClick={() => { if (!busy.current) void finish(false) }} aria-label="Завершить"><Close /></button>
+        <button className="rev-close" onClick={() => { if (busy.current) return; if (tryClosing()) return; void finish(false) }} aria-label="Завершить"><Close /></button>
         <div className="progress"><div style={{ width: `${Math.round(progressPct * 1000) / 10}%` }} /></div>
         <div className={`combo${combo >= 3 ? ' on' : ''}`}><Flame size={13} /> ×{combo}</div>
-        <div className={`rev-timer${minLeft === 0 ? ' done' : ''}`}><Timer size={15} />{minLeft === 0 ? '✓' : `${mm}:${ss}`}</div>
+        <div className={`rev-timer${goalDone ? ' done' : ''}`}><Timer size={15} />{goalDone ? '✓' : `${doneToday} из ${goal}`}</div>
       </div>
+      {closingCard.current ? <div className="rev-closing-caption">лёгкое на прощание</div> : null}
 
       <div className="rev-body" key={step}>
         {isIntro ? (
