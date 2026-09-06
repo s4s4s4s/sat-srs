@@ -1917,6 +1917,70 @@ function leechCapChecks(): void {
     `следующий урок подхватывает отложенных пиявок целиком: ожидали ${отложенные.length}, получили ${пиявокВОчереди2.length}`)
 
   console.log(`  ✓ C13: buildQueue берёт не больше ${MAX_LEECH_PER_LESSON} вернувшихся пиявок за урок, остальные ждут своей очереди`)
+ * F82: окна «Подзабылось» получают свой бюджет (REINTRO_PER_LESSON), отдельный от бюджета
+ * знакомств новых слов.
+ *
+ * Регресс на живом журнале 04.09.2026: очередь ставит весь пул Relearning впереди новых
+ * (buildQueue), и до правки оба вида окон-знакомств делили один счётчик - провалы съедали его
+ * первыми, знакомство новых слов не происходило вовсе (девять окон 'intro' за день, все по
+ * старым словам, ноль новых). Колода ниже воспроизводит именно эту форму: провалов больше,
+ * чем REINTRO_PER_LESSON, и они стоят в очереди раньше новых слов.
+ */
+function reintroBudgetChecks(): void {
+  const failWords = new Set<string>()
+  // уже провалившиеся до сессии (state Relearning) - именно этот пул очередь ставит
+  // впереди новых (buildQueue), и именно на нём воспроизводился дефект 04.09.2026
+  const провалы: CardView[] = []
+  for (let i = 0; i < 6; i++) {
+    const v = relearnCard(`провал${i}`)
+    failWords.add(v.word)
+    провалы.push(v)
+  }
+  const новые = Array.from({ length: 3 }, (_, i) => newCard(`новое${i}`))
+  const deck = [...провалы, ...новые]
+
+  const run = runDay(deck, { budget: 3, introLimit: 3, dayNew: 3, failWords, lessons: 3 })
+
+  for (const [li, shows] of run.lessons.entries()) {
+    const tag = `урок ${li + 1}`
+    // 1. Окно «Подзабылось» - показ format 'intro' по НЕновому слову (state на момент показа
+    //    не New, что и хранит Show.wasNew) - не может быть выдано сверх REINTRO_PER_LESSON.
+    const reintroShows = shows.filter(s => s.format === 'intro' && !s.wasNew).length
+    assert(reintroShows <= REINTRO_PER_LESSON,
+      `[${tag}] бюджет окон «Подзабылось» нарушен: ${reintroShows} > ${REINTRO_PER_LESSON}.\n  ${fmtSeq(shows)}`)
+
+    // 3. Провал сверх бюджета не пропадает: первый показ СЛОВА ПОСЛЕ того, как оно провалилось
+    //    (Rating.Again), либо окно (в пределах бюджета), либо обычный формат - но показ есть.
+    //    Считаем это только там, где провалов в уроке действительно больше бюджета: иначе
+    //    проверка ничего не различает (первый показ карточки Review и так никогда не 'intro').
+    const failedKeys = new Set<string>()
+    const followups: string[] = []
+    for (const s of shows) {
+      if (failedKeys.has(s.key)) {
+        followups.push(s.format)
+        failedKeys.delete(s.key)
+      }
+      if (s.graded === Rating.Again) failedKeys.add(s.key)
+    }
+    const windowed = followups.filter(f => f === 'intro').length
+    const plain = followups.filter(f => f !== 'intro').length
+    assert(windowed <= REINTRO_PER_LESSON,
+      `[${tag}] повторных окон «Подзабылось» больше бюджета: ${windowed} > ${REINTRO_PER_LESSON}.\n  ${fmtSeq(shows)}`)
+    if (followups.length > REINTRO_PER_LESSON) {
+      assert(plain >= 1,
+        `[${tag}] провалы сверх бюджета окон обязаны отрабатываться обычным показом: ` +
+        `${followups.length} провалившихся слов, окон только ${windowed}, показов не-окном ${plain}.\n  ${fmtSeq(shows)}`)
+    }
+  }
+
+  // 2. Знакомства новых слов всё же происходят в первом же уроке: до правки провалы съедали
+  //    общий лимит целиком, и freshIntros первого урока был бы 0.
+  const первыйУрок = run.lessons[0]
+  const freshIntros = первыйУрок.filter(s => s.format === 'intro' && s.wasNew).length
+  assert(freshIntros >= 1,
+    `дефект F82 воспроизведён: знакомств новых слов за первый урок ${freshIntros} (должно быть ≥1).\n  ${fmtSeq(первыйУрок)}`)
+
+  console.log('  ✓ F82: окна «Подзабылось» и знакомства новых слов делят разные бюджеты')
   passed++
 }
 
@@ -2193,6 +2257,7 @@ function main(): void {
   leechQuarantineChecks()
   leechReturnedChecks()
   leechCapChecks()
+  reintroBudgetChecks()
 
   console.log(`\nВсе проверки пройдены (${passed} групп).`)
 }
