@@ -695,8 +695,60 @@ export function nextNewItems(cards: CardView[], exclude: Set<string>, limit = 1,
 }
 
 /**
- * Очередь сессии по приоритету B2: Learning/Relearning, созревшие Review, обязательная
- * отработка введённого сегодня (drills по `forced`), новые.
+ * Разгон урока (B2-bis): до WARMUP_SHOWS показов из уже освоенного, прежде чем урок
+ * упрётся в learning или новое слово.
+ *
+ * Замер журнала: 41-44% Again приходится на первые три оценки сессии против 25% по
+ * журналу в целом, и 57% брошенных сессий обрываются именно на Again. Причина - состав
+ * головы очереди: `buildQueue` кладёт первым learning по due ASC, а это, как правило,
+ * ровно то слово, что провалено в прошлый раз (иначе оно не сидело бы в Learning с
+ * ближайшим сроком). Урок начинается с проверки того, что уже не помнится - худший
+ * момент для первого «не помню» в сессии.
+ *
+ * Кандидат разгона: recall-единица в State.Review с максимальной stability (самое
+ * прочное слово колоды на данный момент) - досрочный показ такой карточки FSRS
+ * обрабатывает штатно, это тот же случай, что `earlyFillers` (формулы FSRS не меняются,
+ * меняется только порядок показа). Спрошенное сегодня слово в разгон не берём
+ * (`dayKey(last_review) !== dayKey(now)`, тем же правилом, что у earlyFillers): второй
+ * урок дня не должен открываться тем же ответом, что закрыл первый.
+ */
+export const WARMUP_SHOWS = 2
+
+export function warmupShows(items: StudyItem[], now: Date, exclude: ReadonlySet<string> = new Set()): StudyItem[] {
+  const сегодня = dayKey(now)
+  return items
+    .filter(i => i.skill === 'recall' && i.fsrs.state === State.Review && !exclude.has(itemKey(i)) &&
+      (!i.fsrs.last_review || dayKey(i.fsrs.last_review) !== сегодня))
+    // тай-брейк при равной stability - по due ASC (самое просроченное первым), тем же
+    // принципом, что у overdue ниже, а не произвольным порядком колоды.
+    .sort((a, b) => b.fsrs.stability - a.fsrs.stability || a.fsrs.due.getTime() - b.fsrs.due.getTime())
+    .slice(0, WARMUP_SHOWS)
+}
+
+/**
+ * Закрывающий показ (B7): урок не должен заканчиваться на провале. Экран урока
+ * (Review.tsx, отдельным потоком от этой задачи) вызывает функцию, когда последняя
+ * оценённая строка сессии - Again, и, получив не null, выдаёт ровно один дополнительный
+ * показ перед итогами: тот же принцип пика и конца, что у разгона, только на выходе.
+ *
+ * Тот же отбор, что у `warmupShows` (Review, максимум stability, не спрошено сегодня),
+ * плюс исключение уже показанного В ЭТОЙ СЕССИИ (`exclude` по itemKey) - закрывающий
+ * показ не повторяет то, что ученик только что видел. Берёт колоду карточек, а не
+ * готовые единицы очереди: к концу урока исходная очередь уже исчерпана, а вызывающему
+ * естественнее иметь под рукой саму колоду.
+ */
+export const CLOSING_SHOWS = 1
+
+export function closingShow(cards: CardView[], now: Date, exclude: ReadonlySet<string> = new Set()): StudyItem | null {
+  const items = expandItems(cards, now)
+  const [first] = warmupShows(items, now, exclude).slice(0, CLOSING_SHOWS)
+  return first ?? null
+}
+
+/**
+ * Очередь сессии по приоритету B2-bis/B2: разгон (до WARMUP_SHOWS показов из освоенного,
+ * см. `warmupShows`), Learning/Relearning, созревшие Review, обязательная отработка
+ * введённого сегодня (drills по `forced`), новые.
  * Review и New перемешаны interleaving-ом, learning стоит впереди по due, а drills встают
  * перед первым новым словом очереди - отработка сегодняшнего идёт раньше знакомств.
  *
@@ -742,6 +794,10 @@ export function buildQueue(
   const takenKeys = new Set(lapsedTaken.map(itemKey))
   const learning = learningDue.filter(i => i.fsrs.state !== State.Relearning || takenKeys.has(itemKey(i)))
 
+  /* Потолок повторов урока: место, уже занятое Relearning, просрочке не достаётся (F14).
+     Оба потолка общие для просрочки и провалов, иначе единая валюта снова распадётся на две. */
+  const reviewCap = Math.max(0, Math.min(MAX_REVIEW_PER_LESSON, dayLeft) - lapsedTaken.length)
+
   /* Потолок повторов за урок. Его не было вовсе: очередь брала ВСЁ, что
      просрочено, без ограничения.
 
@@ -783,7 +839,6 @@ export function buildQueue(
      и защиты от лавины просрочки на уровне дня не было вовсе.
      Оба потолка общие для просрочки и провалов: место, уже занятое Relearning, просрочке
      не достаётся, иначе единая валюта снова распадётся на две (F14). */
-  const reviewCap = Math.max(0, Math.min(MAX_REVIEW_PER_LESSON, dayLeft) - lapsedTaken.length)
   /* Переполнение (WS9): overdue длиннее того, что дневной потолок ещё пропускает, и притом
      идёт последняя неделя перед попыткой (`phase === 'final'`) - именно тогда отсечённый
      остаток рискует не вернуться до экзамена вовсе, и порядок среза перестаёт быть
@@ -794,7 +849,26 @@ export function buildQueue(
   const overdueForCap = overflow
     ? [...overdue].sort((a, b) => overdueCorpusWeight(b, now, corpusHits) - overdueCorpusWeight(a, now, corpusHits))
     : overdue
-  const review = shuffle(overdueForCap.slice(0, reviewCap))
+  const cut = overdueForCap.slice(0, reviewCap)
+
+  /* Разгон (WS5a, B2-bis) считается ВНУТРИ reviewCap, а не сверх него: иначе урочный и
+     дневной потолки переставали бы быть потолками. При этом состав среза разгон не меняет,
+     только порядок: пока есть просрочка, два самых прочных слова берутся из уже отобранного
+     `cut` и встают в голову очереди. Брать их из всей колоды нельзя: в финальном окне
+     (WS9) каждый слот среза отдан слову по корпусному весу, и разгон из недозревших
+     карточек вытеснял бы именно то, ради чего срез сортировался. Из карточек, которым
+     ещё не срок, разгон добирается только тогда, когда срез короче потолка: там слот
+     свободен, и досрочный показ прочного слова ничего не вытесняет. Пиявки сверх
+     MAX_LEECH_PER_LESSON (они в overdueSorted, но не в cut) в добор не попадают. */
+  const overdueKeys = new Set(overdueSorted.map(itemKey))
+  const fromCut = warmupShows(cut, now)
+  const freeSlots = Math.max(0, reviewCap - cut.length)
+  const extra = freeSlots > 0 && fromCut.length < WARMUP_SHOWS
+    ? warmupShows(items.filter(i => !overdueKeys.has(itemKey(i))), now).slice(0, Math.min(freeSlots, WARMUP_SHOWS - fromCut.length))
+    : []
+  const warmup = [...fromCut, ...extra]
+  const warmupKeys = new Set(warmup.map(itemKey))
+  const review = shuffle(cut.filter(i => !warmupKeys.has(itemKey(i))))
 
   // выбор новых: сначала error/grammar (закрывают доказанные пробелы), потом pt-разбор, потом
   // math, потом словарь; словарь идёт уровнями (Duolingo-путь): level ASC, внутри уровня —
@@ -813,7 +887,7 @@ export function buildQueue(
   // попадают в урок — даже если их due перенесён на завтра (см. point 1, держим в Learning).
   // Берём только recall-единицы в Learning/Relearning: New уже в пуле новых, Review-слова
   // (напр. «уже знаю это слово») отработки не требуют.
-  const already = new Set([...learning, ...review, ...newItems].map(itemKey))
+  const already = new Set([...warmup, ...learning, ...review, ...newItems].map(itemKey))
   const drills = forced?.size
     ? shuffle(items.filter(i =>
         i.skill === 'recall' && forced.has(i.view.slug) && isLearning(i.fsrs.state) && !already.has(itemKey(i))))
@@ -843,7 +917,8 @@ export function buildQueue(
     const firstNew = mixed.findIndex(i => i.fsrs.state === State.New)
     mixed.splice(firstNew < 0 ? mixed.length : firstNew, 0, ...drills)
   }
-  return [...learning, ...mixed]
+  // B2-bis: разгон стоит головой всей очереди, впереди даже learning - см. warmupShows.
+  return [...warmup, ...learning, ...mixed]
 }
 
 /**

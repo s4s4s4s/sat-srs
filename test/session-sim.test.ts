@@ -23,7 +23,8 @@ import {
   pickTask, meaningDistractors, REVIEW_CYCLE, ROTATE_FROM_REPS, NEW_STOP_DATE, kindRank, expandItems, freshItems, markGlosses,
   NEW_STOP_BY_SECTION, newIntroAllowed, nextAttempt, dueCap, phase, effectiveRetention, PRIMARY_DATE, EXAM_DATE,
   homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal, type Section,
-  MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS, leechReturned, MAX_LEECH_PER_LESSON
+  MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS, leechReturned, MAX_LEECH_PER_LESSON,
+  WARMUP_SHOWS, warmupShows, CLOSING_SHOWS, closingShow
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, INTRO_GAP_FLOOR_MS, REINTRO_PER_LESSON, type OrderCtx } from '../src/lib/session'
 import { screenSource } from './screen-source'
@@ -2151,6 +2152,139 @@ function queueOrderChecks(): void {
   passed++
 }
 
+/** Повтор с заданной stability - для проверки разгона/закрывающего показа по stability ASC/DESC. */
+function reviewCardWithStability(word: string, stability: number, dueOffsetMs = -3600_000): CardView {
+  const v = reviewCard(word, 1, dueOffsetMs)
+  v.fsrs = { ...v.fsrs, stability }
+  return v
+}
+
+/** Тот же повтор, но уже спрошенный сегодня (last_review в пределах учебного дня). */
+function reviewCardAskedToday(word: string, stability: number, dueOffsetMs = -3600_000): CardView {
+  const v = reviewCardWithStability(word, stability, dueOffsetMs)
+  v.fsrs = { ...v.fsrs, last_review: new Date(BASE - 3600_000) }
+  return v
+}
+
+/**
+ * B2-bis: разгон урока (warmupShows/buildQueue).
+ *
+ * Замер: 41-44% Again на первых трёх оценках сессии против 25% по журналу в целом, и 57%
+ * брошенных сессий обрываются на Again - урок начинался с самого слабого места (learning
+ * по due ASC). Разгон подставляет вперёд до двух самых прочных Review-слов колоды.
+ */
+function warmupChecks(): void {
+  const now = new Date(BASE)
+
+  // 5 learning + 10 review с разной stability, ни одно не спрошено сегодня: голова очереди -
+  // ровно две Review-единицы с максимальной stability, обе не спрошены сегодня.
+  const learning = Array.from({ length: 5 }, (_, i) => learningCard(`уч${i}`, BASE - i * 1000))
+  const review = Array.from({ length: 10 }, (_, i) => reviewCardWithStability(`пов${i}`, 10 - i, -(i + 1) * 3600_000))
+  const deck = [...learning, ...review]
+  const q = buildQueue(deck, 0, now)
+  const head = q.slice(0, WARMUP_SHOWS)
+  assert(head.length === WARMUP_SHOWS, `B2-bis: голова очереди обязана содержать ${WARMUP_SHOWS} единицы разгона, получили ${head.length}`)
+  assert(head.every(i => i.fsrs.state === State.Review && i.skill === 'recall'),
+    `B2-bis: голова очереди обязана состоять из recall-единиц Review, получили ${head.map(i => `${i.view.slug}:${i.skill}:${State[i.fsrs.state]}`).join(',')}`)
+  assert(head.every(i => !i.fsrs.last_review || dayKey(i.fsrs.last_review) !== dayKey(now)),
+    'B2-bis: голова разгона не должна включать карточку, спрошенную сегодня')
+  const headSlugs = head.map(i => i.view.slug).sort()
+  assert(JSON.stringify(headSlugs) === JSON.stringify(['пов0', 'пов1']),
+    `B2-bis: голова обязана быть двумя самыми прочными Review (пов0, пов1), получили ${headSlugs.join(',')}`)
+
+  // без Review в колоде голова пуста, порядок как раньше: первым идёт learning
+  const noReviewDeck = [...learning, newCard('new1'), newCard('new2')]
+  const q2 = buildQueue(noReviewDeck, 2, now)
+  assert(q2[0].fsrs.state === State.Learning,
+    `B2-bis: без Review-кандидатов голова пуста, первым обязан идти learning, получили ${q2[0] && State[q2[0].fsrs.state]}`)
+
+  // спрошенная сегодня карточка (даже с самой высокой stability) в разгон не попадает
+  const askedToday = reviewCardAskedToday('спрошено-сегодня', 999)
+  const notAsked = reviewCardWithStability('можно-в-разгон', 5)
+  const warmupCandidates = warmupShows(expandItems([askedToday, notAsked], now), now)
+  assert(!warmupCandidates.some(i => i.view.slug === askedToday.slug),
+    'B2-bis: карточка, спрошенная сегодня, не должна попадать в разгон, даже с максимальной stability')
+  assert(warmupCandidates.some(i => i.view.slug === notAsked.slug),
+    'B2-bis: карточка, не спрошенная сегодня, обязана остаться кандидатом в разгон')
+
+  // голова не больше 2 при любом размере колоды
+  for (const size of [0, 1, 2, 3, 30]) {
+    const bigDeck = Array.from({ length: size }, (_, i) => reviewCardWithStability(`любая${i}`, size - i))
+    const w = warmupShows(expandItems(bigDeck, now), now)
+    assert(w.length <= WARMUP_SHOWS, `B2-bis: голова разгона на колоде из ${size} карточек обязана быть не больше ${WARMUP_SHOWS}, получили ${w.length}`)
+  }
+
+  // разгон не увеличивает число повторов сверх MAX_REVIEW_PER_LESSON
+  const огромный = Array.from({ length: MAX_REVIEW_PER_LESSON + 40 }, (_, i) => reviewCardWithStability(`лимит${i}`, i, -(i + 1) * 3600_000))
+  const qЛимит = buildQueue(огромный, 0, now)
+  const повторовВсего = qЛимит.filter(i => i.fsrs.state === State.Review).length
+  assert(повторовВсего === MAX_REVIEW_PER_LESSON,
+    `B2-bis: разгон обязан считаться внутри MAX_REVIEW_PER_LESSON, получили ${повторовВсего} вместо ${MAX_REVIEW_PER_LESSON}`)
+  const headЛимит = qЛимит.slice(0, WARMUP_SHOWS).map(i => i.view.slug).sort()
+  assert(JSON.stringify(headЛимит) === JSON.stringify(['лимит98', 'лимит99']),
+    `B2-bis: даже на переполненной колоде голова обязана быть двумя самыми прочными единицами, получили ${headЛимит.join(',')}`)
+
+  // разгон не меняет состав среза: при просрочке длиннее остатка потолка два самых прочных
+  // берутся из самого среза, а недозревшая карточка с огромной stability слот не отнимает
+  {
+    const ОСТАТОК = 2
+    const тесно: CardView[] = [
+      reviewCardWithStability('просрочка-а', 1, -3 * 86400_000),
+      reviewCardWithStability('просрочка-б', 2, -2 * 86400_000),
+      reviewCardWithStability('просрочка-в', 3, -1 * 86400_000),
+      reviewCardWithStability('не-срок', 500, 5 * 86400_000),
+    ]
+    for (let i = 0; i < MAX_REVIEW_PER_DAY - ОСТАТОК; i++) тесно.push(doneTodayCard(`сделано${i}`))
+    const qТесно = buildQueue(тесно, 0, now).filter(i => i.fsrs.state === State.Review)
+    const slugs = qТесно.map(i => i.view.slug).sort()
+    assert(qТесно.length === ОСТАТОК, `B2-bis: срез при тесном потолке равен остатку (${ОСТАТОК}), получили ${qТесно.length}`)
+    assert(!slugs.includes('не-срок'), `B2-bis: недозревшая карточка не должна отнимать слот у просрочки, получили ${slugs.join(',')}`)
+    assert(JSON.stringify(slugs) === JSON.stringify(['просрочка-а', 'просрочка-б']),
+      `B2-bis: состав среза - две самые просроченные, разгон меняет только порядок, получили ${slugs.join(',')}`)
+  }
+  console.log('  ✓ разгон урока (B2-bis): голова очереди - до двух самых прочных Review, не спрошенных сегодня, в счёте урочного потолка')
+  passed++
+}
+
+/**
+ * B7: закрывающий показ.
+ *
+ * Урок не должен заканчиваться на провале (57% брошенных сессий обрываются на Again) -
+ * `closingShow` даёт одну дополнительную recall-единицу Review с максимальной stability,
+ * не показанную в этой сессии и не спрошенную сегодня.
+ */
+function closingShowChecks(): void {
+  const now = new Date(BASE)
+  const a = reviewCardWithStability('закрыть-а', 3)
+  const b = reviewCardWithStability('закрыть-б', 7)
+  const c = reviewCardWithStability('закрыть-в', 5)
+  const deck = [a, b, c]
+
+  // все Review в exclude - брать нечего
+  const excludeAll = new Set([a, b, c].map(v => `${v.path}#recall`))
+  assert(closingShow(deck, now, excludeAll) === null,
+    'B7: все Review-кандидаты в exclude - closingShow обязан вернуть null')
+
+  // b исключена (уже показана в сессии) - остаётся max stability среди оставшихся (в)
+  const excludeB = new Set([`${b.path}#recall`])
+  const picked = closingShow(deck, now, excludeB)
+  assert(picked !== null, 'B7: closingShow не должен вернуть null, если есть непоказанный кандидат')
+  assert(picked!.view.slug === 'закрыть-в',
+    `B7: обязана вернуться самая прочная из непоказанных (закрыть-в), получили ${picked!.view.slug}`)
+  assert(picked!.skill === 'recall' && picked!.fsrs.state === State.Review,
+    'B7: closingShow обязан вернуть recall-единицу в состоянии Review')
+
+  // спрошенная сегодня в закрывающий показ не попадает
+  const askedToday = reviewCardAskedToday('спрошено-сегодня-b7', 100)
+  const notAsked = reviewCardWithStability('можно-закрыть', 1)
+  const pickedAsked = closingShow([askedToday, notAsked], now, new Set())
+  assert(pickedAsked !== null && pickedAsked.view.slug === 'можно-закрыть',
+    `B7: спрошенная сегодня карточка не должна выбираться закрывающим показом, получили ${pickedAsked && pickedAsked.view.slug}`)
+
+  console.log('  ✓ закрывающий показ (B7): null, если все Review в exclude, иначе самая прочная непоказанная не спрошенная сегодня')
+  passed++
+}
+
 /**
  * S10: карточка, которую боевой `advance` в очередь НЕ возвращает, не возвращается и в моке.
  *
@@ -2362,6 +2496,8 @@ function main(): void {
   progressBarChecks()
 
   queueOrderChecks()
+  warmupChecks()
+  closingShowChecks()
   ladderOrderChecks()
   requeueDropChecks()
   introFloorChecks()
@@ -2407,9 +2543,17 @@ function progressBarChecks(): void {
   const наборы: { tag: string; deck: CardView[]; opts: DayOpts }[] = [
     { tag: 'только повторы', opts: { budget: 0, introLimit: 3 },
       deck: [reviewCard('p1'), reviewCard('p2'), reviewCard('p3'), reviewCard('p4'), reviewCard('p5')] },
+    /* B2-bis: разгон (warmupShows) забирает две самые прочные Review-единицы колоды
+       под голову очереди - это отъедает две единицы у обычного интерливинга. Пул из
+       восьми повторов давал natural learning-requeue слишком короткий хвост для
+       второй отработки последнего введённого слова (q12), и урок обрывался на 92,9%,
+       не успев дать этот показ. Добавлены ещё два повтора (q13, q14): в реальной
+       колоде их всегда с запасом, а сама проверка - про то, что полоска доходит до
+       100%, а не про точный размер пула. */
     { tag: 'повторы и новые', opts: { budget: 2, introLimit: 2, dayNew: 2 },
       deck: [reviewCard('q1'), reviewCard('q2'), reviewCard('q3'), reviewCard('q4'),
              reviewCard('q7'), reviewCard('q8'), reviewCard('q9'), reviewCard('q10'),
+             reviewCard('q13'), reviewCard('q14'),
              newCard('q5'), newCard('q6'), newCard('q11'), newCard('q12')] },
     { tag: 'один повтор', opts: { budget: 0, introLimit: 0 }, deck: [reviewCard('s1')] }
   ]
