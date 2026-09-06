@@ -1,6 +1,6 @@
 import { fsrs, generatorParameters, Rating, State, type Grade, type Card as FsrsCard, type FSRS } from 'ts-fsrs'
 import type { CardView, Format, StudyItem, JournalLine } from './types'
-import { endOfStudyDay, dayKey, addDaysKey } from './daytime'
+import { endOfStudyDay, dayKey, addDaysKey, calendarKey } from './daytime'
 import { splitSentences, segmentText, type Segment } from './reading'
 import { TYPO_MIN_LEN, TYPO_MAX_EDITS, newIntroducedOn, cardTimeCap, normWord } from './journal'
 
@@ -52,6 +52,27 @@ const ATTEMPTS: readonly Date[] = [PRIMARY_DATE, EXAM_DATE]
  */
 export function nextAttempt(now: Date = new Date()): Date {
   return ATTEMPTS.find(d => now.getTime() < d.getTime()) ?? EXAM_DATE
+}
+
+/**
+ * Последняя УЖЕ прошедшая попытка (H3), `null` до самой первой.
+ *
+ * Симметрична `nextAttempt`, но смотрит в другую сторону: там - ближайшая впереди,
+ * здесь - последняя позади. Нужна там, где решение зависит не от того, сколько
+ * времени осталось, а от того, была ли уже точка отсчёта - см. ветку пиявок в
+ * `pickTask`, где "после любой попытки" нельзя проверить через `phase`, потому
+ * что `phase` считается от БУДУЩЕЙ попытки и не различает "до первой" и "между
+ * первой и второй".
+ *
+ * Граница та же, что у `phase`/`nextAttempt`: попытка считается прошедшей с начала
+ * её дня (`now.getTime() >= attempt.getTime()`).
+ */
+export function lastAttempt(now: Date = new Date()): Date | null {
+  let last: Date | null = null
+  for (const d of ATTEMPTS) {
+    if (d.getTime() <= now.getTime()) last = d
+  }
+  return last
 }
 
 /* Запас между потолком сроков и попыткой: последний повтор не должен приходиться
@@ -1411,20 +1432,35 @@ export function pickTask(item: StudyItem, deck: CardView[], introduced?: Set<str
      экзамену, где подсказки нет. */
   if (item.fsrs.state !== State.Review && item.fsrs.reps < ROTATE_FROM_REPS) return { format, cue: 'sentence' }
 
-  /* WS3 (05.09.2026): пиявка, вернувшаяся из карантина без переработки, спрашивается
-     не общей ротацией REVIEW_CYCLE, а экзаменационным путём: первый показ после
-     возврата, «слово вернулось из карантина», рисует Review.tsx с корнем и разводкой
-     по confusables (reveal/sentence), а дальше, до ближайшей попытки, только
-     узнавание в предложении (mc/sentence, откат через degrade при нехватке
+  /* WS3 (05.09.2026), поправлено H3 (06.09.2026): пиявка, вернувшаяся из карантина
+     без переработки, спрашивается не общей ротацией REVIEW_CYCLE, а экзаменационным
+     путём: первый показ после возврата, «слово вернулось из карантина», рисует
+     Review.tsx с корнем и разводкой по confusables (reveal/sentence), а дальше -
+     только узнавание в предложении (mc/sentence, откат через degrade при нехватке
      дистракторов), никогда обратно в type, который эти слова и проваливали.
-     Ветка активна, пока до ближайшей попытки есть время: после WS1 (даты
-     планировщика как функция nextAttempt) условие стоит на phase(now), а не
-     на отдельной константе PRIMARY_DATE. Так после любой попытки, не только
-     первой, слово возвращается в обычную ротацию. */
+
+     «Дальше» здесь означает «до следующей попытки», а не «пока phase(now) не between» -
+     это и была ошибка H3. `phase` считается от БУДУЩЕЙ попытки (`nextAttempt`) и не
+     различает «карантин кончился на прошлой неделе, ученик уже отвечал» от «карантин
+     кончился только что»: с 03.10 по 07.11 phase(now) держится 'final'/'taper', а не
+     'between', и ветка пиявок бралась ВСЕГДА, хотя первая попытка уже прошла и слово
+     давно должно было вернуться в обычный оборот. Верная граница - `lastAttempt`
+     (последняя УЖЕ прошедшая попытка): если карантин кончился ДО неё, ученик имел
+     все шансы столкнуться со словом на самой попытке и в разборе после неё, и ветка
+     закрывается; если карантин кончился ПОСЛЕ последней прошедшей попытки (или
+     попыток ещё не было вовсе, `lastAttempt` даёт `null`), слово свежевозвращённое
+     относительно текущего окна подготовки, и ветка пиявок действует. */
   if (phase(now) !== 'between') {
     const returned = leechReturned(item.view, now)
-    if (returned === 'first') return { format: 'reveal', cue: 'sentence' }
-    if (returned === 'later') return degrade({ format: 'mc', cue: 'sentence' }, item, deck, typing)
+    if (returned !== null) {
+      const konecKarantina = addDaysKey((item.view.leech || '').trim(), LEECH_QUARANTINE_DAYS)
+      const la = lastAttempt(now)
+      const returnedAfterLastAttempt = la === null || konecKarantina > calendarKey(la)
+      if (returnedAfterLastAttempt) {
+        if (returned === 'first') return { format: 'reveal', cue: 'sentence' }
+        return degrade({ format: 'mc', cue: 'sentence' }, item, deck, typing)
+      }
+    }
   }
 
   const step = REVIEW_CYCLE[((item.fsrs.reps % REVIEW_CYCLE.length) + REVIEW_CYCLE.length) % REVIEW_CYCLE.length]

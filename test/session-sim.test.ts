@@ -21,7 +21,7 @@ import {
   pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, holdExerciseToNextDay, isExercise, LEARN_AHEAD_MS, LAST_LEARNING_STEP, sharesMeaning, typedTwin, checkTyped,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
   pickTask, meaningDistractors, REVIEW_CYCLE, ROTATE_FROM_REPS, NEW_STOP_DATE, kindRank, expandItems, freshItems, markGlosses,
-  NEW_STOP_BY_SECTION, newIntroAllowed, nextAttempt, dueCap, phase, effectiveRetention, PRIMARY_DATE, EXAM_DATE,
+  NEW_STOP_BY_SECTION, newIntroAllowed, nextAttempt, lastAttempt, dueCap, phase, effectiveRetention, PRIMARY_DATE, EXAM_DATE,
   homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal, type Section,
   MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS, leechReturned, MAX_LEECH_PER_LESSON,
   WARMUP_SHOWS, warmupShows, CLOSING_SHOWS, closingShow
@@ -2040,6 +2040,86 @@ function leechReturnedChecks(): void {
 }
 
 /**
+ * H3 (06.09.2026): ветка пиявок в pickTask обещала (в комментарии) вернуть слово
+ * в обычную ротацию «после любой попытки», но проверяла это через `phase(now) !==
+ * 'between'` - а `phase` считается от БУДУЩЕЙ попытки (`nextAttempt`) и держится
+ * 'final'/'taper' весь промежуток между 03.10 и 07.11, то есть НИКОГДА не даёт
+ * 'between' раньше 07.11. Слово, вернувшееся из карантина ЗАДОЛГО до первой
+ * попытки, получало ветку пиявок и после неё - ровно то, что комментарий обещал
+ * не делать.
+ *
+ * Верная граница - `lastAttempt`: если карантин карточки кончился ДО последней уже
+ * прошедшей попытки, ученик застал слово на самой попытке и вернуться должен в
+ * обычную ротацию; если карантин кончился ПОСЛЕ (или попыток ещё не было,
+ * `lastAttempt` даёт `null`), ветка пиявок действует как раньше.
+ */
+function leechAfterAttemptChecks(): void {
+  // соседи по колоде нужны только ради трёх дистракторов у mcDistractors, сами не пиявки
+  const соседи = ['сосед1', 'сосед2', 'сосед3', 'сосед4'].map(w => reviewCard(w))
+
+  const карточкаСВозвратом = (word: string, конецКарантинаKey: string, lastReview: Date | null): CardView => {
+    const v = reviewCard(word, 1, -3600_000)
+    v.leech = addDaysKey(конецКарантинаKey, -LEECH_QUARANTINE_DAYS)
+    v.fsrs = { ...v.fsrs, reps: 2, state: State.Review, last_review: lastReview }
+    return v
+  }
+
+  // ---- now = 05.10.2026, после попытки 03.10 (lastAttempt = PRIMARY_DATE) --------
+  {
+    const now = new Date(2026, 9, 5, 10, 0, 0)
+    assert(lastAttempt(now)?.getTime() === PRIMARY_DATE.getTime(),
+      'предпосылка: 05.10 обязан давать lastAttempt = PRIMARY_DATE (03.10)')
+
+    // возврат 20.09 - карантин кончился ДО последней попытки: обычная ротация,
+    // reps=2 в REVIEW_CYCLE - это {type, meaning}, и type здесь допустим
+    const возвратДоПопытки = карточкаСВозвратом('attribute', '2026-09-20', new Date(2026, 8, 25))
+    const итем1: StudyItem = { view: возвратДоПопытки, skill: 'recall', fsrs: возвратДоПопытки.fsrs }
+    const задача1 = pickTask(итем1, [возвратДоПопытки, ...соседи], undefined, undefined, true, true, now)
+    assert(задача1.format === 'type' && задача1.cue === 'meaning',
+      `возврат до последней попытки обязан идти обычной ротацией (type/meaning на reps=2), получили ${задача1.format}/${задача1.cue}`)
+
+    // возврат 04.10 - карантин кончился ПОСЛЕ последней попытки: ветка пиявок,
+    // 'later' (last_review в день конца карантина) даёт mc/sentence, не type
+    const возвратПослеПопытки = карточкаСВозвратом('buttress', '2026-10-04', new Date(2026, 9, 4, 15, 0, 0))
+    assert(leechReturned(возвратПослеПопытки, now) === 'later',
+      `сетап: карточка обязана дать 'later', получили ${leechReturned(возвратПослеПопытки, now)}`)
+    const итем2: StudyItem = { view: возвратПослеПопытки, skill: 'recall', fsrs: возвратПослеПопытки.fsrs }
+    const задача2 = pickTask(итем2, [возвратПослеПопытки, ...соседи], undefined, undefined, true, false, now)
+    assert(задача2.format === 'mc' && задача2.cue === 'sentence',
+      `возврат после последней попытки обязан идти веткой пиявок (mc/sentence), получили ${задача2.format}/${задача2.cue}`)
+    assert(задача2.format !== 'type',
+      'возврат после последней попытки не должен получать type - формат, который эти слова и проваливали')
+  }
+
+  // ---- now = 20.09.2026, до первой попытки (lastAttempt = null) -----------------
+  {
+    const now = new Date(2026, 8, 20, 10, 0, 0)
+    assert(lastAttempt(now) === null, 'предпосылка: 20.09 обязан давать lastAttempt = null (попыток ещё не было)')
+
+    // первый показ после возврата (карантин кончился 05.09, показов с тех пор не было)
+    const перваяДоПопыток = карточкаСВозвратом('attribute', '2026-09-05', null)
+    assert(leechReturned(перваяДоПопыток, now) === 'first',
+      `сетап: карточка обязана дать 'first', получили ${leechReturned(перваяДоПопыток, now)}`)
+    const итем3: StudyItem = { view: перваяДоПопыток, skill: 'recall', fsrs: перваяДоПопыток.fsrs }
+    const задача3 = pickTask(итем3, [перваяДоПопыток, ...соседи], undefined, undefined, true, false, now)
+    assert(задача3.format === 'reveal' && задача3.cue === 'sentence',
+      `без единой прошедшей попытки ветка пиявок обязана действовать даже на давнем возврате, получили ${задача3.format}/${задача3.cue}`)
+
+    // возврат совсем недавно (18.09), уже был один показ - тоже ветка пиявок, тоже без popытки
+    const позжеДоПопыток = карточкаСВозвратом('buttress', '2026-09-18', new Date(2026, 8, 19, 12, 0, 0))
+    assert(leechReturned(позжеДоПопыток, now) === 'later',
+      `сетап: карточка обязана дать 'later', получили ${leechReturned(позжеДоПопыток, now)}`)
+    const итем4: StudyItem = { view: позжеДоПопыток, skill: 'recall', fsrs: позжеДоПопыток.fsrs }
+    const задача4 = pickTask(итем4, [позжеДоПопыток, ...соседи], undefined, undefined, true, false, now)
+    assert(задача4.format === 'mc' && задача4.cue === 'sentence',
+      `ветка пиявок действует для обеих карточек без прошедшей попытки, получили ${задача4.format}/${задача4.cue}`)
+  }
+
+  console.log('  ✓ H3: пиявка возвращается в обычную ротацию после прошедшей попытки, а не только после phase===between')
+  passed++
+}
+
+/**
  * C13: MAX_LEECH_PER_LESSON ограничивает урок пятью вернувшимися пиявками разом,
  * без потолка урок с девятью такими карточками превращался бы в один и тот же
  * формат подряд. Лишние не выбывают из колоды и из счётчика «повторить»
@@ -2596,6 +2676,7 @@ function main(): void {
   overdueCorpusChecks()
   leechQuarantineChecks()
   leechReturnedChecks()
+  leechAfterAttemptChecks()
   leechCapChecks()
   reintroBudgetChecks()
 
