@@ -352,13 +352,23 @@ export function streak(lines: JournalLine[], today: string = dayKey(), pause?: P
   return { days: run, todayDone, freezes: bank, toFreeze: bank >= 2 ? 0 : 7 - sinceEarn, pausedToday: inPause(today), freezeSpentYesterday }
 }
 
-/** Точность по форматам за 30 дней (review-показы): mc/type/prep — по correct, reveal — по rating>1 */
+/**
+ * Точность по форматам за 30 дней (review-показы): mc/type/prep - по correct, reveal - по rating>1.
+ *
+ * Опечатка (`typo`), синоним (`twin`) и подсказанный ввод (`cued`, C12) выпадают из счёта целиком -
+ * то же исключение, что и в `isMatureShow`/`isAccuracyShow` (`metrics.ts`); дублируется здесь, а не
+ * импортируется, потому что `metrics.ts` сама импортирует из этого модуля, и обратный импорт замкнул
+ * бы цикл. До 06.09.2026 `cued` в исключение не входил и не должен был: старый `correct` писался как
+ * `verdict !== 'wrong'`, и подсказанный ввод читался как попадание. После FixI (`correct: verdict ===
+ * 'correct'`) та же строка получает `correct: false` и без явного исключения `cued` из счёта попадает
+ * в знаменатель обычным промахом.
+ */
 export function retentionByFormat(lines: JournalLine[], today: string = dayKey()): Record<string, { pass: number; total: number }> {
   const from = addDaysKey(today, -29)
   const acc: Record<string, { pass: number; total: number }> = {}
   for (const l of lines) {
     if (l.type !== 'review' || !l.day || l.day < from) continue
-    if (l.prev_state !== State.Review || l.typo || l.twin) continue
+    if (l.prev_state !== State.Review || l.typo || l.twin || l.cued) continue
     const f = l.format ?? 'reveal'
     if (f === 'intro') continue
     acc[f] ??= { pass: 0, total: 0 }
@@ -367,6 +377,33 @@ export function retentionByFormat(lines: JournalLine[], today: string = dayKey()
     if (ok) acc[f].pass++
   }
   return acc
+}
+
+/**
+ * Настоящий провал знания: review-строка с объективным провалом, а не опечатка, синоним или
+ * подсказанный ввод. Опечатка (`typo`) и синоним (`twin`) - ошибка формы, не пробел в знании;
+ * подсказанный ввод (`cued`, C12) - вообще не попытка вспомнить самому. У обеих старых эпох поле
+ * `correct` для этих трёх случаев было `true` до FixI (06.09.2026, `correct: verdict !== 'wrong'`)
+ * и стало `false` после (`correct: verdict === 'correct'`) - решение по строке принимается по флагам
+ * `typo`/`twin`/`cued`, а не по одному `correct`, и поэтому работает на строках обеих эпох одинаково.
+ * Используется в `report.ts` (список ошибок тьютору) вместо сырого `l.correct !== false`, который
+ * после FixI начал засчитывать опечатку и подсказку как незнание слова.
+ */
+export function isKnowledgeMiss(l: JournalLine): boolean {
+  return l.type === 'review' && l.correct === false && !l.typo && !l.twin && !l.cued
+}
+
+/**
+ * Знание подтверждено показом: настоящее попадание (`correct === true`) или опечатка/синоним -
+ * форма подвела, а не память. Подсказанный ввод (`cued`) знанием не считается никогда, даже если
+ * старая строка несёт `correct: true` (см. `isKnowledgeMiss`). У строк без объективного результата
+ * (`reveal`) знание читается по `rating > 1` - тот же запасной путь, что был в `retentionByFormat`
+ * и в «Закрытии пробелов» (`report.ts`) до этой правки.
+ */
+export function isKnowledgePass(l: JournalLine): boolean {
+  if (l.type !== 'review' || l.cued) return false
+  if (typeof l.correct === 'boolean') return l.correct || !!l.typo || !!l.twin
+  return (l.rating ?? 0) > 1
 }
 
 /** True retention за 30 дней: доля rating>1 среди оценок карточек в состоянии Review */

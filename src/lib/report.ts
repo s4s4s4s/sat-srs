@@ -6,7 +6,7 @@ import {
   minutesByDay, readMinutesByDay, streak, trueRetention30, retentionByFormat, READ_MIN_MINUTES,
   markDigest, markCount, readingSrc, readingPassed, readTextSlugs, readTextsToday, readingPaceWpm, normWord,
   READING_UNKNOWN_SHARE_MAX, READ_MIN_TEXTS, reviewsByDay, dayUnitsByDay, practiceUnitsByDay,
-  practiceMinutesByDay, type PauseRange
+  practiceMinutesByDay, isKnowledgeMiss, isKnowledgePass, type PauseRange
 } from './journal'
 import { activeLevel, levelStats, isLevelled, EXAM_DATE, SECTIONS, nextAttempt, dueCap, phase, NEW_STOP_BY_SECTION } from './scheduler'
 import {
@@ -112,7 +112,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   const errFrom = addDaysKey(today, -13)
   const errByFormat = new Map<string, Map<string, number>>()
   for (const l of lines) {
-    if (l.type !== 'review' || l.correct !== false || !l.day || l.day < errFrom || !l.slug) continue
+    if (!isKnowledgeMiss(l) || !l.day || l.day < errFrom || !l.slug) continue
     const f = l.format ?? '?'
     if (!errByFormat.has(f)) errByFormat.set(f, new Map())
     const m = errByFormat.get(f)!
@@ -358,7 +358,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
     out.push('| карточка | домен | причина | сост. | успешных дней | статус |', '|---|---|---|---|---|---|')
     for (const v of drill) {
       const okDays = new Set(
-        lines.filter(l => l.type === 'review' && l.slug === v.slug && (l.correct === true || (l.correct === undefined && (l.rating ?? 0) > 1))).map(l => l.day)
+        lines.filter(l => l.slug === v.slug && isKnowledgePass(l)).map(l => l.day)
       ).size
       const grad = okDays >= 3 && v.fsrs.state === State.Review
       const rec = cards.find(c => c.path === v.path)

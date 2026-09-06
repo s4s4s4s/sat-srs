@@ -9,12 +9,15 @@
  *
  * Запуск: `npm run test:journal` (esbuild бандлит файл и node его исполняет).
  */
+import { State } from 'ts-fsrs'
 import type { JournalLine } from '../src/lib/types'
 import {
   isGraded, reviewsByDay, isDayDone, minutesByDay, emptyDays, floorDays, RUN_MIN_REVIEWS,
   dayUnitsByDay, practiceUnitsByDay, practiceMinutesByDay, PRACTICE_UNIT_RATIO_FLOOR,
-  readTextsToday, READ_MIN_TEXTS, deckHasWord, markDigest, readingSrc
+  readTextsToday, READ_MIN_TEXTS, deckHasWord, markDigest, readingSrc,
+  retentionByFormat, isKnowledgeMiss, isKnowledgePass
 } from '../src/lib/journal'
+import { accuracyShare } from '../src/lib/metrics'
 import { lightStem } from '../src/lib/stem'
 
 let passed = 0
@@ -261,6 +264,64 @@ function markDigestChecks(): void {
   group('markDigest: отметка формы слова с уже заведённой карточкой не уезжает в кандидаты (F41)')
 }
 
+// ---- K1: retentionByFormat исключает cued, как и accuracyShare/isMatureShow -----------------
+
+function retentionByFormatChecks(): void {
+  const rev = (o: Partial<JournalLine>): JournalLine => ({
+    id: Math.random().toString(36).slice(2), type: 'review', ts: `${DAY}T10:00:00+03:00`,
+    day: DAY, format: 'type', prev_state: State.Review, ...o
+  })
+  /* 3 верных + 1 подсказанный (cued) + 1 провал + 1 опечатка (typo) в одном формате.
+     Опечатка исключалась и до FixI - в знаменатель не входит уже давно. Подсказанный ввод (K1)
+     до этой правки оставался в знаменателе обычным промахом (correct: false после FixI),
+     хотя это не попытка вспомнить самому: обязан выпасть целиком, как typo/twin. */
+  const lines: JournalLine[] = [
+    rev({ slug: 'a', correct: true }),
+    rev({ slug: 'b', correct: true }),
+    rev({ slug: 'c', correct: true }),
+    rev({ slug: 'd', correct: false, cued: true }),
+    rev({ slug: 'e', correct: false }),
+    rev({ slug: 'f', correct: false, typo: true })
+  ]
+  const rf = retentionByFormat(lines, DAY)
+  assert(rf.type?.pass === 3 && rf.type?.total === 4,
+    `retentionByFormat: cued обязан выпасть из знаменателя вместе с typo, ожидалось 3/4, получено ${rf.type?.pass}/${rf.type?.total}`)
+
+  // согласованность с единым источником правды о точности (D): без typo обе функции видят одно и то же
+  const acc = accuracyShare(lines.filter(l => !l.typo))
+  assert(acc.pass === 3 && acc.n === 4,
+    `accuracyShare без typo обязан дать те же 3/4, получено ${acc.pass}/${acc.n}`)
+
+  group('K1: retentionByFormat исключает cued целиком (C12), согласованно с accuracyShare')
+}
+
+// ---- K2/K3: настоящий провал/попадание знания отличены от формы ответа ----------------------
+
+function knowledgeMissPassChecks(): void {
+  const l = (o: Partial<JournalLine>): JournalLine => ({
+    id: Math.random().toString(36).slice(2), type: 'review', ts: `${DAY}T10:00:00+03:00`,
+    day: DAY, format: 'type', ...o
+  })
+
+  assert(isKnowledgeMiss(l({ correct: false })), 'настоящий провал обязан быть ошибкой знания')
+  assert(!isKnowledgeMiss(l({ correct: false, typo: true })), 'опечатка не ошибка знания (K2)')
+  assert(!isKnowledgeMiss(l({ correct: false, twin: true })), 'синоним не ошибка знания (K2)')
+  assert(!isKnowledgeMiss(l({ correct: false, cued: true })), 'подсказанный ввод не ошибка знания (K2)')
+  assert(!isKnowledgeMiss(l({ correct: true })), 'верный ответ не может быть ошибкой')
+
+  assert(isKnowledgePass(l({ correct: true })), 'верный ответ обязан закрывать пробел (K3)')
+  assert(isKnowledgePass(l({ correct: false, typo: true })), 'опечатка закрывает пробел - знание есть (K3)')
+  assert(isKnowledgePass(l({ correct: false, twin: true })), 'синоним закрывает пробел - знание есть (K3)')
+  assert(!isKnowledgePass(l({ correct: false, cued: true })), 'подсказанный ввод пробел не закрывает (K3)')
+  assert(!isKnowledgePass(l({ correct: true, cued: true })),
+    'подсказка не закрывает пробел, даже если строка старой эпохи несёт correct=true')
+  assert(!isKnowledgePass(l({ correct: false })), 'настоящий провал пробел не закрывает')
+  assert(isKnowledgePass(l({ rating: 3 })), 'reveal без correct читается по rating>1 (запасной путь)')
+  assert(!isKnowledgePass(l({ rating: 1 })), 'reveal с низким rating знанием не считается')
+
+  group('K2/K3: isKnowledgeMiss/isKnowledgePass различают опечатку, синоним и подсказку от настоящего провала знания')
+}
+
 function main(): void {
   console.log('SRS journal: reviewsByDay/isGraded/isDayDone/floorDays (A7: показ знакомства не упражнение)')
   reviewsByDayChecks()
@@ -271,6 +332,8 @@ function main(): void {
   lightStemChecks()
   deckHasWordChecks()
   markDigestChecks()
+  retentionByFormatChecks()
+  knowledgeMissPassChecks()
   console.log(`\nВсе проверки журнала пройдены (${passed} групп).`)
 }
 

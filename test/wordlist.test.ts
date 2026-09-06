@@ -388,8 +388,26 @@ function noDaysBehindWordingChecks(): void {
   group('D7: «отстаёшь на» не встречается в report.ts, Stats.tsx и Home.tsx')
 }
 
+/**
+ * K2/K3 (06.09.2026): после FixI (`correct: verdict === 'correct'`, store.ts) сырое поле
+ * `correct` перестало отличать настоящий провал/попадание от опечатки, синонима и подсказанного
+ * ввода - список ошибок тьютору и «Закрытие пробелов» обязаны решать по `isKnowledgeMiss`/
+ * `isKnowledgePass` (journal.ts), а не по `l.correct` напрямую, иначе опечатка и синоним снова
+ * читаются как пробел в знании, а подсказка - как его закрытие.
+ */
+function reportKnowledgePredicateChecks(): void {
+  const reportSrc = readFileSync(path.join(process.cwd(), 'src', 'lib', 'report.ts'), 'utf8').replace(/\r\n/g, '\n')
+  assert(reportSrc.includes('isKnowledgeMiss') && reportSrc.includes('isKnowledgePass'),
+    'report.ts обязан импортировать и использовать isKnowledgeMiss/isKnowledgePass из journal.ts')
+  assert(!reportSrc.includes('l.correct !== false'),
+    'report.ts: список ошибок тьютору не должен решаться сырым l.correct !== false (K2)')
+  assert(!/l\.correct === true \|\| \(l\.correct === undefined/.test(reportSrc),
+    'report.ts: «Закрытие пробелов» не должно решаться сырым l.correct === true (K3)')
+  group('K2/K3: report.ts решает ошибку знания и закрытие пробела через isKnowledgeMiss/isKnowledgePass, не через сырой correct')
+}
+
 function main(): void {
-  console.log('SRS wordstatus — единый источник правды о состоянии слова')
+  console.log('SRS wordstatus - единый источник правды о состоянии слова')
   agreementWithHomeChecks()
   prepLeechDivergenceChecks()
   stageByStageChecks()
@@ -406,6 +424,7 @@ function main(): void {
   homePracticeSummaryChecks()
   homeEmptySectionButtonChecks()
   noDaysBehindWordingChecks()
+  reportKnowledgePredicateChecks()
   console.log(`\nВсе проверки статуса слова пройдены (${passed} групп).`)
 }
 
