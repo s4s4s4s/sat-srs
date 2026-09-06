@@ -6,6 +6,7 @@ import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm, readingView, slugFromPath } from './yamlfm'
 import { questionView, PACE_SEC } from './practice'
 import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, dueCap, type Section, type TypeVerdict } from './scheduler'
+import { buildCorpusIndex, corpusHits as corpusHitsOf } from './corpus'
 import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay, startOfStudyDay, calendarKey, addDaysKey } from './daytime'
 import {
@@ -39,6 +40,12 @@ interface AppState {
   /* Вопросы практики — та же логика раздельного хранения, что у readings (см. её комментарий
      выше и QuestionRec в types.ts): у вопроса нет FSRS, он не участвует в очереди повторений. */
   questions: QuestionRec[]
+  /* Индекс корпуса экзаменационного языка (WS9, `lib/corpus.ts`): основа слова -> число
+     вхождений в вопросы практики и тексты для чтения. Пересчитывается refreshCorpus'ом
+     по завершении загрузки и синка, а не на каждой сборке очереди - вопросы и тексты
+     держат сотни тысяч знаков, и гонять их разбор в buildQueue означало бы перелемматизировать
+     весь корпус на каждый показ карточки. */
+  corpus: Map<string, number>
   journal: JournalRec[]
   syncStatus: SyncStatus
   syncError: string
@@ -59,6 +66,7 @@ let state: AppState = {
   cards: [],
   readings: [],
   questions: [],
+  corpus: new Map(),
   journal: [],
   syncStatus: 'idle',
   syncError: '',
@@ -156,6 +164,43 @@ export function startLesson(section: Section, reviewOnly = false, overNorm = fal
   emit()
 }
 
+/* Кэш индекса корпуса по числу вопросов и текстов: пересчёт заново только когда
+   счёт изменился (после синка), а не при каждом чтении состояния. Число, а не
+   содержимое - содержимое (тела вопросов/текстов) может дописываться на месте без
+   изменения счёта только теоретически (правки уезжают своим sha), и точности
+   "пересчитать раз в синк" для тиебрейкера очереди достаточно. */
+let corpusCacheKey = ''
+
+function refreshCorpus() {
+  const key = `${state.questions.length}:${state.readings.length}`
+  if (key === corpusCacheKey) return
+  corpusCacheKey = key
+  state.corpus = buildCorpusIndex(state.questions, state.readings)
+}
+
+/* Слово карточки по слагу - тем же путём, что cardView, но без сборки всего CardView
+   ради одного поля. Кэш инвалидируется сменой ссылки на state.cards (новый массив
+   приходит из db только по синку/загрузке), поэтому пересборка не чаще, чем сам синк. */
+let corpusWordCacheCards: CardRec[] | null = null
+let corpusWordBySlug = new Map<string, string>()
+
+function corpusWordMap(): Map<string, string> {
+  if (corpusWordCacheCards !== state.cards) {
+    corpusWordCacheCards = state.cards
+    corpusWordBySlug = new Map(state.cards.map(c => {
+      const slug = slugFromPath(c.path)
+      return [slug, String(c.fm.word ?? slug)]
+    }))
+  }
+  return corpusWordBySlug
+}
+
+/** Признак корпуса по слагу карточки (для `freshItems`/`buildQueue` из scheduler.ts). */
+export function corpusHitsBySlug(slug: string): number {
+  const word = corpusWordMap().get(slug) ?? slug
+  return corpusHitsOf(state.corpus, word)
+}
+
 export async function init() {
   // настройки перечитываются здесь, а не только при загрузке модуля:
   // порядок инициализации не должен зависеть от порядка импортов
@@ -172,8 +217,9 @@ export async function init() {
     state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? null
     state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? {}
     state.metricsHistory = parseMetrics((await db.kvGet<string>('metricsText')) ?? '')
+    refreshCorpus()
   } catch (e: any) {
-    // локальная база не открылась (бывает на холодном старте WebKit) — не виснем на «Загрузка…»
+    // локальная база не открылась (бывает на холодном старте WebKit): не виснем на «Загрузка…»
     state.syncStatus = 'error'
     state.syncError = `Локальная база недоступна: ${e?.message ?? e}`
   }
@@ -208,6 +254,7 @@ export async function startSync(): Promise<void> {
   state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? state.lastSyncAt
   state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? state.levelNames
   state.metricsHistory = parseMetrics((await db.kvGet<string>('metricsText')) ?? '')
+  refreshCorpus()
   state.syncStatus = res.status
   state.syncError = res.error ?? res.warning ?? (res.conflicts ? `Конфликт имён с тьютором: ваша карточка сохранена с суффиксом -2 (${res.conflicts})` : '')
   state.tokenExpiresAt = tokenExpiration

@@ -1701,6 +1701,90 @@ function dailyReviewCapChecks(): void {
   passed++
 }
 
+/** Как reviewCard, но привязан к произвольному `now`, а не к модульной константе BASE (K2). */
+function reviewCardAt(word: string, now: Date, daysLate: number, level = 1): CardView {
+  const v = baseView(word, level, 'vocab')
+  const f = makeScheduler(RETENTION)
+  let c = v.fsrs
+  let t = now.getTime() - 12 * 86400_000
+  for (let i = 0; i < 5 && c.state !== State.Review; i++) {
+    c = f.next(c, new Date(t), Rating.Good).card
+    t += 2 * 86400_000
+  }
+  v.fsrs = { ...c, due: new Date(now.getTime() - daysLate * 86400_000) }
+  return v
+}
+
+/** Как doneTodayCard, но для произвольного `now` (K2). */
+function doneTodayCardAt(word: string, now: Date): CardView {
+  const v = reviewCardAt(word, now, -3)
+  v.fsrs = { ...v.fsrs, last_review: new Date(now.getTime() - 3600_000) }
+  return v
+}
+
+/**
+ * WS9/K2: срез overdue при переполнении дневного потолка обязан различать слово,
+ * которое ученик встретит на экзамене (вопросы практики, тексты для чтения), от слова,
+ * которого в корпусе нет вовсе - иначе оба одинаково просроченных слова равноценны, а это
+ * не так: освежить стоит в первую очередь то, что реально понадобится.
+ */
+function overdueCorpusChecks(): void {
+  // Финальное окно - последняя неделя перед первой попыткой (CAP_LEAD_DAYS = 7 до PRIMARY_DATE).
+  const финал = new Date(2026, 9, 0, 10, 0, 0)     // 30.09.2026 - три дня до 03.10
+  const заранее = new Date(2026, 8, 1, 10, 0, 0)   // 01.09.2026 - далеко до финального окна
+  assert(phase(финал) === 'final', 'предпосылка: 30.09 обязан быть финальным окном')
+  assert(phase(заранее) !== 'final', 'предпосылка: 01.09 обязан быть вне финального окна')
+
+  const hits: Record<string, number> = { 'частое': 18, 'редкое': 0 }
+  const corpusHits = (slug: string) => hits[slug] ?? 0
+
+  // ---- overdue < потолка: состав среза не меняется корпусом --------------
+  {
+    const колода = [reviewCardAt('a', финал, 1), reviewCardAt('b', финал, 2), reviewCardAt('c', финал, 3)]
+    const setOf = (q: StudyItem[]) => q.map(i => i.view.slug).sort().join(',')
+    const withCorpus = buildQueue(колода, 0, финал, undefined, new Set(), corpusHits)
+    const withoutCorpus = buildQueue(колода, 0, финал)
+    assert(setOf(withCorpus) === setOf(withoutCorpus),
+      `overdue ниже потолка: corpusHits не должен менять состав среза, получили ${setOf(withCorpus)} vs ${setOf(withoutCorpus)}`)
+    assert(withCorpus.length === 3, `все три просроченных обязаны попасть в урок, получили ${withCorpus.length}`)
+  }
+
+  // ---- overdue > потолка, финальное окно: вес - просрочка × (1 + вхождения) ----
+  {
+    const ОСТАТОК = 1
+    const колода: CardView[] = [reviewCardAt('частое', финал, 3), reviewCardAt('редкое', финал, 4)]
+    for (let i = 0; i < MAX_REVIEW_PER_DAY - ОСТАТОК; i++) колода.push(doneTodayCardAt(`сделано${i}`, финал))
+
+    const withCorpus = buildQueue(колода, 0, финал, undefined, new Set(), corpusHits)
+      .filter(i => i.fsrs.state === State.Review)
+    assert(withCorpus.length === ОСТАТОК,
+      `предпосылка: срез равен остатку потолка (${ОСТАТОК}), получили ${withCorpus.length}`)
+    assert(withCorpus[0].view.slug === 'частое',
+      `18 вхождений и просрочка 3 дня обязаны войти раньше 0 вхождений и просрочки 4 дня, получили «${withCorpus[0].view.slug}»`)
+
+    const withoutCorpus = buildQueue(колода, 0, финал).filter(i => i.fsrs.state === State.Review)
+    assert(withoutCorpus[0].view.slug === 'редкое',
+      `предпосылка: без corpusHits потолок берёт по чистой просрочке («редкое» просрочено сильнее), получили «${withoutCorpus[0].view.slug}»`)
+  }
+
+  // ---- overdue > потолка, ВНЕ финального окна: порядок прежний (по due) --------
+  {
+    const ОСТАТОК = 1
+    const колода: CardView[] = [reviewCardAt('частое', заранее, 3), reviewCardAt('редкое', заранее, 4)]
+    for (let i = 0; i < MAX_REVIEW_PER_DAY - ОСТАТОК; i++) колода.push(doneTodayCardAt(`сделано${i}`, заранее))
+
+    const withCorpus = buildQueue(колода, 0, заранее, undefined, new Set(), corpusHits)
+      .filter(i => i.fsrs.state === State.Review)
+    assert(withCorpus.length === ОСТАТОК,
+      `предпосылка: срез равен остатку потолка (${ОСТАТОК}), получили ${withCorpus.length}`)
+    assert(withCorpus[0].view.slug === 'редкое',
+      `вне финального окна порядок обязан остаться прежним (по due), получили «${withCorpus[0].view.slug}»`)
+  }
+
+  console.log('  ✓ K2: overdue при переполнении в финальном окне весится корпусом, вне окна и ниже потолка - прежнее поведение')
+  passed++
+}
+
 /**
  * Провал зрелой карточки: Relearning со сроком «сейчас» (в Relearning попадают только из Review).
  * Провал случился ВЧЕРА (last_review до rollover 04:00), поэтому в «сделано сегодня» он не
@@ -2257,6 +2341,7 @@ function main(): void {
   tomorrowCountChecks()
   dailyReviewCapChecks()
   relearnCapChecks()
+  overdueCorpusChecks()
   leechQuarantineChecks()
   leechReturnedChecks()
   leechCapChecks()

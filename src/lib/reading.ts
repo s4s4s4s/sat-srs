@@ -243,7 +243,7 @@ export function markedLemmas(lines: JournalLine[], src: string): Set<string> {
  * морфологию (число, прошедшее время, -ing) и молчит на всём остальном: непокрытая форма
  * честно показывает «сноски нет» — ровно то поведение, которое описано в `yamlfm.glossary`.
  */
-function lemmaCandidates(w: string): string[] {
+export function lemmaCandidates(w: string): string[] {
   const out = [w]
   const add = (s: string) => { if (s.length >= 2 && !out.includes(s)) out.push(s) }
   const doubled = (s: string) => (s.length >= 3 && s[s.length - 1] === s[s.length - 2] ? s.slice(0, -1) : '')

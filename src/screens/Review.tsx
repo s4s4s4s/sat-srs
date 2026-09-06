@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Rating, State, type Grade } from 'ts-fsrs'
-import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause, markIntroduced, deferItemToNextDay, toggleWordMark } from '../lib/store'
+import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause, markIntroduced, deferItemToNextDay, toggleWordMark, corpusHitsBySlug } from '../lib/store'
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
@@ -237,7 +237,7 @@ export default function Review() {
     // point 3: слова, введённые сегодня в прошлых уроках и ещё не отработанные дважды,
     // принудительно добираются в этот урок (buildQueue дотягивает их из Learning с due на завтра)
     const forced = forcedTodaySlugs(currentJournal(), dayKey())
-    setQueue(buildQueue(карточкиРаздела, budget, new Date(), forced, liveMarkedLemmas(currentJournal())))
+    setQueue(buildQueue(карточкиРаздела, budget, new Date(), forced, liveMarkedLemmas(currentJournal()), corpusHitsBySlug))
     if (app.settings.pat && navigator.onLine) void startSync()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

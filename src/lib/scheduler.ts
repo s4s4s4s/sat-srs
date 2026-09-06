@@ -420,6 +420,18 @@ function reviewsLeftToday(items: StudyItem[], now: Date): number {
   return Math.max(0, MAX_REVIEW_PER_DAY - сделано)
 }
 
+/**
+ * Вес карточки в срезе overdue при переполнении дневного потолка (WS9): произведение
+ * дней просрочки (плюс единица, чтобы карточка, просроченная только что, не обнулялась)
+ * на (1 + число вхождений основы в корпус экзаменационного языка). Без корпуса (`corpusHits`
+ * не передан) второй множитель всегда 1, и порядок совпадает с прежней сортировкой по due.
+ */
+function overdueCorpusWeight(i: StudyItem, now: Date, corpusHits?: (slug: string) => number): number {
+  const daysLate = Math.max(0, Math.floor((now.getTime() - i.fsrs.due.getTime()) / 86400_000))
+  const hits = corpusHits ? corpusHits(i.view.slug) : 0
+  return (daysLate + 1) * (1 + hits)
+}
+
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
   for (let i = a.length - 1; i > 0; i--) {
@@ -610,10 +622,23 @@ export function markGlosses(
  * Внутри «отмечено»/«не отмечено» порядок прежний: сначала error/grammar
  * (доказанные пробелы), потом math, потом словарь уровнями (Duolingo-путь):
  * level ASC, внутри уровня added ASC.
+ *
+ * `inCorpus` (WS9, `lib/corpus.ts`) встаёт тиебрейкером ВНУТРИ словаря, между kindRank и
+ * level: слово, встречающееся в реальных вопросах экзамена и текстах для чтения, вводится
+ * раньше слова той же ступени вне корпуса, но не перебивает ни живую отметку, ни kindRank,
+ * ни сам level: иначе слово шестой ступени из корпуса обгоняло бы непройденную первую.
+ * Без признака слово четвёртой ступени, трижды встречающееся в банке вопросов, не доедет
+ * до очереди, пока очередь идёт по level ASC до конца: уровней шесть, а слов на каждом
+ * достаточно, чтобы этого не случилось за месяцы.
+ *
  * Вынесено из buildQueue, потому что тем же порядком урок добирает лишнее новое слово,
  * когда иначе ему нечего показать (см. Review.tsx::proceed).
  */
-export function freshItems(items: StudyItem[], marked: ReadonlySet<string> = new Set()): StudyItem[] {
+export function freshItems(
+  items: StudyItem[],
+  marked: ReadonlySet<string> = new Set(),
+  inCorpus?: (slug: string) => boolean
+): StudyItem[] {
   return items
     .filter(i => i.fsrs.state === State.New)
     .sort((a, b) => {
@@ -624,6 +649,11 @@ export function freshItems(items: StudyItem[], marked: ReadonlySet<string> = new
       const kb = kindRank(b.view)
       if (ka !== kb) return ka - kb
       if (isLevelled(a.view) && isLevelled(b.view)) {
+        if (inCorpus) {
+          const ca = inCorpus(a.view.slug) ? 0 : 1
+          const cb = inCorpus(b.view.slug) ? 0 : 1
+          if (ca !== cb) return ca - cb
+        }
         if (a.view.level !== b.view.level) return a.view.level - b.view.level
         const ad = a.view.added.localeCompare(b.view.added)
         if (ad !== 0) return ad
@@ -653,8 +683,19 @@ export function nextNewItems(cards: CardView[], exclude: Set<string>, limit = 1,
  * отработка введённого сегодня (drills по `forced`), новые.
  * Review и New перемешаны interleaving-ом, learning стоит впереди по due, а drills встают
  * перед первым новым словом очереди - отработка сегодняшнего идёт раньше знакомств.
+ *
+ * `corpusHits` (WS9, `lib/corpus.ts`) - необязательный признак экзаменационного корпуса,
+ * даёт две вещи разом: тиебрейкер новых через `freshItems` (см. её комментарий) и вес слова
+ * в срезе overdue при переполнении дневного потолка (см. `overdueCorpusWeight` ниже).
  */
-export function buildQueue(cards: CardView[], newBudget: number, now: Date = new Date(), forced?: Set<string>, marked: ReadonlySet<string> = new Set()): StudyItem[] {
+export function buildQueue(
+  cards: CardView[],
+  newBudget: number,
+  now: Date = new Date(),
+  forced?: Set<string>,
+  marked: ReadonlySet<string> = new Set(),
+  corpusHits?: (slug: string) => number
+): StudyItem[] {
   const eod = endOfStudyDay(now)
   const items = expandItems(cards, now)
 
@@ -726,7 +767,18 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
      и защиты от лавины просрочки на уровне дня не было вовсе.
      Оба потолка общие для просрочки и провалов: место, уже занятое Relearning, просрочке
      не достаётся, иначе единая валюта снова распадётся на две (F14). */
-  const review = shuffle(overdue.slice(0, Math.max(0, Math.min(MAX_REVIEW_PER_LESSON, dayLeft) - lapsedTaken.length)))
+  const reviewCap = Math.max(0, Math.min(MAX_REVIEW_PER_LESSON, dayLeft) - lapsedTaken.length)
+  /* Переполнение (WS9): overdue длиннее того, что дневной потолок ещё пропускает, и притом
+     идёт последняя неделя перед попыткой (`phase === 'final'`) - именно тогда отсечённый
+     остаток рискует не вернуться до экзамена вовсе, и порядок среза перестаёт быть
+     нейтральным. Вне финального окна остаток вернётся следующим уроком (см. комментарий
+     выше про MAX_LEECH_PER_LESSON), и менять порядок незачем - прежнее поведение (по due)
+     сохраняется буквально. */
+  const overflow = overdue.length > dayLeft && phase(now) === 'final'
+  const overdueForCap = overflow
+    ? [...overdue].sort((a, b) => overdueCorpusWeight(b, now, corpusHits) - overdueCorpusWeight(a, now, corpusHits))
+    : overdue
+  const review = shuffle(overdueForCap.slice(0, reviewCap))
 
   // выбор новых: сначала error/grammar (закрывают доказанные пробелы), потом pt-разбор, потом
   // math, потом словарь; словарь идёт уровнями (Duolingo-путь): level ASC, внутри уровня —
@@ -736,7 +788,8 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
   // передал вызывающий. Правило живёт здесь, а не в каждом месте, которое считает newBudget
   // снаружи. Отсекаем по карточке, а не по всему вызову: очередь строится и на одном разделе
   // (урок), и на смешанном наборе, и общий выключатель закрыл бы грамматику вместе со словарём.
-  const fresh = freshItems(items, marked).filter(i => newIntroAllowed(now, sectionOf(i.view)))
+  const fresh = freshItems(items, marked, corpusHits && (slug => corpusHits(slug) > 0))
+    .filter(i => newIntroAllowed(now, sectionOf(i.view)))
   const newItems = shuffle(fresh.slice(0, Math.max(0, newBudget)))
 
   // point 3: обязательный добор. Слова, введённые сегодня и ещё не отработанные в двух
