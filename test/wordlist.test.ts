@@ -423,6 +423,13 @@ function sessionGoalScreenChecks(): void {
   const summarySrc = screenSource('Summary.tsx')
   assert(summarySrc.includes('goalReached'), 'Summary.tsx обязан решать по r.goalReached, показывать ли «заход закрыт»')
   assert(summarySrc.includes('Ещё заход'), 'Summary.tsx обязан предлагать кнопку «Ещё заход» при достигнутой цели')
+  // вторая дверь в урок заперта тем же замком, что и кнопка раздела на главной (due === 0)
+  assert(/homeCounts\(sectionCards/.test(summarySrc) && /goalReached && moreAvail \?/.test(summarySrc),
+    'Summary.tsx обязан показывать «Ещё заход» только когда разделу есть что выдать (homeCounts по разделу сессии, как SectionBlock на Home)')
+  // B7: закрывающий показ строго один за сессию - флаг closingUsed ставится в tryClosing и проверяется на входе
+  assert(/if \(closingUsed\.current/.test(reviewSrc) && (reviewSrc.match(/closingUsed\.current = true/g) ?? []).length === 1
+    && !/closingUsed\.current = false/.test(reviewSrc),
+    'Review.tsx: closingUsed обязан проверяться на входе tryClosing, ставиться ровно один раз и никогда не сбрасываться')
   assert(summarySrc.includes('До цели ещё'), 'Summary.tsx обязан показывать «До цели ещё K», когда цель не достигнута, а очередь не пуста')
 
   const homeSrc = screenSource('Home.tsx')

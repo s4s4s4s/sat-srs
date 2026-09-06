@@ -1,5 +1,8 @@
-import { useApp, setScreen, startLesson } from '../lib/store'
+import { useApp, views, setScreen, startLesson } from '../lib/store'
 import { streak, sessionAccuracy, matureRetention } from '../lib/journal'
+import { homeCounts, sectionOf, newBudgetFor } from '../lib/scheduler'
+import { newPerDay } from '../lib/norms'
+import { dayKey } from '../lib/daytime'
 import { Timer, Check, Bolt } from '../components/Icon'
 import FlameBuddy from '../components/FlameBuddy'
 import FjordScene from '../components/FjordScene'
@@ -22,6 +25,14 @@ export default function Summary() {
   // WS5b (часть 2): «до цели ещё K» - K из sessionGoal и doneToday, посчитанных Review.tsx
   // в той же точке, где выставлен goalReached (finish()), а не заново на этом экране.
   const toGoal = Math.max(0, app.sessionGoal - r.doneToday)
+  /* «Ещё заход» - вторая дверь в урок, и запирается она тем же замком, что и кнопка раздела
+     на главной (SectionBlock в Home.tsx: disabled при due === 0): созревшие learning, повторы
+     до конца учебного дня и доступные новые в бюджете раздела. Без этой проверки цель дня,
+     закрытая практикой, вела бы в пустой экран урока «Очередь пуста» вместо честного
+     «раздел на сегодня закрыт». */
+  const sectionCards = views().filter(v => sectionOf(v) === app.sessionSection)
+  const counts = homeCounts(sectionCards, newBudgetFor(sectionCards, newPerDay(app.sessionSection, 'norm'), app.journal, dayKey()))
+  const moreAvail = counts.learnDue + counts.revDue + counts.newAvail > 0
 
   return (
     <div className="screen s-summary">
@@ -42,7 +53,7 @@ export default function Summary() {
               немедленного выхода на главную; цель не закрыта, а очередь не пуста - честно
               говорим, сколько осталось, а не молчим об этом. */}
           {r.goalReached && (
-            <div className="sum-sub">Заход закрыт: цель дня выполнена</div>
+            <div className="sum-sub">{moreAvail ? 'Заход закрыт: цель дня выполнена' : 'Заход закрыт: цель дня выполнена, раздел на сегодня закрыт'}</div>
           )}
           {!r.goalReached && !r.queueEmpty && (
             <div className="sum-sub">До цели ещё {toGoal} упражнений</div>
@@ -73,7 +84,7 @@ export default function Summary() {
             <div className="tile-body"><Timer size={16} />{mm}:{String(ss).padStart(2, '0')}</div>
           </div>
         </div>
-        {r.goalReached ? (
+        {r.goalReached && moreAvail ? (
           <>
             <button className="btn btn-green btn-lg" onClick={() => startLesson(app.sessionSection, false, false)}>Ещё заход</button>
             <button className="btn btn-lg" onClick={() => setScreen('home')}>На главную</button>
