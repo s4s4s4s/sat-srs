@@ -1823,7 +1823,47 @@ function overdueCorpusChecks(): void {
       `вне финального окна порядок обязан остаться прежним (по due), получили «${withCorpus[0].view.slug}»`)
   }
 
+  // ---- H1: переполнение сравнивается с reviewCap, а не с dayLeft --------------
+  {
+    /* Первый урок дня финальной недели: dayLeft = MAX_REVIEW_PER_DAY (180), никто
+       сегодня ещё не отвечал, значит reviewCap = MAX_REVIEW_PER_LESSON (60). 100
+       просроченных больше reviewCap (60), но меньше dayLeft (180) - старое условие
+       `overdue.length > dayLeft` держало overflow ложным, и срез уходил по чистому
+       due без корпусного веса, хотя урочный потолок всё равно резал 40 карточек. */
+    const N = 100
+    const колода: CardView[] = Array.from({ length: N }, (_, i) => reviewCardAt(`просрочка${i + 1}`, финал, N - i))
+    const позиция70 = колода[69] // 70-е место по due (просрочка70, daysLate = 31)
+    assert(позиция70.slug === 'просрочка70', `сетап: 70-е место обязано быть просрочка70, получили ${позиция70.slug}`)
+    const hitsH1: Record<string, number> = { просрочка70: 1000 }
+    const corpusHitsH1 = (slug: string) => hitsH1[slug] ?? 0
+
+    const withCorpus = buildQueue(колода, 0, финал, undefined, new Set(), corpusHitsH1)
+      .filter(i => i.fsrs.state === State.Review)
+    assert(withCorpus.length === MAX_REVIEW_PER_LESSON,
+      `предпосылка: урочный потолок режет до ${MAX_REVIEW_PER_LESSON}, получили ${withCorpus.length}`)
+    assert(withCorpus.some(i => i.view.slug === 'просрочка70'),
+      'H1: 100 overdue > reviewCap (60) при dayLeft 180 обязаны считаться переполнением - карточка с корпусным весом с 70-го места по due обязана попасть в срез')
+
+    // обратный контроль: та же нагрузка, но фаза не final - порядок остаётся по due,
+    // корпусный вес не должен вытащить 70-е место наверх
+    const интейк = new Date(2026, 7, 1, 10, 0, 0) // 01.08.2026 - задолго до любого стопа ввода
+    assert(phase(интейк) === 'intake', 'предпосылка: 01.08 обязан быть фазой intake')
+    const колодаИнтейк: CardView[] = Array.from({ length: N }, (_, i) => reviewCardAt(`просрочка${i + 1}`, интейк, N - i))
+    const withCorpusIntake = buildQueue(колодаИнтейк, 0, интейк, undefined, new Set(), corpusHitsH1)
+      .filter(i => i.fsrs.state === State.Review)
+    const withoutCorpusIntake = buildQueue(колодаИнтейк, 0, интейк).filter(i => i.fsrs.state === State.Review)
+    assert(!withCorpusIntake.some(i => i.view.slug === 'просрочка70'),
+      'в фазе intake переполнение не пересортировывает срез корпусным весом - 70-е место по due в него не попадает')
+    const setOfIntake = (q: StudyItem[]) => q.map(i => i.view.slug).sort().join(',')
+    assert(setOfIntake(withCorpusIntake) === setOfIntake(withoutCorpusIntake),
+      `в фазе intake corpusHits не должен менять состав среза, получили ${setOfIntake(withCorpusIntake)} vs ${setOfIntake(withoutCorpusIntake)}`)
+    const ожидаемыеТоп60 = Array.from({ length: MAX_REVIEW_PER_LESSON }, (_, i) => `просрочка${i + 1}`).sort().join(',')
+    assert(setOfIntake(withCorpusIntake) === ожидаемыеТоп60,
+      `в фазе intake срез обязан остаться первыми ${MAX_REVIEW_PER_LESSON} по due (просрочка1..${MAX_REVIEW_PER_LESSON}), получили ${setOfIntake(withCorpusIntake)}`)
+  }
+
   console.log('  ✓ K2: overdue при переполнении в финальном окне весится корпусом, вне окна и ниже потолка - прежнее поведение')
+  console.log('  ✓ H1: переполнение считается против reviewCap, а не dayLeft - потолок урока (60 из 180) уже переполнение')
   passed++
 }
 
@@ -2043,6 +2083,40 @@ function leechCapChecks(): void {
     `следующий урок подхватывает отложенных пиявок целиком: ожидали ${отложенные.length}, получили ${пиявокВОчереди2.length}`)
 
   console.log(`  ✓ C13: buildQueue берёт не больше ${MAX_LEECH_PER_LESSON} вернувшихся пиявок за урок, остальные ждут своей очереди`)
+  passed++
+
+  /* H2 (05.09.2026): потолок стоит на ПЕРВОМ показе после карантина, а не на любом
+     вернувшемся. Карантин истёк у всех ('later' карточка не в inRework), но с момента
+     возврата уже был показ (last_review позже конца карантина) - такая карточка не в
+     счёт MAX_LEECH_PER_LESSON и конкурирует в общем reviewCap на равных с просрочкой. */
+  const позжеПиявка = (word: string, dueOffsetMs: number): CardView => {
+    const v = reviewCard(word, 1, dueOffsetMs)
+    v.leech = addDaysKey(сегодня, -8)
+    v.fsrs = { ...v.fsrs, last_review: new Date(BASE - 3600_000) } // конец карантина уже позади -> 'later'
+    return v
+  }
+
+  // шесть 'later' плюс одна 'first' - потолок не режет ни одной, все семь проходят
+  const шестьПозже = Array.from({ length: 6 }, (_, i) => позжеПиявка(`позже${i}`, -(i + 1) * 3600_000))
+  const однаПервая = пиявка('перваяОдна', -7200_000)
+  {
+    const колодаПозже = [...шестьПозже, однаПервая]
+    for (const v of шестьПозже) assert(leechReturned(v, now) === 'later', `сетап: карточка обязана дать 'later', получили ${leechReturned(v, now)}`)
+    assert(leechReturned(однаПервая, now) === 'first', `сетап: контрольная карточка обязана дать 'first', получили ${leechReturned(однаПервая, now)}`)
+    const очередьПозже = buildQueue(колодаПозже, 0, now)
+    assert(очередьПозже.length === колодаПозже.length,
+      `потолок MAX_LEECH_PER_LESSON не должен резать 'later': ожидали ${колодаПозже.length} карточек в уроке, получили ${очередьПозже.length}`)
+  }
+
+  // шесть 'first' - потолок режет до пяти, как и раньше
+  const шестьПервых = Array.from({ length: 6 }, (_, i) => пиявка(`перваяШесть${i}`, -(i + 1) * 3600_000))
+  {
+    const очередьШестьПервых = buildQueue(шестьПервых, 0, now)
+    assert(очередьШестьПервых.length === MAX_LEECH_PER_LESSON,
+      `потолок MAX_LEECH_PER_LESSON режет 'first' до ${MAX_LEECH_PER_LESSON}, получили ${очередьШестьПервых.length}`)
+  }
+
+  console.log('  ✓ H2: потолок MAX_LEECH_PER_LESSON держит только первый показ после карантина, «later» конкурирует в общем reviewCap')
 }
 
 /**
