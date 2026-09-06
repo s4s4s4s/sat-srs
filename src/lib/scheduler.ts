@@ -481,6 +481,43 @@ export function inRework(v: CardView, now: Date = new Date()): boolean {
 }
 
 /**
+ * Пиявка вернулась из карантина без переработки: карточку никто не тронул,
+ * `leech` не снят, а срок `LEECH_QUARANTINE_DAYS` истёк (`inRework` уже не держит).
+ *
+ * Замер 05.09.2026: 26 карточек с флагом съели 220 оценок из 455 с 20.08 (48%),
+ * а `inRework` возвращает такое слово в уроки «как есть», в том же формате
+ * `type`, который оно проваливает в 31-44% против 88% у `mc`. Слово получает
+ * не ещё один проход прежним путём, а один показ с этимологией и разводкой
+ * (`pickTask`), а до следующей попытки: только узнавание в предложении.
+ *
+ * `null`: карточка не пиявка или ещё в карантине (эти случаи ведёт `inRework`).
+ * `'first'`: карантин истёк, а `fsrs.last_review` карточки раньше конца
+ * карантина, значит с момента возврата ни одного повтора ещё не было, это он.
+ * `'later'`: с возврата уже был хотя бы один показ; отсутствие `last_review`
+ * при истёкшем карантине трактуется так же, как «ещё не было своего первого
+ * показа» (`'first'`), карточка без единого повтора после возврата не бывает
+ * пиявкой (пиявкой её делает `LEECH_REPS` оценок), но защита от неполных данных
+ * дешевле, чем скрытое исключение.
+ */
+export function leechReturned(v: CardView, now: Date = new Date()): 'first' | 'later' | null {
+  const день = (v.leech || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(день)) return null
+  if (inRework(v, now)) return null
+  const конецКарантина = addDaysKey(день, LEECH_QUARANTINE_DAYS)
+  const lastReview = v.fsrs.last_review
+  if (!lastReview) return 'first'
+  return dayKey(lastReview) < конецКарантина ? 'first' : 'later'
+}
+
+/** До скольких вернувшихся из карантина пиявок урок берёт за один заход (`buildQueue`).
+ *  Лишние не пропадают, уходят в хвост overdue и попадают в следующий вызов очереди;
+ *  счётчик «повторить» (`homeCounts`) продолжает считать их все, потому что для него
+ *  это долг, а не порция (см. комментарий к `MAX_REVIEW_PER_LESSON`). Без потолка
+ *  урок с несколькими вернувшимися пиявками разом целиком уходил бы в reveal/mc по
+ *  одному и тому же формату, не менее однообразно, чем прежний проигрыш в type. */
+export const MAX_LEECH_PER_LESSON = 5
+
+/**
  * Развёртка колоды в учебные единицы (карточка × навык).
  * prep-навык подключается, когда слово уже знакомо (recall в Review) —
  * или сразу, если prep-график уже начат (не бросаем начатое).
@@ -637,13 +674,32 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
      Самое просроченное идёт первым: чем дольше карточка ждёт, тем ближе она к
      полному забыванию. Остаток вернётся следующим уроком — в отличие от
      двухчасовой стены, которую просто закрывают. */
-  const overdue = items
+  const overdueSorted = items
     .filter(i => i.fsrs.state === State.Review && i.fsrs.due.getTime() < eod.getTime())
     .sort((a, b) => a.fsrs.due.getTime() - b.fsrs.due.getTime())
+  /* MAX_LEECH_PER_LESSON: вернувшиеся из карантина пиявки (leechReturned !== null)
+     сверх потолка в этот заход не берутся вовсе: их не трогают (ни fsrs, ни
+     leech-флаг), поэтому они остаются overdue как есть и попадут в урок
+     следующим вызовом buildQueue, как только в голове среза найдётся место.
+     Отсекать их приходится ДО среза по MAX_REVIEW_PER_LESSON/reviewsLeftToday,
+     а не полагаться на то, что общий потолок урока их обрежет сам: колода
+     может быть меньше урочного потолка (29 повторов при лимите 60), и тогда
+     без явного отсечения все девять вернувшихся пиявок попали бы в один урок
+     разом. Без потолка урок с пятью и более такими пиявками превращался бы
+     в один и тот же формат подряд. */
+  let вернувшихсяВзято = 0
+  const overdue: StudyItem[] = []
+  for (const i of overdueSorted) {
+    if (leechReturned(i.view, now) !== null) {
+      if (вернувшихсяВзято >= MAX_LEECH_PER_LESSON) continue
+      вернувшихсяВзято++
+    }
+    overdue.push(i)
+  }
   /* Урочный и дневной потолки решают разные задачи, поэтому их два.
-     Урочный (MAX_REVIEW_PER_LESSON) — про длину одного захода: 60 повторов ≈
-     12–15 минут, урок такой длины начинают. Дневной (MAX_REVIEW_PER_DAY) — про
-     сутки целиком: без него второй урок выдавал ещё до 60 повторов, третий ещё,
+     Урочный (MAX_REVIEW_PER_LESSON): про длину одного захода: 60 повторов,
+     это 12-15 минут, урок такой длины начинают. Дневной (MAX_REVIEW_PER_DAY):
+     про сутки целиком, без него второй урок выдавал ещё до 60 повторов, третий ещё,
      и защиты от лавины просрочки на уровне дня не было вовсе. */
   const review = shuffle(overdue.slice(0, Math.min(MAX_REVIEW_PER_LESSON, reviewsLeftToday(items, now))))
 
@@ -904,8 +960,8 @@ export function holdExerciseToNextDay(next: FsrsCard, now: Date, kind: string): 
  * `typing` остаётся, но теперь включён по умолчанию и означает «участвует ли ввод
  * в ротации».
  */
-export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false): Format {
-  return pickTask(item, deck, introduced, lapsed, reintroAllowed, typing).format
+export function pickFormat(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false, now: Date = new Date()): Format {
+  return pickTask(item, deck, introduced, lapsed, reintroAllowed, typing, now).format
 }
 
 /** По чему вспоминаем: пропуск в предложении, значение (ответ — слово) или слово (ответ — значение). */
@@ -1158,22 +1214,39 @@ export function meaningDistractors(card: CardView, deck: CardView[], n = 3): str
 }
 
 /** Формат и цель показа вместе: Review.tsx рисует по паре, тесты проверяют пару. */
-export function pickTask(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false): { format: Format; cue: Cue } {
+export function pickTask(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false, now: Date = new Date()): { format: Format; cue: Cue } {
   const format = baseFormat(item, deck, introduced, lapsed, reintroAllowed, typing)
   if (format !== 'mc' && format !== 'type') return { format, cue: 'sentence' }
-  // авторские варианты (error/grammar) и числовой ответ (math) — своя механика, ротации нет
+  // авторские варианты (error/grammar) и числовой ответ (math): своя механика, ротации нет
   if (item.view.choices.length >= 2 || item.view.answerNum) return { format, cue: 'sentence' }
   /* Ротацию открывает второй повтор, а не переход в Review.
      Раньше здесь стояло только `state !== Review`, и на выросшей колоде это
      молча выключило производство. В learning `baseFormat` отдаёт mc, пока в
-     колоде находятся три дистрактора, — а находятся они всегда, — так что
+     колоде находятся три дистрактора, а находятся они всегда, так что
      ветка `type` внизу baseFormat достижима лишь на крошечной колоде.
-     Замер журнала: в июле, пока колода была мала, 274 показа вводом; 20.08 —
+     Замер журнала: в июле, пока колода была мала, 274 показа вводом; 20.08:
      три, и все три у карточек в Review. Слово, застрявшее в learning, ученик
-     десять раз узнавал среди четырёх вариантов и ни разу не вспоминал сам —
+     десять раз узнавал среди четырёх вариантов и ни разу не вспоминал сам,
      ровно эти слова и оказались пиявками. Узнавание с подсказкой не готовит к
      экзамену, где подсказки нет. */
   if (item.fsrs.state !== State.Review && item.fsrs.reps < ROTATE_FROM_REPS) return { format, cue: 'sentence' }
+
+  /* WS3 (05.09.2026): пиявка, вернувшаяся из карантина без переработки, спрашивается
+     не общей ротацией REVIEW_CYCLE, а экзаменационным путём: первый показ после
+     возврата, «слово вернулось из карантина», рисует Review.tsx с корнем и разводкой
+     по confusables (reveal/sentence), а дальше, до ближайшей попытки, только
+     узнавание в предложении (mc/sentence, откат через degrade при нехватке
+     дистракторов), никогда обратно в type, который эти слова и проваливали.
+     Ветка активна, пока до ближайшей попытки есть время: после WS1 (даты
+     планировщика как функция nextAttempt) условие стоит на phase(now), а не
+     на отдельной константе PRIMARY_DATE. Так после любой попытки, не только
+     первой, слово возвращается в обычную ротацию. */
+  if (phase(now) !== 'between') {
+    const returned = leechReturned(item.view, now)
+    if (returned === 'first') return { format: 'reveal', cue: 'sentence' }
+    if (returned === 'later') return degrade({ format: 'mc', cue: 'sentence' }, item, deck, typing)
+  }
+
   const step = REVIEW_CYCLE[((item.fsrs.reps % REVIEW_CYCLE.length) + REVIEW_CYCLE.length) % REVIEW_CYCLE.length]
   return degrade(step, item, deck, typing)
 }

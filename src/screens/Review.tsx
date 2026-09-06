@@ -4,7 +4,7 @@ import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJo
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, typedTwin, suggestedGrade, skeletonHint, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP,
+  pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, typedTwin, suggestedGrade, skeletonHint, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP, leechReturned,
   blankPhrase, blankSentence, markGlosses,
   type TypeVerdict,
   newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
@@ -908,6 +908,12 @@ export default function Review() {
   const card = task.item.view
   const isPrep = task.format === 'prep'
   const isIntro = task.format === 'intro'
+  /* WS3 (05.09.2026): первый показ вернувшейся из карантина пиявки идёт форматом
+     reveal (pickTask), и только здесь, экран поднимает корень и разводку
+     по confusables вместо десятого прохода тем же путём, которым слово уже
+     доказало, что не лечится. Полосу «Пропустить» текущего дня не задевает:
+     leechReturned читает только флаг и даты карточки, formatу не перечит. */
+  const isLeechFirstShow = task.format === 'reveal' && leechReturned(card, new Date()) === 'first'
   // переznakomство: слово не смогли вспомнить («Заново») — то же окно, подпись «Подзабылось».
   // Ловим и внутрисессионный провал (lapsed, на любой стадии), и приход в Relearning из прошлой сессии.
   const isReintro = isIntro && (lapsed.current.has(itemKey(task.item)) || task.item.fsrs.state === State.Relearning)
@@ -1127,6 +1133,13 @@ export default function Review() {
             {!isPrep && card.explain && <div className="rev-explain"><Tex text={card.explain} /></div>}
             {card.leech && <div className="leech-note">Пиявка — слово сопротивляется: тьютор переформулирует карточку</div>}
             {!isPrep && card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
+            {isLeechFirstShow && (card.roots || card.confusables.length > 0) && (
+              <div className="leech-returned">
+                <div className="leech-returned-label">Слово вернулось из карантина</div>
+                {card.roots && <div className="rev-roots"><Sprout size={16} /> корень: {card.roots}</div>}
+                {card.confusables.length > 0 && <div className="rev-confusables">не путать: {card.confusables.join(', ')}</div>}
+              </div>
+            )}
             {why?.open && (
               <div className="why-panel" ref={whyRef}>
                 <div className="why-title">Почему так</div>

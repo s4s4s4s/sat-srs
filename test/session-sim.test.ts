@@ -23,7 +23,7 @@ import {
   pickTask, meaningDistractors, REVIEW_CYCLE, ROTATE_FROM_REPS, NEW_STOP_DATE, kindRank, expandItems, freshItems, markGlosses,
   NEW_STOP_BY_SECTION, newIntroAllowed, nextAttempt, dueCap, phase, effectiveRetention, PRIMARY_DATE, EXAM_DATE,
   homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal,
-  MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS
+  MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS, leechReturned, MAX_LEECH_PER_LESSON
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, INTRO_GAP_FLOOR_MS, type OrderCtx } from '../src/lib/session'
 import { screenSource } from './screen-source'
@@ -1759,6 +1759,104 @@ function leechQuarantineChecks(): void {
 }
 
 /**
+ * C13 (05.09.2026): пиявка, вернувшаяся из карантина без переработки, спрашивается
+ * не общей ротацией REVIEW_CYCLE, а экзаменационным путём.
+ *
+ * leechReturned живёт рядом с inRework: та же дата leech, то же
+ * LEECH_QUARANTINE_DAYS, но по другую сторону границы. Три исхода:
+ * ещё в карантине (null, ведёт inRework), первый показ после возврата
+ * ('first') и все следующие до ближайшей попытки ('later'). pickTask
+ * превращает их в reveal с корнем и разводкой (первый показ) и mc/sentence
+ * (Words in Context) дальше, но никогда обратно в type, формат, который
+ * эти же слова и провалили 31-44% раз против 88% у mc (замер 05.09).
+ */
+function leechReturnedChecks(): void {
+  const now = new Date(BASE)
+  const сегодня = dayKey(now)
+  // соседи по колоде нужны только ради трёх дистракторов у mcDistractors, сами не пиявки
+  const соседи = ['сосед1', 'сосед2', 'сосед3', 'сосед4'].map(w => reviewCard(w))
+
+  // первый показ после возврата: карантин истёк, но ни одного повтора с момента возврата не было
+  const первая: CardView = reviewCard('attribute', 1, -3600_000)
+  первая.leech = addDaysKey(сегодня, -8)
+  первая.fsrs = { ...первая.fsrs, last_review: new Date(BASE - 9 * 86400_000) }
+  assert(leechReturned(первая, now) === 'first',
+    `пиявка вне карантина без повторов после возврата обязана дать 'first', получили ${leechReturned(первая, now)}`)
+  const итемПервая: StudyItem = { view: первая, skill: 'recall', fsrs: первая.fsrs }
+  const задачаПервая = pickTask(итемПервая, [первая, ...соседи], undefined, undefined, true, false, now)
+  assert(задачаПервая.format === 'reveal' && задачаПервая.cue === 'sentence',
+    `первый показ вернувшейся пиявки обязан быть reveal/sentence, получили ${задачаПервая.format}/${задачаПервая.cue}`)
+
+  // после этого показа (last_review сегодня) даёт 'later', и pickTask больше не отдаёт reveal
+  const позже: CardView = { ...первая, fsrs: { ...первая.fsrs, last_review: new Date(now) } }
+  assert(leechReturned(позже, now) === 'later',
+    `после первого показа после возврата пиявка обязана дать 'later', получили ${leechReturned(позже, now)}`)
+  const итемПозже: StudyItem = { view: позже, skill: 'recall', fsrs: позже.fsrs }
+  const задачаПозже = pickTask(итемПозже, [позже, ...соседи], undefined, undefined, true, false, now)
+  assert(задачаПозже.format === 'mc' && задачаПозже.cue === 'sentence',
+    `дальнейшие показы вернувшейся пиявки обязаны быть mc/sentence (Words in Context), получили ${задачаПозже.format}/${задачаПозже.cue}`)
+  assert(задачаПозже.format !== 'type',
+    'вернувшаяся пиявка до ближайшей попытки не должна получать type, формат, который она и проваливала')
+
+  // внутри карантина - null, существующая проверка на LEECH_QUARANTINE_DAYS остаётся зелёной
+  const вКарантине: CardView = { ...первая, leech: addDaysKey(сегодня, -3) }
+  assert(leechReturned(вКарантине, now) === null,
+    `карточка внутри карантина не считается «вернувшейся», получили ${leechReturned(вКарантине, now)}`)
+  assert(expandItems([вКарантине], now).length === 0,
+    'внутри карантина карточка не даёт учебных единиц, держит inRework, LEECH_QUARANTINE_DAYS не тронут')
+
+  console.log('  ✓ C13: первый показ вернувшейся пиявки - reveal/sentence, дальше mc/sentence, в карантине - null')
+  passed++
+}
+
+/**
+ * C13: MAX_LEECH_PER_LESSON ограничивает урок пятью вернувшимися пиявками разом,
+ * без потолка урок с девятью такими карточками превращался бы в один и тот же
+ * формат подряд. Лишние не выбывают из колоды и из счётчика «повторить»
+ * (homeCounts): они просто ждут места в следующем уроке.
+ */
+function leechCapChecks(): void {
+  const now = new Date(BASE)
+  const сегодня = dayKey(now)
+  const пиявка = (word: string, dueOffsetMs: number): CardView => {
+    const v = reviewCard(word, 1, dueOffsetMs)
+    v.leech = addDaysKey(сегодня, -8)
+    v.fsrs = { ...v.fsrs, last_review: new Date(BASE - 9 * 86400_000) } // все 'first'
+    return v
+  }
+  const пиявки = Array.from({ length: 9 }, (_, i) => пиявка(`пиявка${i}`, -(i + 1) * 3600_000))
+  const обычные = Array.from({ length: 20 }, (_, i) => reviewCard(`долг${i}`, 1, -(i + 1) * 7200_000))
+  const колода = [...пиявки, ...обычные]
+
+  const очередь1 = buildQueue(колода, 0, now)
+  const пиявокВОчереди1 = очередь1.filter(i => leechReturned(i.view, now) !== null)
+  assert(пиявокВОчереди1.length === MAX_LEECH_PER_LESSON,
+    `урок берёт не больше MAX_LEECH_PER_LESSON (${MAX_LEECH_PER_LESSON}) вернувшихся пиявок за раз, получили ${пиявокВОчереди1.length}`)
+  assert(очередь1.length === обычные.length + MAX_LEECH_PER_LESSON,
+    `в урок вошли все обычные просроченные плюс потолок пиявок, получили ${очередь1.length} вместо ${обычные.length + MAX_LEECH_PER_LESSON}`)
+
+  assert(homeCounts(колода, 0, now).revDue === колода.length,
+    `«повторить» на главном считает весь долг, включая отложенных пиявок: ${homeCounts(колода, 0, now).revDue} вместо ${колода.length}`)
+
+  // отложенные пиявки не выбыли из колоды, они просто не попали в этот урок
+  const слаги1 = new Set(очередь1.map(i => i.view.slug))
+  const отложенные = пиявки.filter(p => !слаги1.has(p.slug))
+  assert(отложенные.length === пиявки.length - MAX_LEECH_PER_LESSON,
+    `отложенных пиявок обязано остаться ${пиявки.length - MAX_LEECH_PER_LESSON}, получили ${отложенные.length}`)
+
+  // как только пять взятых пиявок обработаны в отдельном уроке (ушли из состава колоды на
+  // повторную выборку), следующий вызов buildQueue подхватывает оставшихся четверых
+  const колодаБезВзятых = колода.filter(v => !(v.leech && слаги1.has(v.slug)))
+  const очередь2 = buildQueue(колодаБезВзятых, 0, now)
+  const пиявокВОчереди2 = очередь2.filter(i => leechReturned(i.view, now) !== null)
+  assert(пиявокВОчереди2.length === отложенные.length,
+    `следующий урок подхватывает отложенных пиявок целиком: ожидали ${отложенные.length}, получили ${пиявокВОчереди2.length}`)
+
+  console.log(`  ✓ C13: buildQueue берёт не больше ${MAX_LEECH_PER_LESSON} вернувшихся пиявок за урок, остальные ждут своей очереди`)
+  passed++
+}
+
+/**
  * B2 (S4): обязательная отработка введённого сегодня стоит в очереди РАНЬШЕ новых слов.
  *
  * `buildQueue` возвращала `[...learning, ...mixed, ...drills]`, то есть добор шёл последним
@@ -2028,6 +2126,8 @@ function main(): void {
   tomorrowCountChecks()
   dailyReviewCapChecks()
   leechQuarantineChecks()
+  leechReturnedChecks()
+  leechCapChecks()
 
   console.log(`\nВсе проверки пройдены (${passed} групп).`)
 }
