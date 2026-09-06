@@ -310,11 +310,35 @@ function wordListScreenChecks(): void {
   group('WordList.tsx: отбор и счётчики идут через wordstatus.ts, подписи из STAGE_LABEL, есть aria-label')
 }
 
-/** Вход на экран с главной — кнопка `setScreen('words')` в Home.tsx. */
+/** Вход на экран с главной - кнопка `setScreen('words')` в Home.tsx. */
 function homeHasWordsEntryChecks(): void {
   const src = screenSource('Home.tsx')
   assert(src.includes("setScreen('words')"), 'Home.tsx обязан содержать переход на экран списка слов (setScreen(\'words\'))')
   group('Home.tsx: вход на экран списка слов существует')
+}
+
+/**
+ * Структура главного экрана: порядок блоков разделов дня обязан идти из `dayplan.ts`
+ * (WS6b), а не быть вписан на экране числами. Задача та же, что у `wordListScreenChecks`
+ * выше - не дать экрану завести вторую версию правил рядом с общим модулем.
+ */
+function homeUsesDayplanChecks(): void {
+  const src = screenSource('Home.tsx')
+
+  assert(src.includes("from '../lib/dayplan'"), 'Home.tsx обязан импортировать план дня из lib/dayplan')
+  assert(src.includes('sectionOrder(') || src.includes('nextSection('),
+    'порядок блоков раздела обязан браться из dayplan.ts (sectionOrder/nextSection), а не вычисляться на экране')
+
+  // веса RW (RW_WEIGHTS в dayplan.ts) не должны быть задублированы литералом на экране
+  for (const literal of ['13/54', '26/54', '12/54']) {
+    assert(!src.includes(literal), `вес раздела «${literal}» обязан жить в RW_WEIGHTS (dayplan.ts), а не литералом в экране`)
+  }
+
+  // норма ввода по разделу (NEW_PER_DAY_BY_SECTION/newPerDay в norms.ts) не должна читаться напрямую из старой общей нормы
+  assert(!src.includes('NEW_PER_DAY.norm'), 'Home.tsx не должен читать NEW_PER_DAY.norm - норма своя у раздела, см. newPerDay в norms.ts')
+  assert(!src.includes('NEW_PER_DAY.max'), 'Home.tsx не должен читать NEW_PER_DAY.max - норма своя у раздела, см. newPerDay в norms.ts')
+
+  group('Home.tsx: порядок блоков идёт из dayplan.ts, веса RW и общая норма NEW_PER_DAY не задублированы литералом')
 }
 
 function main(): void {
@@ -331,6 +355,7 @@ function main(): void {
   stageLabelChecks()
   wordListScreenChecks()
   homeHasWordsEntryChecks()
+  homeUsesDayplanChecks()
   console.log(`\nВсе проверки статуса слова пройдены (${passed} групп).`)
 }
 

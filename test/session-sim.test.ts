@@ -22,7 +22,7 @@ import {
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
   pickTask, meaningDistractors, REVIEW_CYCLE, ROTATE_FROM_REPS, NEW_STOP_DATE, kindRank, expandItems, freshItems, markGlosses,
   NEW_STOP_BY_SECTION, newIntroAllowed, nextAttempt, dueCap, phase, effectiveRetention, PRIMARY_DATE, EXAM_DATE,
-  homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal,
+  homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal, type Section,
   MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS, leechReturned, MAX_LEECH_PER_LESSON
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, INTRO_GAP_FLOOR_MS, REINTRO_PER_LESSON, type OrderCtx } from '../src/lib/session'
@@ -31,6 +31,7 @@ import { lessonProgress, estimateShowsLeft, DRILL_PER_SESSION, type ProgressInpu
 import { endOfStudyDay, dayKey, addDaysKey } from '../src/lib/daytime'
 import { sessionAccuracy, matureRetention, forcedTodaySlugs, CARD_TIME_CAP_MS, liveMarkedLemmas } from '../src/lib/journal'
 import { isLeech, LEECH_REPS, LEECH_STABILITY_DAYS, SECTION_LABELS, speedStats } from '../src/lib/metrics'
+import { newPerDay } from '../src/lib/norms'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
 const RETENTION = 0.9
@@ -2367,6 +2368,7 @@ function main(): void {
   knownWordChecks()
   logicSectionChecks()
   sectionBudgetChecks()
+  perSectionNormBudgetChecks()
   fillerChecks()
   summaryChecks()
   dontKnowChecks()
@@ -2553,6 +2555,52 @@ function sectionBudgetChecks() {
   assert(newBudgetFor(слова, 3, журнал, '2026-08-22') === 3, 'вчерашние вводы не занимают сегодняшнюю норму')
 
   console.log('  ✓ дневной лимит новых считается по разделу, а не одним котлом на колоду')
+  passed++
+}
+
+/**
+ * `newBudgetTotal` со СВОЕЙ нормой у каждого раздела (WS6b: `perDay` принимает функцию
+ * от раздела, `norms.ts::newPerDay`, а не только число).
+ *
+ * Числа фикстуры подобраны так, чтобы результат с функцией и с числом РАЗЛИЧАЛСЯ:
+ * при общей норме 3 «Грамматика» (6 новых) срезается той же тройкой, что и «Слова», а со
+ * своей нормой (`newPerDay('grammar','norm')` = 8) забирает все 6: норма выше просто
+ * потому, что раздел меньше нагружен, а не потому, что где-то в тесте задублировано число.
+ */
+function perSectionNormBudgetChecks(): void {
+  const день = '2026-08-25'
+  const слова = [newCard('kappa'), newCard('lambda'), newCard('mu'), newCard('nu'), newCard('xi')] // 5 новых
+  const грамматика = [
+    baseView('comma-splice', 1, 'grammar'), baseView('dangling-mod', 1, 'grammar'),
+    baseView('subj-verb', 1, 'grammar'), baseView('parallelism', 1, 'grammar'),
+    baseView('apostrophe', 1, 'grammar'), baseView('colon-use', 1, 'grammar')
+  ] // 6 новых
+  const математика = [baseView('parabola', 1, 'math')] // 1 новая
+  const логика: CardView[] = [] // 0 новых
+  const все = [...слова, ...грамматика, ...математика, ...логика]
+
+  assert(newPerDay('rw', 'norm') === 3 && newPerDay('grammar', 'norm') === 8 && newPerDay('math', 'norm') === 8,
+    'предпосылка: нормы взяты из norms.ts::NEW_PER_DAY_BY_SECTION, а не задублированы числом в тесте')
+
+  const perDayFn = (s: Section) => newPerDay(s, 'norm')
+
+  // с функцией: слагаемое раздела - min(новых в разделе, newBudgetFor(раздел, newPerDay(раздел, 'norm'), ...))
+  assert(newBudgetTotal(все, perDayFn, [], день) === 3 + 6 + 1 + 0,
+    'функция perDay: у каждого раздела своя норма, слагаемое - min(норма раздела, новых в разделе)')
+
+  // журнал уже забрал часть нормы словаря сегодня - остаток словаря падает, у остальных разделов норма своя и не трогается
+  const журналСлов: JournalLine[] = слова.slice(0, 2).map(v => ({
+    id: v.slug, type: 'review', ts: `${день}T09:00:00+04:00`, day: день,
+    slug: v.slug, skill: 'recall', prev_state: State.New
+  }))
+  assert(newBudgetTotal(все, perDayFn, журналСлов, день) === 1 + 6 + 1 + 0,
+    'функция perDay: журнал списывает норму только у своего раздела, у остальных норма не меняется')
+
+  // с числом остаётся прежнее поведение - одна норма на все разделы без учёта таблицы norms.ts
+  assert(newBudgetTotal(все, 3, [], день) === 3 + 3 + 1 + 0,
+    'число perDay: прежнее поведение сохранено, min(3, новых) по каждому разделу')
+
+  console.log('  ✓ newBudgetTotal с функцией perDay считает свою норму по разделу (norms.ts), с числом - прежнее поведение')
   passed++
 }
 
