@@ -160,7 +160,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   out.push('## Прогресс к экзамену', '')
   const stopsStr = SECTIONS.map(s2 => `${SECTION_LABELS[s2]} ${ddmm(NEW_STOP_BY_SECTION[s2])}`).join(' · ')
   out.push(`> Цель (с 17.08.2026): довести **${TARGET_REVIEW}** карточек до состояния review, коридор 250-300, и сделать **${TARGET_MATURE}+** из них зрелыми (стабильность ≥ ${MATURE_STABILITY_DAYS} дн) к ближайшей попытке ${ddmm(attempt)}. Ввод новых закрывается у каждого раздела своей датой (A8): ${stopsStr}; последний рабочий день ввода - накануне, дальше только дозревание введённого. Потолок сроков на сегодня: ${ddmm(dueCapNow)}.`, '')
-  out.push(`- В review: **${mat.reviewCount} из ${TARGET_REVIEW}** · зрелых (стаб.≥${MATURE_STABILITY_DAYS}дн): **${mat.matureCount} из ${TARGET_MATURE}** · медианная стабильность ${mat.medianStability} дн`)
+  out.push(`- В review (словарные карточки, числитель цели): **${mat.reviewCount} из ${TARGET_REVIEW}** · зрелых (стаб.≥${MATURE_STABILITY_DAYS}дн): **${mat.matureCount} из ${TARGET_MATURE}** · медианная стабильность ${mat.medianStability} дн`)
   out.push(pc.verdict === 'closed'
     ? `- Ввод новых закрыт с ${ddmm(NEW_STOP_DATE)}: добор объёма окончен, темп ввода больше не считается`
     : `- Ввод новых закрывается ${ddmm(NEW_STOP_DATE)}: довести ещё **${pc.remaining}** · нужно **+${pc.neededPerDay}/день** (осталось ${pc.daysLeft} дн ввода) · **${verdictStr}**`)
@@ -209,7 +209,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   out.push('')
 
   out.push('## Сводка', '')
-  out.push(`- Слов: **${active.length}** (new ${byState.new} · learning ${byState.learning} · review ${byState.review}) · prep-навыков: ${prepCount}${brokenCount ? ` · битых файлов: ⚠️ ${brokenCount}` : ''}`)
+  out.push(`- Слов: **${active.length}** (new ${byState.new} · learning ${byState.learning} · review ${byState.review}; здесь все разделы и prep, поэтому review больше словарного числа из «Прогресса») · prep-навыков: ${prepCount}${brokenCount ? ` · битых файлов: ⚠️ ${brokenCount}` : ''}`)
   const actLv = activeLevel(active)
   const lvStats = levelStats(active)
   const curLv = lvStats.find(s => s.level === actLv)
