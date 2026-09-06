@@ -747,6 +747,14 @@ body::before {
 }
 .type-input:focus { border-color: var(--blue); background: var(--surface); box-shadow: 0 0 0 3px var(--ring); }
 
+/* C12: скелет слова над полем ввода (моноширинный - точки должны стоять ровным шагом,
+   иначе «c...i...e» читается не как форма слова, а как случайная рябь) и строка первого промаха */
+.type-skeleton {
+  margin-bottom: 8px; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 21px; font-weight: 800; letter-spacing: 3px; color: var(--text-strong);
+}
+.type-retry { margin-bottom: 8px; text-align: center; font-size: 13px; font-weight: 600; color: var(--text-faint); }
+
 .grades { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .grade-btn { padding: 11px 4px 9px; font-size: 14px; letter-spacing: .1px; flex-direction: column; gap: 2px; box-shadow: none; }
 .grade-btn .iv { display: block; font-size: 11px; font-weight: 500; letter-spacing: 0; opacity: .8; font-variant-numeric: tabular-nums; white-space: nowrap; }

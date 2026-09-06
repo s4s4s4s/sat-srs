@@ -1,6 +1,7 @@
 import { State } from 'ts-fsrs'
 import type { CardView, Format, StudyItem } from './types'
 import { pickFormat, itemKey, MIN_SHOW_GAP_MS, MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, NEW_GAP } from './scheduler'
+import type { TypeVerdict } from './scheduler'
 
 /**
  * Выбор следующего экрана сессии — чистая логика, без React и IndexedDB (её же гоняет
@@ -281,4 +282,32 @@ export function pickNext(list: StudyItem[], ctx: OrderCtx, opts: PickOpts = {}):
  */
 export function pickNextIndex(list: StudyItem[], ctx: OrderCtx): number {
   return pickNext(list, ctx).idx
+}
+
+/**
+ * C12 («ввод с подсказкой»): что делать с попыткой ввода в формате `type`.
+ *
+ * Решение вынесено из экрана, потому что оно и есть механизм: неверный ввод перестаёт быть
+ * окончательным ровно один раз за показ, и ученик получает второй заход - со скелетом слова
+ * (`skeletonHint`) или без него. Значения:
+ *   `retry`   - показ НЕ закрывается: попытка была первой и подсказку ещё не открывали;
+ *   `wrong`   - показ закрывается провалом (вторая мимо, либо мимо уже со скелетом);
+ *   `correct` - вспомнил сам (первая попытка либо вторая, но без подсказки);
+ *   `cued`    - вспомнил со скелета: слово поднято не с нуля, оценка Hard (`suggestedGrade`).
+ * `typo` и `twin` проходят насквозь: это не промах, а особый исход проверки ввода, и второго
+ * захода он не требует - показ закрывается сразу.
+ *
+ * `attempt` - номер ТЕКУЩЕЙ попытки, считая с единицы.
+ *
+ * Вызывающий обязан отсеять числовой ответ (`answerNum`): скелет цифр подсказкой не является,
+ * и второй попытки там нет - см. вызов в `screens/Review.tsx`.
+ */
+export type ObjectiveOutcome = TypeVerdict | 'retry'
+
+export function objectiveOutcome(
+  { attempt, hintUsed, verdict }: { attempt: number; hintUsed: boolean; verdict: TypeVerdict }
+): ObjectiveOutcome {
+  if (verdict === 'correct') return hintUsed ? 'cued' : 'correct'
+  if (verdict !== 'wrong') return verdict
+  return attempt <= 1 && !hintUsed ? 'retry' : 'wrong'
 }

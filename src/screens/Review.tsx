@@ -9,7 +9,7 @@ import {
   type TypeVerdict,
   newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue
 } from '../lib/scheduler'
-import { pickNext, hasSeparator, screenFormat, isGiveUp, REINTRO_PER_LESSON, type OrderCtx } from '../lib/session'
+import { pickNext, hasSeparator, screenFormat, isGiveUp, objectiveOutcome, REINTRO_PER_LESSON, type OrderCtx } from '../lib/session'
 import { lessonProgress, DRILL_PER_SESSION } from '../lib/progress'
 import Tex from '../components/Tex'
 import Markable from '../components/Markable'
@@ -643,10 +643,15 @@ export default function Review() {
    * C12: раскрыть ступенчатую подсказку (skeletonHint) поверх ввода. Доступна только
    * после первой неверной попытки, ровно один раз на показ: сама кнопка исчезает,
    * как только подсказка раскрыта (условие в разметке ниже - attempts >= 1 && !hintUsed).
+   *
+   * Раскрытие начинает задание заново: поле очищается (второй заход вводится с нуля, а не
+   * правкой промаха), скелет встаёт отдельной строкой над полем.
    */
   function applyHint() {
     if (!task || task.format !== 'type' || revealed || hintUsed || attempts < 1) return
     setHintUsed(true)
+    setTyped('')
+    inputRef.current?.focus()
   }
 
   /**
@@ -683,18 +688,21 @@ export default function Review() {
     let итог: TypeVerdict = ok === 'wrong' && вводом && !task.item.view.answerNum
       && typedTwin(value, task.item.view, deck) ? 'twin' : ok
 
-    /* C12: провал ввода перестаёт быть окончательным сам по себе. Первая неверная попытка
-       формата `type` (не typo, не twin, не числовой ответ - там скелет слова бессмыслен)
-       не закрывает показ: копится счётчик попыток, кнопка «подсказка» становится доступна
-       (см. разметку ниже), а поле остаётся открытым для повторного ввода. После того как
-       подсказка раскрыта, следующий ввод уже решает исход: верный переходит в вердикт
-       cued (оценка Hard - слово вспомнено не с нуля), неверный закрывается как обычно. */
-    if (task.format === 'type' && итог === 'wrong' && !task.item.view.answerNum && !hintUsed) {
-      setAttempts(a => a + 1)
-      setPicked(value)
-      return
+    /* C12: провал ввода перестаёт быть окончательным сам по себе, но ровно один раз за показ.
+       Решает чистая функция objectiveOutcome (lib/session.ts), здесь только её последствия:
+       `retry` - показ НЕ закрывается (копим попытку, открывается кнопка «Подсказка», под полем
+       встаёт строка «мимо, попробуйте ещё»), любой другой исход становится вердиктом показа.
+       Числовой ответ (answerNum) в механизм не входит: скелет цифр ответа не подсказывает,
+       и вторая попытка там была бы просто вторым угадыванием. */
+    if (task.format === 'type' && !task.item.view.answerNum) {
+      const исход = objectiveOutcome({ attempt: attempts + 1, hintUsed, verdict: итог })
+      if (исход === 'retry') {
+        setAttempts(a => a + 1)
+        setPicked(value)
+        return
+      }
+      итог = исход
     }
-    if (task.format === 'type' && итог === 'correct' && hintUsed) итог = 'cued'
 
     answeredMs.current = Date.now() - shownAt.current
     setPicked(value)
@@ -1094,6 +1102,18 @@ export default function Review() {
         )}
         {markError && <div className="why-err">Отметка не сохранилась: {markError}</div>}
         {!revealed && <div className="rev-task">{taskHint}</div>}
+        {/* C12: скелет слова - отдельная видимая строка, а не только placeholder. Placeholder
+            гаснет от первой же буквы и не виден на поле, в котором уже что-то набрано; ученику
+            нужен ориентир на всё время второй попытки. */}
+        {!revealed && task.format === 'type' && hintUsed && (
+          <div className="type-skeleton">{skeletonHint(task.answer)}</div>
+        )}
+        {/* C12: первый промах обязан быть виден. Без этой строки «Проверить» на неверном вводе
+            выглядит как неработающая кнопка: показ не закрывается, а на экране ничего не
+            меняется (находка ревью 06.09.2026). */}
+        {!revealed && task.format === 'type' && attempts >= 1 && !hintUsed && (
+          <div className="type-retry">Мимо - попробуйте ещё раз или откройте подсказку</div>
+        )}
         {!revealed && (task.format === 'type' || canTypeAnswer) && (
           // поле ПОД предложением: всегда видно; кнопка «Проверить» — в нижнем листе,
           // который сам поднимается над клавиатурой (см. --kb).

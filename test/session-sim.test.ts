@@ -24,9 +24,9 @@ import {
   NEW_STOP_BY_SECTION, newIntroAllowed, nextAttempt, lastAttempt, dueCap, phase, effectiveRetention, PRIMARY_DATE, EXAM_DATE,
   homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal, type Section,
   MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS, leechReturned, MAX_LEECH_PER_LESSON,
-  WARMUP_SHOWS, warmupShows, CLOSING_SHOWS, closingShow
+  WARMUP_SHOWS, warmupShows, CLOSING_SHOWS, closingShow, type TypeVerdict
 } from '../src/lib/scheduler'
-import { pickNext, hasSeparator, screenFormat, isGiveUp, INTRO_BATCH_MAX, INTRO_GAP_FLOOR_MS, REINTRO_PER_LESSON, type OrderCtx } from '../src/lib/session'
+import { pickNext, hasSeparator, screenFormat, isGiveUp, objectiveOutcome, INTRO_BATCH_MAX, INTRO_GAP_FLOOR_MS, REINTRO_PER_LESSON, type OrderCtx } from '../src/lib/session'
 import { screenSource } from './screen-source'
 import { lessonProgress, estimateShowsLeft, DRILL_PER_SESSION, type ProgressInput } from '../src/lib/progress'
 import { endOfStudyDay, dayKey, addDaysKey } from '../src/lib/daytime'
@@ -717,6 +717,63 @@ function dontKnowChecks(): void {
   assert(typeBlock.includes('attempts >= 1') && typeBlock.includes('hintUsed === false'),
     'C12: кнопка подсказки обязана рендериться по условию attempts >= 1 && hintUsed === false')
   assert(typeBlock.includes('giveUp()'), 'C12: «не помню» обязана остаться доступной рядом с подсказкой')
+
+  /* C12 (поведение): решение «что делать с попыткой ввода» вынесено в чистую функцию
+     objectiveOutcome (lib/session.ts) и проверяется таблицей, а не текстом экрана.
+     До 06.09.2026 механизм в живом сценарии не работал: ранняя ветка submitObjective
+     стояла на условии «мимо И подсказка не раскрыта» и потому возвращалась молча на
+     КАЖДОМ неверном вводе - показ не закрывался никогда, попыток было сколько угодно,
+     а верный ответ на десятой из них уезжал в FSRS как «вспомнил с нуля» (correct,
+     Good), не оставив в журнале ни cued, ни следа провалов. Таблица держит все исходы
+     сразу: механизм осмыслен только целиком. */
+  assert(objectiveOutcome({ attempt: 1, hintUsed: false, verdict: 'wrong' }) === 'retry',
+    'C12: первая неверная попытка даёт второй заход, а не закрывает показ')
+  assert(objectiveOutcome({ attempt: 2, hintUsed: false, verdict: 'wrong' }) === 'wrong',
+    'C12: вторая неверная попытка без подсказки закрывает показ провалом - иначе попытки бесконечны')
+  assert(objectiveOutcome({ attempt: 1, hintUsed: false, verdict: 'correct' }) === 'correct',
+    'C12: верная первая попытка - обычный correct')
+  assert(objectiveOutcome({ attempt: 2, hintUsed: false, verdict: 'correct' }) === 'correct',
+    'C12: вспомнил сам со второй попытки - correct: подсказки не было')
+  assert(objectiveOutcome({ attempt: 2, hintUsed: true, verdict: 'correct' }) === 'cued',
+    'C12: верный ответ после подсказки - cued, а не correct')
+  assert(objectiveOutcome({ attempt: 2, hintUsed: true, verdict: 'wrong' }) === 'wrong',
+    'C12: мимо со скелетом перед глазами - провал, третьей попытки нет')
+  assert(suggestedGrade('type', 'cued') === Rating.Hard,
+    'C12: cued оценивается Hard - слово поднято не с нуля, но и не вспомнено само')
+  for (const v of ['typo', 'twin'] as TypeVerdict[]) {
+    assert(objectiveOutcome({ attempt: 1, hintUsed: false, verdict: v }) === v,
+      `C12: ${v} проходит насквозь - это не промах, и второго захода он не требует`)
+  }
+
+  /* C12 (структура экрана): Review.tsx обязан звать objectiveOutcome и обрабатывать retry,
+     а не решать заново собственным условием - иначе таблица выше стережёт пустоту. */
+  const submitStart = источник.indexOf('function submitObjective(')
+  assert(submitStart > 0, 'C12: в Review.tsx не найдена submitObjective')
+  const submitBlock = источник.slice(submitStart, submitStart + 3000)
+  assert(/objectiveOutcome\(\{ attempt: attempts \+ 1/.test(submitBlock),
+    'C12: submitObjective обязана спрашивать objectiveOutcome о номере ТЕКУЩЕЙ попытки (attempts + 1)')
+  assert(submitBlock.includes(`=== 'retry'`),
+    'C12: submitObjective обязана обрабатывать исход retry - только он оставляет показ открытым')
+  assert(!/итог === 'wrong'[^\n]*hintUsed/.test(submitBlock),
+    'C12: вернулось условие «мимо и подсказка не раскрыта» - оно не закрывает показ никогда')
+
+  /* C12/R2: скелет слова обязан быть виден отдельным элементом, а не только placeholder.
+     Placeholder гаснет от первой введённой буквы и не виден в непустом поле: после
+     нажатия «Подсказка» на экране не менялось ничего, и кнопка выглядела мёртвой. */
+  const скелетные = источник.split('\n').filter(l => l.includes('skeletonHint(task.answer)'))
+  assert(скелетные.some(l => !l.includes('placeholder')),
+    'C12: скелет слова рисуется только в placeholder - на экране его не видно')
+  assert(источник.includes('type-retry'),
+    'C12: первый промах обязан быть виден на экране строкой - иначе «Проверить» выглядит неработающей кнопкой')
+
+  /* C12/R2: раскрытие подсказки очищает поле - вторая попытка вводится с нуля, а не
+     правкой промаха, и на экране видно, что нажатие кнопки что-то изменило. */
+  const hintStart = источник.indexOf('function applyHint(')
+  assert(hintStart > 0, 'C12: в Review.tsx не найдена applyHint')
+  const hintBlock = источник.slice(hintStart, hintStart + 600)
+  assert(hintBlock.includes(`setTyped('')`),
+    'C12: раскрытие подсказки обязано очищать поле ввода - иначе на экране не меняется ничего')
+
 
   /* Дистракторы пересобираются: авторские confusables больше не занимают всю
      четвёрку. На живой колоде confusables ровно по три у 415 карточек из 450 —
