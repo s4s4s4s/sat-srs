@@ -28,7 +28,7 @@ import { openDB } from 'idb'
 import { parseMd } from '../src/lib/yamlfm'
 import {
   parseQuestionBody, questionView, pickPractice, practiceStats, practiceBreakdown,
-  practiceDue, moduleQueue, MODULE_QUESTIONS, MODULE_SECONDS, PACE_SEC
+  practiceDue, moduleQueue, MODULE_QUESTIONS, MODULE_SECONDS, PACE_SEC, practiceSummaryLabel
 } from '../src/lib/practice'
 import { getAllCards, getAllJournal, getAllReadings, getAllQuestions, applyQuestionsPull, kvGet } from '../src/lib/db'
 import type { JournalLine, QuestionRec, QuestionView } from '../src/lib/types'
@@ -343,7 +343,30 @@ function statsChecks(): void {
 
   const empty = practiceStats([], [])
   assert(empty.total === 0 && empty.solved === 0 && empty.correct === 0 && Object.keys(empty.bySkill).length === 0,
-    'пустой набор — пустая сводка, а не деление на ноль')
+    'пустой набор - пустая сводка, а не деление на ноль')
+}
+
+/**
+ * F53: подпись кнопки блока практики, когда отвечено на весь банк. Репро судьи -
+ * 5 вопросов, все с попыткой, 2 верных: прежний экран печатал «Все вопросы решены»,
+ * хотя рядом стояло «2/5 верно».
+ */
+function summaryLabelChecks(): void {
+  assert(practiceSummaryLabel({ total: 5, solved: 3, correct: 3 }) === null,
+    'отвечено не на всё (left > 0) - подпись-итог не нужна, кнопка показывает счётчик оставшегося')
+
+  assert(practiceSummaryLabel({ total: 5, solved: 5, correct: 5 }) === 'Все вопросы решены',
+    'весь банк отвечен и все ответы верны - честное «Все вопросы решены»')
+
+  const partial = practiceSummaryLabel({ total: 5, solved: 5, correct: 2 })
+  assert(partial === 'Все вопросы пройдены, верно 2 из 5: остальные вернутся по графику повторов',
+    `репро судьи: отвечено на всё, верно только 2 из 5 - подпись обязана назвать разрыв, получено «${partial}»`)
+  assert(partial !== 'Все вопросы решены', 'подпись «Все вопросы решены» запрещена, когда среди ответов есть неверные')
+
+  assert(practiceSummaryLabel({ total: 0, solved: 0, correct: 0 }) === 'Все вопросы решены',
+    'пустой банк формально «весь решён» - тем же правилом (correct === total), экран отдельно проверяет total === 0 сам')
+
+  group('practiceSummaryLabel: «решены» только при correct === total, иначе честный разрыв (F53)')
 }
 
 // ---- разрезы сверх practiceStats (сложность, неделя, время) -----------------
@@ -493,6 +516,7 @@ async function main(): Promise<void> {
   retryScheduleChecks()
   moduleChecks()
   statsChecks()
+  summaryLabelChecks()
   breakdownChecks()
   await dbMigrationCheck()
   console.log(`\nВсе проверки практики пройдены (${passed} групп).`)

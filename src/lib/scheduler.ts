@@ -209,8 +209,14 @@ export const SECTIONS: readonly Section[] = ['rw', 'logic', 'grammar', 'math']
  * (4 карточки) не ввели ни одной — их блоки показывали «Всё повторено» и гасили
  * кнопку, потому что `newAvail = min(новых, 0)`. Это была не лень владельца, а
  * ложь интерфейса.
+ *
+ * Пустой раздел (F60) остатка не имеет вовсе: `perDay - 0` без карточек всё равно давал
+ * положительное число, и `SectionBlock` читал его как «есть что доучить сверх нормы» -
+ * кнопка звала «Всё повторено» вместо честного «нет карточек» рядом с `hero-sub`, который
+ * уже говорил «пока пусто».
  */
 export function newBudgetFor(cards: CardView[], perDay: number, journal: JournalLine[], day: string = dayKey()): number {
+  if (cards.length === 0) return 0
   const slugs = new Set(cards.map(c => c.slug))
   return Math.max(0, perDay - newIntroducedOn(journal, day, slugs))
 }

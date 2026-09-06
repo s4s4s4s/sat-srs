@@ -11,7 +11,7 @@ import { stageCounts, type WordStage } from '../lib/wordstatus'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt, Book } from '../components/Icon'
 import { readingLevel } from '../lib/reading'
-import { practiceStats, practiceDue, type PracticeStats } from '../lib/practice'
+import { practiceStats, practiceDue, practiceSummaryLabel, type PracticeStats } from '../lib/practice'
 import FlameBuddy from '../components/FlameBuddy'
 import FjordScene from '../components/FjordScene'
 import { множ } from '../lib/plural'
@@ -69,7 +69,7 @@ function SectionBlock({ title, icon, badge, glyph, cards, budget, extraBudget, o
       ) : (
         <button className="btn btn-green section-btn" onClick={onStart} disabled={due === 0}>
           {due === 0
-            ? <><Check size={18} /> {extraBudget === 0 ? 'Максимум дня взят' : 'Всё повторено'}</>
+            ? <><Check size={18} /> {c.total === 0 ? 'Нет карточек' : extraBudget === 0 ? 'Максимум дня взят' : 'Всё повторено'}</>
             : `Учить · ${due}`}
         </button>
       )}
@@ -138,6 +138,7 @@ function ReadingBlock({ texts, read, level, onOpen }: {
  */
 function PracticeBlock({ stats, due, onOpen }: { stats: PracticeStats; due: number; onOpen: () => void }) {
   const left = stats.total - stats.solved
+  const summaryLabel = practiceSummaryLabel(stats)
   return (
     <div className="card section-card">
       <span className="sec-glyph" style={{ ['--rune-shape' as string]: 'var(--rune-tiwaz)' } as React.CSSProperties} />
@@ -163,8 +164,8 @@ function PracticeBlock({ stats, due, onOpen }: { stats: PracticeStats; due: numb
       <button className="btn btn-green section-btn" onClick={onOpen} disabled={stats.total === 0}>
         {stats.total === 0
           ? 'Вопросов пока нет'
-          : left === 0
-            ? <><Check size={18} /> Все вопросы решены</>
+          : summaryLabel
+            ? <><Check size={18} /> {summaryLabel}</>
             : `Практика · ${left}`}
       </button>
     </div>

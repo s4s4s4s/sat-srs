@@ -254,7 +254,24 @@ function groupByKey(views: QuestionView[], journal: JournalLine[], keyOf: (v: Qu
   return groups
 }
 
-/** Сводка практики: всего вопросов, отвечено, из них верно — целиком и по каждому навыку. */
+/**
+ * Подпись кнопки «Практика», когда отвечено на все вопросы банка (F53).
+ *
+ * `solved === total` не значит «всё в порядке»: среди отвеченных бывают неверные, и график
+ * практики (`PRACTICE_RETRY_WRONG_DAYS`) вернёт их сам, без нового появления в счётчике
+ * `left`. «Все вопросы решены» правда только при `correct === total`; иначе подпись обязана
+ * назвать разрыв между «отвечено» и «верно», а не прятать его за общим «решено».
+ * Возвращает `null`, когда отвечено не на всё (`left > 0`) - тогда кнопка показывает счётчик
+ * оставшегося, а не итог.
+ */
+export function practiceSummaryLabel(stats: PracticeGroupStats): string | null {
+  const left = stats.total - stats.solved
+  if (left > 0) return null
+  if (stats.correct === stats.total) return 'Все вопросы решены'
+  return `Все вопросы пройдены, верно ${stats.correct} из ${stats.total}: остальные вернутся по графику повторов`
+}
+
+/** Сводка практики: всего вопросов, отвечено, из них верно - целиком и по каждому навыку. */
 export function practiceStats(views: QuestionView[], journal: JournalLine[]): PracticeStats {
   const bySkill = groupByKey(views, journal, v => v.skill)
   const total = Object.values(bySkill).reduce((acc, g) => ({

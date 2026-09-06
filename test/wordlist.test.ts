@@ -341,6 +341,32 @@ function homeUsesDayplanChecks(): void {
   group('Home.tsx: порядок блоков идёт из dayplan.ts, веса RW и общая норма NEW_PER_DAY не задублированы литералом')
 }
 
+/**
+ * F53: подпись блока практики при полном ответе на банк обязана идти из `practiceSummaryLabel`
+ * (lib/practice.ts), а не из собственного сравнения `left === 0` на экране - иначе экран снова
+ * заявит «Все вопросы решены», когда среди отвеченных есть неверные (репро судьи: 5 вопросов,
+ * все с попыткой, 2 верных).
+ */
+function homePracticeSummaryChecks(): void {
+  const src = screenSource('Home.tsx')
+  assert(src.includes('practiceSummaryLabel'), 'Home.tsx обязан брать подпись блока практики из practiceSummaryLabel (lib/practice.ts)')
+  assert(!/'Все вопросы решены'\s*<\/>\s*:\s*`Практика/.test(src) || src.includes('summaryLabel'),
+    'подпись «Все вопросы решены» обязана приходить из summaryLabel, а не быть безусловной веткой left === 0')
+  group('Home.tsx: подпись блока практики при завершённом банке зависит от practiceSummaryLabel, а не только от left === 0')
+}
+
+/**
+ * F60: пустой раздел (`c.total === 0`) обязан получать честный текст кнопки «Нет карточек»,
+ * а не «Всё повторено»/«Максимум дня взят» - те подписи заявляют работу, которой не было,
+ * рядом с `hero-sub`, честно говорящим «пока пусто».
+ */
+function homeEmptySectionButtonChecks(): void {
+  const src = screenSource('Home.tsx')
+  assert(src.includes('c.total === 0'), 'кнопка раздела обязана явно проверять пустой раздел (c.total === 0)')
+  assert(src.includes('Нет карточек'), 'пустой раздел обязан показывать «Нет карточек», а не «Всё повторено»')
+  group('Home.tsx: кнопка пустого раздела показывает «Нет карточек», а не «Всё повторено»')
+}
+
 function main(): void {
   console.log('SRS wordstatus — единый источник правды о состоянии слова')
   agreementWithHomeChecks()
@@ -356,6 +382,8 @@ function main(): void {
   wordListScreenChecks()
   homeHasWordsEntryChecks()
   homeUsesDayplanChecks()
+  homePracticeSummaryChecks()
+  homeEmptySectionButtonChecks()
   console.log(`\nВсе проверки статуса слова пройдены (${passed} групп).`)
 }
 
