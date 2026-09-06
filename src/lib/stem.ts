@@ -60,6 +60,10 @@ export function lightStem(word: string): string {
   if (!w) return w
   w = w.replace(/['’]s$/, '') // притяжательное: treaty's -> treaty
   if (w.length < 3) return w
+  // согласная + -ied: studied -> study, applied -> apply, denied -> deny; died/lied/tied
+  // (четыре буквы) - основа на -ie, снимается только -d
+  if (/[^aeiou]ied$/.test(w) && w.length > 4) return w.slice(0, -3) + 'y'
+  if (w.endsWith('ied') && w.length === 4) return w.slice(0, -1)
 
   if (w.endsWith('ing')) {
     const stem = w.slice(0, -3)
@@ -71,12 +75,25 @@ export function lightStem(word: string): string {
     if (stem.length >= 2 && containsVowel(stem)) return restoreAfterStrip(stem)
     return w
   }
-  // buses -> bus, watches -> watch, wishes -> wish, boxes -> box, prizes -> priz(e)
-  if (/(?:[sxz]es|ches|shes)$/.test(w) && w.length > 4) return w.slice(0, -2)
+  // согласная + -ies: companies -> company, studies -> study, theories -> theory;
+  // dies/lies/ties (четыре буквы) идут ниже общим снятием -s: die, lie, tie
+  if (/[^aeiou]ies$/.test(w) && w.length > 4) return w.slice(0, -3) + 'y'
+  // -es после шипящих и удвоенных: classes -> class, boxes -> box, watches -> watch,
+  // wishes -> wish, quizzes -> quiz. После одиночных s/z снимается только -s: causes -> cause,
+  // houses -> house, prizes -> prize, sizes -> size (основа на -e встречается гораздо чаще,
+  // чем bus/gas; те дают buse/gase - формы между собой согласованы, но с bus не сойдутся,
+  // цена принятая). Исключение: согласная + -uses при шести и более буквах - viruses,
+  // bonuses, campuses, statuses -> -us.
+  if (w.endsWith('zzes') && w.length > 5) return w.slice(0, -3)
+  if (/(?:ss|x|ch|sh)es$/.test(w) && w.length > 4) return w.slice(0, -2)
+  if (/[^aeiou]uses$/.test(w) && w.length > 5) return w.slice(0, -2)
   if (w.endsWith('s') && !w.endsWith('ss') && !w.endsWith('us') && !w.endsWith('is')) return w.slice(0, -1)
+  // наречное -ly снимается только с основы не короче четырёх букв и не на a/i/o/u/l/p:
+  // quickly -> quick, likely -> like, rarely -> rare, но apply/reply/multiply (основа на p),
+  // rally/silly (на l), family/monopoly (на гласную), only/early/ugly (короткие) - целиком
   if (w.endsWith('ly')) {
     const stem = w.slice(0, -2)
-    if (stem.length >= 2 && containsVowel(stem)) return stem
+    if (stem.length >= 4 && containsVowel(stem) && !/[aioulp]$/.test(stem)) return stem
   }
   return w
 }
