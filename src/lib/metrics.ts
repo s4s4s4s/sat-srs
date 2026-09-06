@@ -623,17 +623,52 @@ export function practiceUnitRatio(journal: JournalLine[]): number {
 }
 
 /**
+ * Показ, засчитываемый в точность (D): review-строка с объективным результатом. Поле `correct`
+ * есть у mc/type/prep и у practice; у reveal и intro его нет - там нечего складывать в долю.
+ *
+ * Подсказанный ввод (`cued`, C12) выпадает из счёта ЦЕЛИКОМ - и из числителя, и из знаменателя.
+ * Слово, взятое со скелета после провала попытки, ученик не вспомнил, но и не промахнулся:
+ * это работа другого рода, и у неё своя строка отчёта («Ввод с подсказкой», cuedStats). До
+ * 06.09.2026 `correct` писался как `verdict !== 'wrong'` (store.ts, rateItem), и подсказка шла
+ * в точность чистым попаданием - то есть доля верных росла ровно от того, что ученик не смог
+ * ответить сам. Retention этой ловушки не знал: isMatureShow исключает `cued` наравне с `typo`.
+ */
+export function isAccuracyShow(l: JournalLine): boolean {
+  return l.type === 'review' && typeof l.correct === 'boolean' && !l.cued
+}
+
+/**
+ * Доля верных среди показов с объективным результатом - единственный источник правды о точности
+ * по полю `correct`. `keep` сужает выборку (формат, день, слаг), не трогая правило отбора:
+ * два списанных от руки условия разъезжаются молча, и одно окно начинает считать cued, а другое нет.
+ */
+export function accuracyShare(journal: JournalLine[], keep: (l: JournalLine) => boolean = () => true): Bucketed {
+  const b = emptyBucket()
+  for (const l of journal) {
+    if (!isAccuracyShow(l) || !keep(l)) continue
+    b.n++
+    if (l.correct) b.pass++
+  }
+  return seal(b)
+}
+
+/**
  * Опечатки vs незнание среди показов формата `type`. Опечатка помечается в момент ввода
  * (см. Review.tsx / checkTyped) полем `typo` - задним числом её не восстановить (введённая
  * строка в журнал не пишется), поэтому старые строки идут в realMisses по `correct === false`.
+ *
+ * Синоним (`twin`, C10) и подсказанный ввод (`cued`, C12) незнанием не считаются и здесь не
+ * учитываются вовсе: с `correct: verdict === 'correct'` (D) обе строки дают `correct: false`
+ * и без явного отсева попали бы в realMisses, раздув «настоящее незнание» чужой работой.
  */
 export function typoSplit(journal: JournalLine[]): { typos: number; realMisses: number } {
   let typos = 0
   let realMisses = 0
   for (const l of journal) {
     if (l.type !== 'review' || l.format !== 'type') continue
-    if (l.typo) typos++
-    else if (l.correct === false) realMisses++
+    if (l.typo) { typos++; continue }
+    if (l.twin || l.cued) continue
+    if (l.correct === false) realMisses++
   }
   return { typos, realMisses }
 }

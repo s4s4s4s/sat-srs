@@ -16,7 +16,7 @@ import type { CardView, JournalLine } from '../src/lib/types'
 import {
   examReady, maturity, pace, reviewCount, retentionByInterval, retentionByLateness, retentionByLevel, retentionByDomain,
   planVsFact,
-  speedStats, typoSplit, gaveUpShare, cuedStats, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
+  speedStats, typoSplit, gaveUpShare, cuedStats, accuracyShare, isAccuracyShow, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
   intervalBucketOf, enoughForPct, isLeechCard, orphanedLines,
   PRIMARY_DATE, EXAM_DATE, NEW_STOP_DATE, NEW_STOP_BY_SECTION, nextAttempt, TARGET_REVIEW, TARGET_MATURE, MIN_N_FOR_PCT,
   MATURE_STABILITY_DAYS, READY_R,
@@ -228,6 +228,47 @@ function cuedChecks(): void {
   assert(cs.d30.shown === 4 && cs.d30.cued === 3, `d30 ожидалось shown=4 cued=3, получено ${JSON.stringify(cs.d30)}`)
 
   group('C12: cued исключён из retentionByInterval как twin, cuedStats считает окна 7 и 30 дней по format=type')
+}
+
+// ---- D: точность по correct ------------------------------------------------
+
+function accuracyChecks(): void {
+  /* Фикстура ревью: 3 верных, 1 подсказанный (cued) и 1 провал. Точность обязана быть 3/4,
+     а не 4/5: подсказанный ввод не считается ни попаданием, ни промахом и выпадает из счёта
+     целиком. До правки rateItem писал `correct: verdict !== 'wrong'`, и cued давал 4/5. */
+  const j: JournalLine[] = [
+    rev({ slug: 'a', format: 'type', correct: true, rating: 3 }),
+    rev({ slug: 'b', format: 'mc', correct: true, rating: 3 }),
+    rev({ slug: 'c', format: 'prep', correct: true, rating: 3 }),
+    rev({ slug: 'd', format: 'type', correct: false, cued: true, rating: 2 }),
+    rev({ slug: 'e', format: 'type', correct: false, rating: 1 }),
+    rev({ slug: 'f', format: 'reveal', rating: 3 }),                 // без correct: в долю не идёт
+    rev({ slug: 'g', format: 'intro' }),                             // знакомство: ни вопроса, ни ответа
+    { id: 'p1', type: 'practice', ts: '2026-09-01T11:00:00+03:00', day: '2026-09-01', correct: false } as JournalLine
+  ]
+  const acc = accuracyShare(j, l => l.type === 'review')
+  assert(acc.n === 4 && acc.pass === 3, `точность: ожидалось 3 из 4, получено ${acc.pass} из ${acc.n}`)
+  assert(acc.pct === 75, `точность: ожидалось 75%, получено ${acc.pct}`)
+
+  assert(!isAccuracyShow(rev({ correct: true, cued: true })), 'подсказанный показ не идёт в точность')
+  assert(!isAccuracyShow(rev({ rating: 3 })), 'показ без объективного результата (reveal/intro) в точность не идёт')
+  assert(isAccuracyShow(rev({ correct: false })), 'провал с объективным результатом в точность идёт')
+
+  // без единого засчитываемого показа процента нет (null, а не 0)
+  assert(accuracyShare([rev({ correct: true, cued: true })]).pct === null, 'из одних cued точности не выходит')
+
+  /* Обратная сторона той же правки: с `correct: verdict === 'correct'` синоним и подсказка
+     дают correct=false, и без явного отсева typoSplit посчитал бы их настоящим незнанием. */
+  const jt: JournalLine[] = [
+    rev({ slug: 'a', format: 'type', correct: true, typo: true }),
+    rev({ slug: 'b', format: 'type', correct: false, twin: true }),
+    rev({ slug: 'c', format: 'type', correct: false, cued: true }),
+    rev({ slug: 'd', format: 'type', correct: false })
+  ]
+  const ts = typoSplit(jt)
+  assert(ts.typos === 1 && ts.realMisses === 1,
+    `typoSplit: синоним и подсказка незнанием не считаются, ожидалось {1,1}, получено {${ts.typos},${ts.realMisses}}`)
+  group('D: точность считается по чистым попаданиям, cued выпадает из числителя и знаменателя')
 }
 
 // ---- retentionByLateness ---------------------------------------------------
@@ -719,6 +760,7 @@ function main(): void {
   smallSampleChecks()
   intervalChecks()
   cuedChecks()
+  accuracyChecks()
   latenessChecks()
   planVsFactChecks()
   levelDomainChecks()

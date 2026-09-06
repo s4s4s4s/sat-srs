@@ -34,7 +34,7 @@ import {
   MASS_DELETE_CONFIRM_MS, MassDeleteError, type MassDeletePending
 } from '../src/lib/db'
 import { isCardPath, isJournalPath, massDeleteMessage, isStuck, stuckCards, stuckMessage, joinWarnings, STUCK_SHOW } from '../src/lib/sync'
-import { clampDueBeforeCap, journalElapsedMs, leechTransition } from '../src/lib/store'
+import { clampDueBeforeCap, journalElapsedMs, leechTransition, corpusCacheKey } from '../src/lib/store'
 import { dueCap, nextAttempt, newIntroAllowed, PRIMARY_DATE, EXAM_DATE } from '../src/lib/scheduler'
 import { cardTimeCap } from '../src/lib/journal'
 import { isLeech, LEECH_STABILITY_DAYS } from '../src/lib/metrics'
@@ -649,6 +649,33 @@ function stuckChecks(): void {
   group('F30 (структурно): цикл синка, счётчик несинхронизированного и главная видят карантин')
 }
 
+// ---- 11. Кэш корпуса видит правку тьютора ----------------------------------
+
+function corpusKeyChecks(): void {
+  /* Ключ по одним счётчикам файлов не менялся от правки тела вопроса или текста: тьютор
+     переписывал условие, число файлов оставалось прежним, и корпус жил старым до тех пор,
+     пока в колоде не появится или не исчезнет файл. Коммит репозитория меняется от любой
+     правки, поэтому он и стоит в ключе. */
+  const a = corpusCacheKey(120, 30, 'commit-a')
+  const b = corpusCacheKey(120, 30, 'commit-b')
+  assert(a !== b, `при том же числе файлов новый коммит обязан менять ключ: ${a} против ${b}`)
+  assert(corpusCacheKey(120, 30, 'commit-a') === a, 'тот же материал даёт тот же ключ: пересчёта на ровном месте быть не должно')
+  assert(corpusCacheKey(121, 30, 'commit-a') !== a && corpusCacheKey(120, 31, 'commit-a') !== a,
+    'смена числа вопросов или текстов по-прежнему меняет ключ')
+  assert(corpusCacheKey(120, 30, null) !== a, 'отсутствие коммита (первый запуск) - не тот же ключ, что коммит')
+
+  /* Структурно: ключ обязан собираться из ЖИВОГО значения kv, а не из константы рядом.
+     Чистая функция сама по себе не докажет, что store её кормит тем, что пишет sync. */
+  const src = source('store.ts')
+  const refresh = funcBody(src, 'function refreshCorpus(')
+  assert(refresh.includes('corpusCacheKey('), 'refreshCorpus обязан считать ключ общей функцией, а не собирать строку на месте')
+  const feeds = src.split('refreshCorpus(').slice(1).filter(s => s.startsWith('(await db.kvGet<string>(\'lastRemoteCommit\'))'))
+  assert(feeds.length === 2, `оба вызова refreshCorpus (загрузка и синк) обязаны передавать lastRemoteCommit, найдено ${feeds.length}`)
+  const syncSrc = source('sync.ts')
+  assert(syncSrc.includes("kvSet('lastRemoteCommit'"), 'sync.ts обязан писать lastRemoteCommit - на нём держится ключ кэша корпуса')
+  group('WS9: ключ кэша корпуса меняется от правки тьютора (lastRemoteCommit), а не только от числа файлов')
+}
+
 async function main(): Promise<void> {
   console.log('SRS слой данных: слияние/журнал/удаление/атомарность/время/срок/пиявка/карантин')
   mergeChecks()
@@ -661,6 +688,7 @@ async function main(): Promise<void> {
   leechChecks()
   await quarantineChecks()
   stuckChecks()
+  corpusKeyChecks()
   const live = liveDeckChecks()
   console.log(`\nВсе проверки слоя данных пройдены (${passed} групп)${live ? '' : ', живая колода не подключалась'}.`)
 }

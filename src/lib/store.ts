@@ -164,17 +164,22 @@ export function startLesson(section: Section, reviewOnly = false, overNorm = fal
   emit()
 }
 
-/* Кэш индекса корпуса по числу вопросов и текстов: пересчёт заново только когда
-   счёт изменился (после синка), а не при каждом чтении состояния. Число, а не
-   содержимое - содержимое (тела вопросов/текстов) может дописываться на месте без
-   изменения счёта только теоретически (правки уезжают своим sha), и точности
-   "пересчитать раз в синк" для тиебрейкера очереди достаточно. */
-let corpusCacheKey = ''
+/* Ключ кэша индекса корпуса: пересчёт заново только когда материал мог измениться (после
+   синка), а не при каждом чтении состояния. Числа файлов для этого мало: правка тела вопроса
+   или текста тьютором счёт не меняет, и корпус держался бы старым до тех пор, пока в колоде
+   не появится или не исчезнет файл. Поэтому в ключ входит и коммит репозитория, на котором
+   приехало содержимое (`lastRemoteCommit` в kv - его пишет sync.ts после каждого pull и push):
+   любая правка тьютора - это новый коммит, и ключ меняется вместе с ней. */
+export function corpusCacheKey(questions: number, readings: number, commit: string | null): string {
+  return `${questions}:${readings}:${commit ?? ''}`
+}
 
-function refreshCorpus() {
-  const key = `${state.questions.length}:${state.readings.length}`
-  if (key === corpusCacheKey) return
-  corpusCacheKey = key
+let corpusKey = ''
+
+function refreshCorpus(commit: string | null) {
+  const key = corpusCacheKey(state.questions.length, state.readings.length, commit)
+  if (key === corpusKey) return
+  corpusKey = key
   state.corpus = buildCorpusIndex(state.questions, state.readings)
 }
 
@@ -217,7 +222,7 @@ export async function init() {
     state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? null
     state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? {}
     state.metricsHistory = parseMetrics((await db.kvGet<string>('metricsText')) ?? '')
-    refreshCorpus()
+    refreshCorpus((await db.kvGet<string>('lastRemoteCommit')) ?? null)
   } catch (e: any) {
     // локальная база не открылась (бывает на холодном старте WebKit): не виснем на «Загрузка…»
     state.syncStatus = 'error'
@@ -254,7 +259,7 @@ export async function startSync(): Promise<void> {
   state.lastSyncAt = (await db.kvGet<number>('lastSyncAt')) ?? state.lastSyncAt
   state.levelNames = (await db.kvGet<Record<string, string>>('levelNames')) ?? state.levelNames
   state.metricsHistory = parseMetrics((await db.kvGet<string>('metricsText')) ?? '')
-  refreshCorpus()
+  refreshCorpus((await db.kvGet<string>('lastRemoteCommit')) ?? null)
   state.syncStatus = res.status
   state.syncError = res.error ?? res.warning ?? (res.conflicts ? `Конфликт имён с тьютором: ваша карточка сохранена с суффиксом -2 (${res.conflicts})` : '')
   state.tokenExpiresAt = tokenExpiration
@@ -470,7 +475,10 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     slug: item.view.slug,
     skill: item.skill,
     format,
-    ...(verdict === undefined ? {} : { correct: verdict !== 'wrong' }),
+    /* D: `correct` - чистое попадание, а не «не провал». Подсказанный ввод (cued), опечатка
+       и синоним отмечаются своими полями и показываются отдельными строками отчёта; сложенные
+       в `correct`, они делали подсказку попаданием в точности урока (см. isAccuracyShow в metrics.ts). */
+    ...(verdict === undefined ? {} : { correct: verdict === 'correct' }),
     // опечатка (Левенштейн) при вводе — не незнание: помечаем, чтобы исключить из retention
     ...(verdict === 'typo' ? { typo: true } : {}),
     // C10: синоним вместо загаданного слова — тоже не незнание, и тоже не чистый сигнал retention
