@@ -8,8 +8,10 @@
  * (clampDueBeforeCap, leechTransition, deletionPlan, journalUnchanged), чтобы его можно было
  * проверить исполнением, а не чтением.
  *
- * Чего здесь НЕТ и не может быть: сама транзакционность IndexedDB и сетевой цикл sync.
- * В node нет ни IndexedDB, ни GitHub, и подделка того и другого проверяла бы подделку.
+ * Чего здесь НЕТ и не может быть: сетевой цикл sync. GitHub в node нет, и его подделка
+ * проверяла бы подделку. А вот IndexedDB настоящая: `fake-indexeddb` (та же реализация, что
+ * в test/practice.test.ts) позволяет гонять applyPull целиком, с транзакцией и курсорами, -
+ * без этого правило «pull не затирает неотправленную оценку» проверялось бы чтением кода.
  * Для двух мест, где правило неотделимо от места вызова (оценка пишется одной транзакцией;
  * потолок времени применён именно при записи строки), стоит структурная проверка исходника —
  * она честно названа структурной и ловит возврат старого кода, но не заменяет живой прогон.
@@ -21,12 +23,14 @@
  *
  * Запуск: esbuild бандлит файл и node его исполняет (см. package.json, соседние test:*).
  */
+import 'fake-indexeddb/auto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { State, type Card as FsrsCard } from 'ts-fsrs'
 import { parseMd, mergeCard, pickFsrsBlock } from '../src/lib/yamlfm'
 import {
   deletionPlan, massDeleteConfirmed, massDeleteNeedsConfirm, journalUnchanged, nfcPath,
+  applyPull, putCard, getAllCards, clearLocalData,
   MASS_DELETE_CONFIRM_MS, MassDeleteError, type MassDeletePending
 } from '../src/lib/db'
 import { isCardPath, isJournalPath, massDeleteMessage } from '../src/lib/sync'
@@ -533,8 +537,74 @@ function liveDeckChecks(): boolean {
   return true
 }
 
-function main(): void {
-  console.log('SRS слой данных — слияние/журнал/удаление/атомарность/время/срок/пиявка')
+// ---- 9. F29: карантин битого файла не съедает неотправленную оценку --------
+
+/** Запись как её увидит приложение после серии pull-ов. */
+async function stored(p: string): Promise<CardRec> {
+  const rec = (await getAllCards()).find(c => c.path === p)
+  assert(!!rec, `карточка ${p} исчезла из базы`)
+  return rec!
+}
+
+/** Один pull одного файла: applyPull с настоящей транзакцией IndexedDB. */
+async function pullOne(p: string, sha: string, fm: Record<string, any>, body: string, broken: 0 | 1): Promise<void> {
+  await applyPull([{ path: p, sha, fm, body, broken }], new Set([p]), mergeCard)
+}
+
+async function quarantineChecks(): Promise<void> {
+  const P = 'Учёба/Карточки/carantine.md'
+
+  /* Живой путь потери (F29): ученик оценил слово (dirty=1, reps=4), тьютор в это же время сломал
+     YAML файла, а следующим коммитом починил. До правки третий pull видел cur.broken=1, уходил в
+     ветку полной перезаписи и клал remote-версию с dirty=0 - оценка исчезала без единого следа. */
+  await clearLocalData()
+  const localFsrs = block({ reps: 4, stability: 12.3, last_review: '2026-09-05T18:00:00.000Z' })
+  await putCard(cardRec({ word: 'buttress', fsrs: localFsrs },
+    { path: P, sha: 'sha0', dirty: 1, broken: 0, body: 'тело от тьютора' }))
+
+  // 1. тьютор сломал YAML: карточка уходит в карантин, но оценка обязана остаться в записи
+  await pullOne(P, 'sha1', {}, '<<<<<<< HEAD', 1)
+  let cur = await stored(P)
+  assert(cur.broken === 1, 'битый файл обязан помечать карточку broken=1')
+  assert(cur.dirty === 1, 'поломка файла не отменяет неотправленную оценку')
+  assert(cur.fm.fsrs?.reps === 4, `после поломки reps должен остаться локальным, получено ${cur.fm.fsrs?.reps}`)
+
+  // 2. файл всё ещё битый (второй pull подряд) - оценка не должна вымываться повторами
+  await pullOne(P, 'sha2', {}, '<<<<<<< HEAD ещё раз', 1)
+  cur = await stored(P)
+  assert(cur.dirty === 1 && cur.fm.fsrs?.reps === 4, `второй pull битого файла съел оценку: dirty=${cur.dirty} reps=${cur.fm.fsrs?.reps}`)
+
+  // 3. тьютор починил файл и принёс свой (более старый) fsrs: содержимое берём свежее, оценку свою
+  await pullOne(P, 'sha3',
+    { word: 'buttress', meaning_ru: 'подкреплять', fsrs: block({ reps: 1, stability: 0.4, last_review: '2026-08-01T10:00:00.000Z', state: 1 }) },
+    'починенное тело', 0)
+  cur = await stored(P)
+  assert(cur.broken === 0, 'починенный файл снимает карантин')
+  assert(cur.fm.fsrs?.reps === 4, `локальная оценка обязана пережить починку файла, получено reps=${cur.fm.fsrs?.reps}`)
+  assert(cur.fm.fsrs?.stability === 12.3, 'вместе с reps остаётся и стабильность локального блока')
+  assert(cur.dirty === 1, 'карточка остаётся dirty: оценка ещё не уехала в репозиторий')
+  assert(cur.body === 'починенное тело' && cur.fm.meaning_ru === 'подкреплять', 'содержимое файла берётся у тьютора')
+  group('F29: pull не затирает неотправленную оценку карточки в карантине (поломка - поломка - починка)')
+
+  /* Симметричный случай: терять нечего. Карточка в карантине БЕЗ неотправленной работы (dirty=0)
+     перезаписывается целиком - репозиторий здесь единственный источник истины. */
+  await clearLocalData()
+  const Q = 'Учёба/Карточки/carantine-clean.md'
+  await putCard(cardRec({ word: 'placate', fsrs: localFsrs },
+    { path: Q, sha: 'sha0', dirty: 0, broken: 1, body: '<<<<<<< HEAD' }))
+  await pullOne(Q, 'sha1',
+    { word: 'placate', fsrs: block({ reps: 1, stability: 0.4, last_review: '2026-08-01T10:00:00.000Z', state: 1 }) },
+    'починенное тело', 0)
+  const clean = await stored(Q)
+  assert(clean.broken === 0 && clean.dirty === 0, `чистая карточка после починки не должна становиться dirty: dirty=${clean.dirty}`)
+  assert(clean.fm.fsrs?.reps === 1 && clean.body === 'починенное тело', 'чистая карточка перезаписывается remote-версией целиком')
+  group('F29: карточка в карантине без неотправленной работы перезаписывается целиком')
+
+  await clearLocalData()
+}
+
+async function main(): Promise<void> {
+  console.log('SRS слой данных: слияние/журнал/удаление/атомарность/время/срок/пиявка/карантин')
   mergeChecks()
   journalPushChecks()
   massDeleteChecks()
@@ -543,13 +613,12 @@ function main(): void {
   dueCapChecks()
   movingCapChecks()
   leechChecks()
+  await quarantineChecks()
   const live = liveDeckChecks()
   console.log(`\nВсе проверки слоя данных пройдены (${passed} групп)${live ? '' : ', живая колода не подключалась'}.`)
 }
 
-try {
-  main()
-} catch (e) {
+main().catch(e => {
   console.error('\n✗ ТЕСТ СЛОЯ ДАННЫХ УПАЛ:\n' + (e instanceof Error ? e.message : String(e)))
   process.exit(1)
-}
+})

@@ -17,7 +17,7 @@
     "test:sound": "esbuild test/sound.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/sound.mjs && node node_modules/.cache/sat-srs/sound.mjs",
     "test:coach": "esbuild test/coach.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/coach.mjs && node node_modules/.cache/sat-srs/coach.mjs",
     "test:settings": "esbuild test/settings.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/settings.mjs && node node_modules/.cache/sat-srs/settings.mjs",
-    "test:sync-safety": "esbuild test/sync-safety.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/sync-safety.mjs && node node_modules/.cache/sat-srs/sync-safety.mjs",
+    "test:sync-safety": "esbuild test/sync-safety.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/sync-safety.mjs --external:fake-indexeddb && node node_modules/.cache/sat-srs/sync-safety.mjs",
     "test:reading": "esbuild test/reading.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/reading.mjs && node node_modules/.cache/sat-srs/reading.mjs",
     "test:wordlist": "esbuild test/wordlist.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/wordlist.mjs && node node_modules/.cache/sat-srs/wordlist.mjs",
     "test:synonyms": "esbuild test/synonyms.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/synonyms.mjs && node node_modules/.cache/sat-srs/synonyms.mjs",

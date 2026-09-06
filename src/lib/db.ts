@@ -195,7 +195,14 @@ export async function applyPull(
     // в другой нормализации, старая запись убирается, иначе рядом остались бы две карточки
     // на один файл (и «лишняя» из них при первой же чистке ушла бы в удаление)
     if (cur && cur.path !== f.path) await tx.store.delete(cur.path)
-    if (cur?.dirty && cur.sha === null && !cur.broken) {
+    /* F29: судьбу локальной записи решает ТОЛЬКО `dirty`, а не `broken`.
+       Битым карточку делает состояние ФАЙЛА в репозитории (кривой YAML тьютора, git-конфликт),
+       а `dirty` говорит о неотправленной работе ученика - оценке, которая живёт в fm.fsrs той же
+       записи и пережила поломку через merge-ветку ниже. Прежнее условие `!cur.broken` роняло
+       такую карточку в общую ветку перезаписи, и очередной pull (в том числе с ПОЧИНЕННЫМ файлом)
+       затирал её remote-версией с dirty=0: оценка исчезала молча, ни на одном экране.
+       Чистая запись (dirty=0) при любом broken перезаписывается целиком - терять нечего. */
+    if (cur?.dirty && cur.sha === null) {
       // оба «создали» этот путь: remote остаётся как есть, локальная уезжает на свободный -N путь
       let n = 2
       let alt = f.path.replace(/\.md$/, `-${n}.md`)
@@ -206,8 +213,10 @@ export async function applyPull(
       localByNorm.set(nfcPath(alt), moved) // занятое имя видно следующей итерации: -2 не выдаётся дважды
       await tx.store.put({ path: f.path, sha: f.sha, fm: f.fm, body: f.body, dirty: 0, broken: f.broken })
       conflicts++
-    } else if (cur?.dirty && !cur.broken) {
-      // remote — база (тьютор мог править текст), наш вклад — только fsrs/my_sentence; остаётся dirty
+    } else if (cur?.dirty) {
+      // remote - база (тьютор мог править текст), наш вклад - только fsrs/my_sentence; остаётся dirty.
+      // Битый remote (f.broken=1) сливается так же: содержимое уедет в карантин, но локальный
+      // fsrs останется в записи и дождётся починки файла (F29).
       const m = merge({ fm: f.fm, body: f.body }, cur)
       await tx.store.put({ path: f.path, sha: f.sha, fm: m.fm, body: m.body, dirty: 1, broken: f.broken })
     } else {
