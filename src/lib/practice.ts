@@ -282,7 +282,7 @@ export interface PacePracticeStats {
 export interface PracticeBreakdown {
   byDifficulty: Record<string, PracticeGroupStats>
   week: WeekPracticeStats
-  avgSec: number | null    // среднее время на попытку по строкам, где sec известен; null - таких нет
+  avgSec: number | null    // среднее время на попытку за то же окно, где sec известен; null - таких нет
   pace: PacePracticeStats
 }
 
@@ -312,10 +312,10 @@ export function practiceBreakdown(views: QuestionView[], journal: JournalLine[],
 
   for (const l of journal) {
     if (l.type !== 'practice' || !l.qid || !validQids.has(l.qid)) continue
-    if (typeof l.sec === 'number') { secSum += l.sec; secN++; if (l.slow) slowN++ }
     if (!l.day || l.day < from || l.day > today) continue
     weekAttempts++
     if (l.correct === true) weekCorrect++
+    if (typeof l.sec === 'number') { secSum += l.sec; secN++; if (l.slow) slowN++ }
   }
 
   return {

@@ -739,22 +739,28 @@ function glossChecks(): void {
   const gl: GlossEntry[] = [
     { word: 'moratorium', pos: 'noun', meaning_en: 'an official pause', meaning_ru: 'мораторий' },
     { word: 'recover', pos: 'verb', meaning_en: 'to return to health', meaning_ru: 'восстанавливаться' },
-    { word: 'colony', pos: 'noun', meaning_en: 'a group living together', meaning_ru: 'колония' }
+    { word: 'colony', pos: 'noun', meaning_en: 'a group living together', meaning_ru: 'колония' },
+    { word: 'wolf', pos: 'noun', meaning_en: 'a wild canine', meaning_ru: 'волк' }
   ]
   assert(glossFor(gl, 'moratorium')!.meaning_ru === 'мораторий', 'сноска находится по точной форме')
   assert(glossFor(gl, 'Moratoriums,')!.word === 'moratorium', 'множественное число доходит до словарной формы')
   assert(glossFor(gl, 'recovered')!.word === 'recover', 'прошедшее время доходит до словарной формы')
   assert(glossFor(gl, 'recovering')!.word === 'recover', 'форма на -ing доходит до словарной формы')
   assert(glossFor(gl, 'colonies')!.word === 'colony', 'форма на -ies доходит до словарной формы')
+  // притяжательное 's снимается перед общим правилом на -s (F48): «wolf's» не должно
+  // застрять на «wolf'» и остаться без сноски
+  assert(glossFor(gl, "wolf's")!.word === 'wolf', 'притяжательное \'s доходит до словарной формы')
+  assert(glossFor(gl, 'wolf’s')!.word === 'wolf', 'притяжательное \'s типографским апострофом тоже доходит до словарной формы')
   // непокрытая форма честно отдаёт «сноски нет» вместо чужой сноски
-  assert(glossFor(gl, 'kelp') === null, 'слова вне глоссария нет — и подсовывать соседнее нельзя')
+  assert(glossFor(gl, 'kelp') === null, 'слова вне глоссария нет, и подсовывать соседнее нельзя')
   assert(glossFor([], 'moratorium') === null, 'пустой глоссарий сносок не выдумывает')
   group('глоссарий: словоизменение доходит до сноски, чужая сноска не подставляется')
 
   assert(lemmaOf(gl, 'Moratoriums') === 'moratorium', 'ключом отметки становится словарная форма из глоссария')
-  assert(lemmaOf(gl, 'Kelp,') === 'kelp', 'вне глоссария ключ — нормализованная форма из текста')
-  assert(lemmaOf([], 'Reefs.') === 'reefs', 'в упражнении глоссария нет вовсе — ключ просто нормализован')
+  assert(lemmaOf(gl, 'Kelp,') === 'kelp', 'вне глоссария ключ - нормализованная форма из текста')
+  assert(lemmaOf([], 'Reefs.') === 'reefs', 'в упражнении глоссария нет вовсе, ключ просто нормализован')
   assert(lemmaOf(gl, 'recovered') === lemmaOf(gl, 'recovering'), 'две формы одного слова дают один ключ, а не две отметки')
+  assert(lemmaOf(gl, "wolf's") === lemmaOf(gl, 'wolf'), 'притяжательная форма и словарная дают один ключ, а не две отметки')
   group('ключ отметки: формы одного слова склеиваются глоссарием в одну отметку')
 }
 

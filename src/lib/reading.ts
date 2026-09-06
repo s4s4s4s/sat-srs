@@ -247,6 +247,12 @@ function lemmaCandidates(w: string): string[] {
   const out = [w]
   const add = (s: string) => { if (s.length >= 2 && !out.includes(s)) out.push(s) }
   const doubled = (s: string) => (s.length >= 3 && s[s.length - 1] === s[s.length - 2] ? s.slice(0, -1) : '')
+  // Притяжательное снимается ДО общего правила на -s: «wolf's» и «wolf'» обязаны свестись
+  // к «wolf», а не к «wolf'»: общее правило на конечное -s апостроф не трогает и оставляет
+  // его на конце кандидата, где он уже ни с чем в глоссарии не совпадёт.
+  if (w.endsWith('\'s')) add(w.slice(0, -2))
+  else if (w.endsWith('’s')) add(w.slice(0, -2))
+  else if (w.endsWith('\'') || w.endsWith('’')) add(w.slice(0, -1))
   if (w.endsWith('ies')) { add(w.slice(0, -3) + 'y') }
   if (w.endsWith('ied')) { add(w.slice(0, -3) + 'y') }
   if (w.endsWith('es')) { add(w.slice(0, -2)); add(w.slice(0, -1)) }

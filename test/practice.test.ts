@@ -415,6 +415,19 @@ function breakdownChecks(): void {
     `разрез по темпу: 2 измеренные попытки, 1 за бюджетом (PACE_SEC), получено ${JSON.stringify(bd5.pace)}`)
   group('practiceBreakdown: разрез по темпу считает измеренные попытки и долю превысивших PACE_SEC')
 
+  // среднее время и разрез по темпу считаются В ТОМ ЖЕ окне «за 7 дней», что week.attempts,
+  // а не по всей истории (F57): старая попытка вне окна не должна тянуть среднее и не должна
+  // засчитываться в измеренные для темпа
+  const j6: JournalLine[] = [
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: true, ts: '2026-07-01T10:00:00+04:00', day: '2026-07-01', sec: 600, slow: true }),
+    practiceLine({ qid: 'q4', difficulty: 'Hard', correct: true, ts: '2026-08-24T10:00:00+04:00', day: '2026-08-24', sec: 10, slow: false })
+  ]
+  const bd6 = practiceBreakdown([q4], j6, today)
+  assert(bd6.avgSec === 10, `старая попытка вне окна не должна тянуть среднее время: получено ${bd6.avgSec}`)
+  assert(bd6.pace.measured === 1 && bd6.pace.slow === 0,
+    `старая попытка вне окна не должна попадать в разрез по темпу: получено ${JSON.stringify(bd6.pace)}`)
+  group('practiceBreakdown: среднее время и темп считаются за то же окно, что week.attempts, а не за всю историю')
+
   // пустой журнал - без NaN и без деления на ноль
   const bdEmpty = practiceBreakdown([], [], today)
   assert(bdEmpty.week.attempts === 0 && bdEmpty.week.accuracy === null && bdEmpty.avgSec === null,
