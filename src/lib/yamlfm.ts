@@ -105,6 +105,7 @@ export function cardView(rec: CardRec): CardView {
     kind: String(fm.kind ?? 'vocab'),
     domain: String(fm.domain ?? ''),
     confusables: Array.isArray(fm.confusables) ? fm.confusables.map(String) : [],
+    synonyms: Array.isArray(fm.synonyms) ? fm.synonyms.map(String) : [],
     from_mark: Array.isArray(fm.from_mark) ? fm.from_mark.map(String) : [],
     leech: String(fm.leech ?? ''),
     choices: Array.isArray(fm.choices) ? fm.choices.map(String) : [],

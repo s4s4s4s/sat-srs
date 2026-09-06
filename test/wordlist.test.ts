@@ -51,7 +51,7 @@ function vocab(word: string, f: FsrsCard, over: Partial<CardView> = {}): CardVie
   return {
     path: `deck/${word}.md`, slug: `${word}-${seq}`, word, pos: 'noun', context: '', contexts: [],
     contextsRu: [], meaning_en: `en:${word}`, meaning_ru: `значение ${word}`, roots: '',
-    source: 'test', added: '2026-07-01', level: 1, kind: 'vocab', domain: '', confusables: [], from_mark: [],
+    source: 'test', added: '2026-07-01', level: 1, kind: 'vocab', domain: '', confusables: [], synonyms: [], from_mark: [],
     leech: '', choices: [], answerText: '', answerNum: '', desmos: false, explain: '',
     suspended: false, fsrs: f, prep: '', prepContext: '', fsrsPrep: null, ...over
   } as CardView

@@ -46,7 +46,7 @@ import { createEmptyCard } from 'ts-fsrs'
 import { parseMd, cardView } from '../src/lib/yamlfm'
 import {
   stemRu, sharesMeaning, meaningTwin, blankSentence, blankPhrase, mcDistractors,
-  PHRASE_BEFORE, PHRASE_AFTER
+  PHRASE_BEFORE, PHRASE_AFTER, checkTyped, typedTwin
 } from '../src/lib/scheduler'
 import type { CardView } from '../src/lib/types'
 
@@ -66,7 +66,7 @@ function card(word: string, meaning_ru: string, pos = 'verb', over: Partial<Card
     context: '', contexts: [], contextsRu: [],
     meaning_en: '', meaning_ru, roots: '',
     source: 'test', added: '2026-07-20', level: 1, kind: 'vocab',
-    domain: '', confusables: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
+    domain: '', confusables: [], synonyms: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
     desmos: false, explain: '', suspended: false,
     fsrs: createEmptyCard(new Date(2026, 7, 22)),
     prep: '', prepContext: '', fsrsPrep: null,
@@ -251,6 +251,53 @@ function blankPhraseChecks(): void {
   group('blankPhrase: у синонимов одного куста обороты разные — задание остаётся разрешимым')
 }
 
+// ---- 5b. checkTyped: поле fm.synonyms, допустимые ответы ввода помимо word ----
+
+/**
+ * fm.synonyms задаёт тьютор явно для конкретной карточки, в отличие от `typedTwin`,
+ * который ищет двойника автоматически по всей колоде через общее значение. Совпадение
+ * с формой из synonyms даёт `correct`, а не `twin` (Hard): тьютор уже разрешил этот
+ * ответ, прощать его как двойника незачем.
+ */
+function checkTypedSynonymsChecks(): void {
+  assert(checkTyped('bolster', 'buttress', ['bolster', 'reinforce']) === 'correct',
+    'точное совпадение с синонимом из fm.synonyms обязано давать correct')
+  group('checkTyped: точный синоним из synonyms даёт correct')
+
+  assert(checkTyped('bolstr', 'buttress', ['bolster', 'reinforce']) === 'typo',
+    'опечатка в синониме (в пределах TYPO_MAX_EDITS при длине >= TYPO_MIN_LEN) обязана давать typo')
+  group('checkTyped: опечатка в синониме из synonyms даёт typo')
+
+  assert(checkTyped('irrelevant', 'buttress', ['bolster', 'reinforce']) === 'wrong',
+    'слово, не являющееся ни word, ни одним из synonyms, обязано давать wrong')
+  group('checkTyped: слово вне word и synonyms даёт wrong')
+
+  assert(checkTyped('buttress', 'buttress', []) === 'correct'
+    && checkTyped('buttres', 'buttress', []) === 'typo'
+    && checkTyped('irrelevant', 'buttress', []) === 'wrong',
+    'пустой список synonyms обязан вести себя как раньше, сравнение только с word')
+  group('checkTyped: пустой список synonyms, старое поведение (только word)')
+
+  assert(checkTyped('  BOLSTER  ', 'buttress', ['bolster']) === 'correct',
+    'регистр и пробелы вокруг введённого синонима не должны мешать совпадению')
+  assert(checkTyped('bolster', 'buttress', ['  BOLSTER  ']) === 'correct',
+    'регистр и пробелы вокруг синонима из fm.synonyms не должны мешать совпадению')
+  group('checkTyped: синоним сравнивается без учёта регистра и пробелов по обеим сторонам')
+
+  // Синоним из fm.synonyms не должен путаться с автоматическим двойником (C10, typedTwin):
+  // это два разных механизма прощения, и checkTyped не обязан и не должен знать о колоде.
+  const buttress = card('buttress', 'подкреплять, укреплять', 'verb', { synonyms: ['bolster'] })
+  const bolster = card('bolster', 'подкреплять, укреплять', 'verb')
+  const deck = [buttress, bolster]
+  assert(checkTyped('bolster', buttress.word, buttress.synonyms) === 'correct',
+    'явный синоним из fm.synonyms обязан давать correct независимо от того, есть ли он в колоде')
+  assert(typedTwin('bolster', buttress, deck) !== null,
+    'bolster в этом примере одновременно и явный synonym, и автоматический twin по колоде, оба пути опознают его')
+  // Порядок в submitObjective (Review.tsx) отдаёт checkTyped приоритет: typedTwin проверяется
+  // только на wrong, поэтому явный синоним никогда не доходит до ветки twin.
+  group('checkTyped: синоним из synonyms не путается с автоматическим twin, приоритет у checkTyped')
+}
+
 // ---- 6. живая колода (необязательно) -----------------------------------------
 
 const DECK_DIR = process.env.SAT_DECK ?? path.join(process.cwd(), '..', 'sat-deck', 'Учёба', 'Карточки')
@@ -306,6 +353,7 @@ function main(): void {
   meaningTwinChecks()
   blankSentenceChecks()
   blankPhraseChecks()
+  checkTypedSynonymsChecks()
   liveDeckChecks()
   console.log(`\nВсе проверки синонимов пройдены (${passed} групп).`)
 }

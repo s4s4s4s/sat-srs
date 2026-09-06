@@ -52,7 +52,7 @@ function baseView(word: string, level: number, kind: string): CardView {
        что на ней проверяют. */
     meaning_en: `meaning of ${word}`, meaning_ru: `${word} по-русски`, roots: '',
     source: 'test', added: '2026-07-20', level, kind,
-    domain: '', confusables: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
+    domain: '', confusables: [], synonyms: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
     desmos: false, explain: '', suspended: false,
     fsrs: createEmptyCard(new Date(BASE)),
     prep: '', prepContext: '', fsrsPrep: null

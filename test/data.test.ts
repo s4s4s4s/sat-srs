@@ -20,7 +20,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { serializeMd, parseMd, mergeCard } from '../src/lib/yamlfm'
+import { serializeMd, parseMd, mergeCard, cardView } from '../src/lib/yamlfm'
 import { toNdjson, parseNdjson, cardTimeCap, CARD_TIME_CAP_MS } from '../src/lib/journal'
 import { hasRatedFsrs, MassDeleteError } from '../src/lib/db'
 import { monthOfDay } from '../src/lib/daytime'
@@ -80,6 +80,22 @@ function fmRoundtripChecks(): void {
   assert(fm2.fsrs.reps === 22 && fm2.fsrs.state === 2, 'вложенный блок fsrs должен сохраниться целиком')
   assert(Array.isArray(fm2.contexts) && fm2.contexts.length === 2, 'массив contexts должен сохранить все элементы')
   group('serializeMd/parseMd: круговой обход без потери полей и дрейфа значений (числа, булевы, массивы, вложенный fsrs-блок)')
+}
+
+// ---- cardView: поле synonyms (fm.synonyms, допустимые ответы ввода помимо word) ----
+
+function cardViewSynonymsChecks(): void {
+  const withSynonyms = cardView(localCard({ word: 'buttress', synonyms: ['bolster', 'reinforce'] }))
+  assert(Array.isArray(withSynonyms.synonyms) && withSynonyms.synonyms.length === 2,
+    'cardView должна прочитать fm.synonyms как массив строк')
+  assert(withSynonyms.synonyms[0] === 'bolster' && withSynonyms.synonyms[1] === 'reinforce',
+    'cardView не должна менять порядок или значения synonyms')
+  group('cardView: читает fm.synonyms')
+
+  const withoutSynonyms = cardView(localCard({ word: 'buttress' }))
+  assert(Array.isArray(withoutSynonyms.synonyms) && withoutSynonyms.synonyms.length === 0,
+    'отсутствие fm.synonyms должно давать пустой массив, а не undefined')
+  group('cardView: отсутствие fm.synonyms даёт []')
 }
 
 function fmUnicodeChecks(): void {
@@ -376,6 +392,7 @@ function liveDeckChecks(): void {
 function main(): void {
   console.log('Слой данных — yamlfm/journal/db: круговые обходы и зоны владения')
   fmRoundtripChecks()
+  cardViewSynonymsChecks()
   fmUnicodeChecks()
   fmLongLineChecks()
   fmNbspChecks()

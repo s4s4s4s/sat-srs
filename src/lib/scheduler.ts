@@ -1490,12 +1490,23 @@ export function levenshtein(a: string, b: string): number {
  */
 export type TypeVerdict = 'correct' | 'typo' | 'twin' | 'wrong'
 
-export function checkTyped(typed: string, word: string): TypeVerdict {
+/**
+ * Проверка ввода по буквам. `synonyms` (fm.synonyms), это явное разрешение тьютора: любая из
+ * этих форм засчитывается наравне со словом карточки, включая терпимость к опечаткам.
+ *
+ * Отличие от C10 (`typedTwin`): двойника ищет автоматика по всей колоде через общее
+ * значение (`sharesMeaning`) и даёт `Hard`, вспомнил смысл, но не ту форму. `synonyms`
+ * задаёт тьютор вручную для конкретной карточки, и совпадение с любой из форм, это
+ * `correct`, а не «почти». Порядок в `submitObjective` уже отдаёт приоритет `checkTyped`:
+ * ветка `typedTwin` включается только на `wrong`, поэтому синоним из списка никогда не
+ * доходит до неё.
+ */
+export function checkTyped(typed: string, word: string, synonyms: readonly string[] = []): TypeVerdict {
   const t = typed.trim().toLowerCase()
-  const w = word.trim().toLowerCase()
-  if (t === w) return 'correct'
-  // опечатка: <= TYPO_MAX_EDITS правок при длине слова >= TYPO_MIN_LEN (пороги в journal.ts)
-  if (w.length >= TYPO_MIN_LEN && levenshtein(t, w) <= TYPO_MAX_EDITS) return 'typo'
+  const формы = [word, ...synonyms].map(f => f.trim().toLowerCase()).filter(Boolean)
+  if (формы.includes(t)) return 'correct'
+  // опечатка: <= TYPO_MAX_EDITS правок при длине формы >= TYPO_MIN_LEN (пороги в journal.ts)
+  if (формы.some(f => f.length >= TYPO_MIN_LEN && levenshtein(t, f) <= TYPO_MAX_EDITS)) return 'typo'
   return 'wrong'
 }
 

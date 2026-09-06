@@ -27,7 +27,8 @@ export interface CardView {
   level: number         // уровень ввода (Duolingo-путь); только у vocab (kind vocab, pos≠transition); 999 = без уровня, в хвост
   kind: string          // vocab | error | grammar | …
   domain: string        // домен College Board (II/CS/EOI/SEC/ALG/AM/PSDA/GEO)
-  confusables: string[] // авторские «путаемые» дистракторы от тьютора — приоритетнее выборки из колоды
+  confusables: string[] // авторские «путаемые» дистракторы от тьютора, приоритетнее выборки из колоды
+  synonyms: string[]    // допустимые ответы ввода помимо word; задаёт тьютор
   from_mark: string[]   // формы, в которых владелец отметил это слово как незнакомое (см. liveMarkedLemmas в journal.ts);
                         // пусто, если карточка добавлена не из живой отметки — совпадение по word тоже поднимает ввод
   leech: string         // дата пометки пиявкой (isLeech из metrics.ts: reps ≥ LEECH_REPS и stability < LEECH_STABILITY_DAYS), пусто = не пиявка

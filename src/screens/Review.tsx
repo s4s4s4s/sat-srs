@@ -645,7 +645,7 @@ export default function Review() {
     if (isGiveUp(value)) { giveUp(); return }
     const вводом = byTyping || task.format === 'type'
     const ok: TypeVerdict = вводом
-      ? (task.item.view.answerNum ? checkNumeric(value, task.answer) : checkTyped(value, task.answer))
+      ? (task.item.view.answerNum ? checkNumeric(value, task.answer) : checkTyped(value, task.answer, task.item.view.synonyms))
       : sameAnswer(value, task.answer) ? 'correct' : 'wrong'
     /* C10: синоним из колоды — законный ответ на то же предложение, и «Мимо» за него
        отправляло карточку в переучивание за верно вспомненное значение. Вариантам это
