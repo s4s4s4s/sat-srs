@@ -1,8 +1,12 @@
 import { useApp, views, readingViews, questionViews, setScreen, startSync, startLesson, logReading, unsyncedCount } from '../lib/store'
 import { homeCounts, sectionOf, newBudgetFor, levelStats, activeLevel, type Section } from '../lib/scheduler'
-import { streak, minutesToday, readMinutesToday, floorDays, reviewsByDay, readTextSlugs, MIN_MINUTES, READ_MIN_MINUTES, RUN_MIN_REVIEWS, type PauseRange } from '../lib/journal'
-import { DAY_NORMS, NEW_PER_DAY, NORM_LEVELS, NORM_TITLE_GENITIVE, dayNormFill, dayNormStatus } from '../lib/norms'
-import { examReady, nextAttempt } from '../lib/metrics'
+import {
+  streak, minutesToday, floorDays, reviewsByDay, readTextSlugs, readTextsToday, dayUnitsByDay,
+  practiceUnitsByDay, MIN_MINUTES, READ_MIN_TEXTS, RUN_MIN_REVIEWS, type PauseRange
+} from '../lib/journal'
+import { DAY_NORMS, NORM_LEVELS, NORM_TITLE_GENITIVE, dayNormFill, dayNormStatus, newPerDay } from '../lib/norms'
+import { sectionOrder, nextSection, SECTION_REASON, SECTION_TITLE } from '../lib/dayplan'
+import { examReady, nextAttempt, practiceUnitRatio } from '../lib/metrics'
 import { stageCounts, type WordStage } from '../lib/wordstatus'
 import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt, Book } from '../components/Icon'
@@ -178,15 +182,15 @@ export default function Home() {
   /* Бюджет новых — свой у каждого раздела (`newBudgetFor`). Общий на колоду
      доставался тому, кого открывали первым, и остальные стояли с погашенной
      кнопкой «Всё повторено» поверх нетронутых карточек. */
-  const budgetRw = newBudgetFor(rw, NEW_PER_DAY.norm, app.journal, today)
-  const budgetLogic = newBudgetFor(logic, NEW_PER_DAY.norm, app.journal, today)
-  const budgetGrammar = newBudgetFor(grammar, NEW_PER_DAY.norm, app.journal, today)
-  const budgetMath = newBudgetFor(math, NEW_PER_DAY.norm, app.journal, today)
-  // запас сверх оптимума — им живёт кнопка «Ещё» (урок сверх нормы)
-  const extraRw = newBudgetFor(rw, NEW_PER_DAY.max, app.journal, today)
-  const extraLogic = newBudgetFor(logic, NEW_PER_DAY.max, app.journal, today)
-  const extraGrammar = newBudgetFor(grammar, NEW_PER_DAY.max, app.journal, today)
-  const extraMath = newBudgetFor(math, NEW_PER_DAY.max, app.journal, today)
+  const budgetRw = newBudgetFor(rw, newPerDay('rw', 'norm'), app.journal, today)
+  const budgetLogic = newBudgetFor(logic, newPerDay('logic', 'norm'), app.journal, today)
+  const budgetGrammar = newBudgetFor(grammar, newPerDay('grammar', 'norm'), app.journal, today)
+  const budgetMath = newBudgetFor(math, newPerDay('math', 'norm'), app.journal, today)
+  // запас сверх оптимума - им живёт кнопка «Ещё» (урок сверх нормы)
+  const extraRw = newBudgetFor(rw, newPerDay('rw', 'max'), app.journal, today)
+  const extraLogic = newBudgetFor(logic, newPerDay('logic', 'max'), app.journal, today)
+  const extraGrammar = newBudgetFor(grammar, newPerDay('grammar', 'max'), app.journal, today)
+  const extraMath = newBudgetFor(math, newPerDay('math', 'max'), app.journal, today)
   const pause: PauseRange | null = app.settings.pauseFrom && app.settings.pauseTo
     ? { from: app.settings.pauseFrom, to: app.settings.pauseTo } : null
   const st = streak(app.journal, today, pause)
@@ -196,11 +200,21 @@ export default function Home() {
      которой день зачитывается (`reviewsByDay` → `isDayDone`), а не отдельным
      подсчётом: два независимых счёта одного и того же разъезжаются. */
   const reviewsToday = reviewsByDay(app.journal).get(today) ?? 0
-  const norm = dayNormStatus(reviewsToday)
-  // Вторая половина защищённого минимума. До сих пор её не было видно нигде,
-  // и в «Метриках» семь недель подряд стоит «0/7 (не трекается)».
-  const readMins = readMinutesToday(app.journal)
-  const readDone = readMins >= READ_MIN_MINUTES
+  /* Полоса дня (WS6b) - три сегмента, а не одна цифра: карточки и практика
+     складываются в один и тот же зачёт дня (`dayUnitsByDay`, WS6a), у практики
+     свой вес относительно карточки (`practiceUnitRatio`, metrics.ts). Норма и
+     заливка обязаны считаться от ОБЩЕГО зачёта, а не только от карточек - иначе
+     сорокаминутный заход в практику по-прежнему рисовал бы пустую полосу. */
+  const unitRatio = practiceUnitRatio(app.journal)
+  const practiceUnitsToday = practiceUnitsByDay(app.journal, unitRatio).get(today) ?? 0
+  const unitsToday = dayUnitsByDay(app.journal, unitRatio).get(today) ?? 0
+  const norm = dayNormStatus(unitsToday)
+  /* Вторая половина защищённого минимума - норма чтения (WS6a) считается ТЕКСТАМИ,
+     а не минутами (READ_MIN_TEXTS): каталог кончается за пять дней при норме
+     30 мин/день, и метрика вставала на нуле не потому, что не читали, а потому,
+     что читать больше нечего (см. journal.ts::READ_MIN_TEXTS). */
+  const textsToday = readTextsToday(app.journal, today)
+  const readDone = textsToday >= READ_MIN_TEXTS
   /* Считаем до БЛИЖАЙШЕЙ попытки (E3): до 03.10 это первая, после неё суперскорная 07.11.
      Показывать 96 дней там, где на деле 61, значит каждый день врать себе про запас
      времени; зажим Math.max(0, ...) врал ровно так же с другого конца - с 03.10 счётчик
@@ -242,17 +256,20 @@ export default function Home() {
   const go = (s: Section, reviewOnly = false) => () => startLesson(s, reviewOnly)
   const goExtra = (s: Section) => () => startLesson(s, false, true)
 
-  /* Подпись полосы дня. Число упражнений впереди всегда: это то, что человек
-     сделал сегодня. Дальше — состояние дня (пауза или зачёт) и следующая цель;
-     когда взят максимум, подпись так и говорит — дальше идти незачем. */
+  /* Подпись полосы дня. Три числа впереди всегда: карточки, практика (в
+     единицах, WS6a) и текст против нормы READ_MIN_TEXTS - это то, что человек
+     сделал сегодня по каждому из трёх каналов. Дальше - состояние дня (пауза
+     или зачёт) и следующая цель; когда взят максимум, подпись так и говорит -
+     дальше идти незачем. */
+  const dayCounts = `${упражнений(reviewsToday)} · практика ${Math.round(practiceUnitsToday)} · текст ${textsToday}/${READ_MIN_TEXTS}`
   const dayGoal = norm.next
-    ? `до ${NORM_TITLE_GENITIVE[norm.next.level]} ${norm.next.target - reviewsToday}`
+    ? `до ${NORM_TITLE_GENITIVE[norm.next.level]} ${norm.next.target - unitsToday}`
     : 'максимум дня взят'
   const dayLabel = st.pausedToday
-    ? `${упражнений(reviewsToday)} · пауза до ${app.settings.pauseTo.slice(5).split('-').reverse().join('.')}`
+    ? `${dayCounts} · пауза до ${app.settings.pauseTo.slice(5).split('-').reverse().join('.')}`
     : st.todayDone
-      ? `${упражнений(reviewsToday)} · ${norm.next ? `зачтён · ${dayGoal}` : dayGoal}`
-      : `${упражнений(reviewsToday)} · ${dayGoal}`
+      ? `${dayCounts} · ${norm.next ? `зачтён · ${dayGoal}` : dayGoal}`
+      : `${dayCounts} · ${dayGoal}`
 
   // строка активного уровня для блока «Слова»
   // Чтение: ступень выводится из прочитанного (readingLevel), а не спрашивается настройкой
@@ -267,6 +284,22 @@ export default function Home() {
   const curStat = rwStats.find(s => s.level === rwActive)
   const levelName = app.levelNames[String(rwActive)] ?? `Уровень ${rwActive}`
   const levelLine = curStat ? `${levelName} · ${curStat.introduced}/${curStat.total}` : undefined
+
+  /* Приоритет дня (WS6b, lib/dayplan.ts) - разделы упорядочены по долгу перед
+     весом RW цифрового SAT, а не в фиксированном порядке «Слова, Логика, …».
+     Кнопка выше списка называет предмет, а не проценты (SECTION_REASON): цифра
+     долга ничего не говорит ученику о том, чем заняться. */
+  const today0 = nextSection(app.journal, all, today)
+  const order = sectionOrder(app.journal, all, today)
+  const sectionMeta: Record<Section, {
+    title: string; icon: React.ReactNode; badge: string; glyph: string; cards: CardView[]
+    budget: number; extraBudget: number; levelLine?: string; onPath?: () => void
+  }> = {
+    rw: { title: SECTION_TITLE.rw, icon: <Bolt size={18} />, badge: 'badge-blue', glyph: 'var(--rune-ansuz)', cards: rw, budget: budgetRw, extraBudget: extraRw, levelLine, onPath: () => setScreen('path') },
+    logic: { title: SECTION_TITLE.logic, icon: <span className="sec-x">∴</span>, badge: 'badge-orange', glyph: 'var(--rune-tiwaz)', cards: logic, budget: budgetLogic, extraBudget: extraLogic },
+    grammar: { title: SECTION_TITLE.grammar, icon: <span className="sec-x">¶</span>, badge: 'badge-green', glyph: 'var(--rune-ansuz)', cards: grammar, budget: budgetGrammar, extraBudget: extraGrammar },
+    math: { title: SECTION_TITLE.math, icon: <span className="sec-x">∑</span>, badge: 'badge-purple', glyph: 'var(--rune-tiwaz)', cards: math, budget: budgetMath, extraBudget: extraMath }
+  }
 
   return (
     <div className="screen s-home">
@@ -347,28 +380,38 @@ export default function Home() {
           </span>
         </div>
         <div className="minbar-row" style={{ marginTop: 0 }}>
+          {/* Три сегмента (WS6b): карточки заливкой, практика второй заливкой поверх
+              того же счёта - обе части одного зачёта дня (`dayUnitsByDay`), а не два
+              независимых числа с разным масштабом. */}
           <div className="minbar minbar-day">
             <div style={{ width: `${dayNormFill(reviewsToday) * 100}%` }} />
+            <div
+              className="minbar-seg-practice"
+              style={{
+                left: `${dayNormFill(reviewsToday) * 100}%`,
+                width: `${Math.max(0, dayNormFill(unitsToday) - dayNormFill(reviewsToday)) * 100}%`
+              }}
+            />
             {/* Три нормы дня видны сразу: взятая засечка гаснет в зелёное, за
                 невзятой видно, сколько осталось. */}
             {NORM_LEVELS.map(l => (
               <span
                 key={l}
-                className={`minbar-tick${reviewsToday >= DAY_NORMS[l] ? ' is-hit' : ''}`}
+                className={`minbar-tick${unitsToday >= DAY_NORMS[l] ? ' is-hit' : ''}`}
                 style={{ left: l === 'max' ? 'calc(100% - 2px)' : `calc(${(DAY_NORMS[l] / DAY_NORMS.max) * 100}% - 1px)` }}
-                title={`${NORM_TITLE_GENITIVE[l]} — ${DAY_NORMS[l]}`}
+                title={`${NORM_TITLE_GENITIVE[l]} - ${DAY_NORMS[l]}`}
               />
             ))}
           </div>
           <span className={`minbar-label${st.todayDone ? ' done' : ''}`}>{dayLabel}</span>
         </div>
-        {/* Чтение — вторая половина минимума. Отдельной полосой, а не в общем
-            зачёте: подменять тридцать минут чтения пятнадцатью минутами
-            карточек нельзя, это разные навыки. */}
+        {/* Чтение - вторая половина минимума. Отдельной полосой, а не в общем
+            зачёте: подменять текст карточками нельзя, это разные навыки.
+            Полоса чтения считает ТЕКСТЫ (READ_MIN_TEXTS), не минуты - см. journal.ts. */}
         <div className="minbar-row">
-          <div className="minbar"><div style={{ width: `${Math.min(100, (readMins / READ_MIN_MINUTES) * 100)}%` }} /></div>
+          <div className="minbar"><div style={{ width: `${Math.min(100, (textsToday / READ_MIN_TEXTS) * 100)}%` }} /></div>
           <span className={`minbar-label${readDone ? ' done' : ''}`}>
-            чтение {Math.floor(readMins)}/{READ_MIN_MINUTES} мин
+            текст {textsToday}/{READ_MIN_TEXTS}
           </span>
           <button
             className="read-add"
@@ -386,10 +429,29 @@ export default function Home() {
         {st.freezeSpentYesterday && <div className="freeze-note">❄ Заморозка спасла серию — осталось {st.freezes}</div>}
       </div>
 
-      <SectionBlock title="Слова" icon={<Bolt size={18} />} badge="badge-blue" glyph="var(--rune-ansuz)" cards={rw} budget={budgetRw} extraBudget={extraRw} onStart={go('rw')} onReview={go('rw', true)} onExtra={goExtra('rw')} levelLine={levelLine} onPath={() => setScreen('path')} />
-      <SectionBlock title="Логика" icon={<span className="sec-x">∴</span>} badge="badge-orange" glyph="var(--rune-tiwaz)" cards={logic} budget={budgetLogic} extraBudget={extraLogic} onStart={go('logic')} onReview={go('logic', true)} onExtra={goExtra('logic')} />
-      <SectionBlock title="Грамматика" icon={<span className="sec-x">¶</span>} badge="badge-green" glyph="var(--rune-ansuz)" cards={grammar} budget={budgetGrammar} extraBudget={extraGrammar} onStart={go('grammar')} onReview={go('grammar', true)} onExtra={goExtra('grammar')} />
-      <SectionBlock title="Математика" icon={<span className="sec-x">∑</span>} badge="badge-purple" glyph="var(--rune-tiwaz)" cards={math} budget={budgetMath} extraBudget={extraMath} onStart={go('math')} onReview={go('math', true)} onExtra={goExtra('math')} />
+      {/* Приоритет дня - одна первичная кнопка над разделами (WS6b): называет
+          ПРЕДМЕТ (SECTION_REASON), а не долю долга, которую посчитал dayplan.ts. */}
+      <button type="button" className="btn btn-green section-btn today-btn" onClick={go(today0)}>
+        Сегодня: {sectionMeta[today0].title}
+      </button>
+      <div className="minbar-label today-reason">{SECTION_REASON[today0]}</div>
+      {order.map(s => (
+        <SectionBlock
+          key={s}
+          title={sectionMeta[s].title}
+          icon={sectionMeta[s].icon}
+          badge={sectionMeta[s].badge}
+          glyph={sectionMeta[s].glyph}
+          cards={sectionMeta[s].cards}
+          budget={sectionMeta[s].budget}
+          extraBudget={sectionMeta[s].extraBudget}
+          onStart={go(s)}
+          onReview={go(s, true)}
+          onExtra={goExtra(s)}
+          levelLine={sectionMeta[s].levelLine}
+          onPath={sectionMeta[s].onPath}
+        />
+      ))}
       <ReadingBlock texts={texts} read={readSlugs} level={readLevel} onOpen={() => setScreen('reading')} />
       <PracticeBlock stats={practice} due={practiceDueCount} onOpen={() => setScreen('practice')} />
 

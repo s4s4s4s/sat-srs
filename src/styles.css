@@ -387,6 +387,16 @@ body::before {
 }
 .minbar-tick.is-hit { background: var(--green-text); box-shadow: 0 0 0 1px rgba(0, 0, 0, .7); }
 
+/* Второй сегмент полосы дня (WS6b) - практика поверх карточек, тот же зачёт
+   дня (dayUnitsByDay), другой цвет: ученик обязан видеть, что заполнило полосу -
+   упражнения с карточками или заход в практику. */
+.minbar-seg-practice { position: absolute; top: 0; bottom: 0; background: var(--purple); border-radius: 0 99px 99px 0; transition: width .3s, left .3s; }
+
+/* Приоритет дня (WS6b, dayplan.ts): кнопка стоит отдельно над списком разделов,
+   не внутри карточки - список ниже уже начинается со своих карточек. */
+.today-btn { margin: 10px 4px 2px; }
+.today-reason { display: block; margin: 0 4px 14px; font-size: 13px; color: var(--text2); }
+
 /* Отметка чтения: цель — одно касание. Половина защищённого минимума не
    трекалась семь недель подряд, и любой лишний шаг здесь означает, что она
    не будет трекаться и дальше. */

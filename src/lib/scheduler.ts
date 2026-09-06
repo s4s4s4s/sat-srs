@@ -222,12 +222,22 @@ export function newBudgetFor(cards: CardView[], perDay: number, journal: Journal
  * ввод, которого урок не выдаст, — тем же расхождением плашки и очереди, от которого
  * защищается `newAvail` в `homeCounts`. Заметно это стало на четвёртом разделе («Логика»,
  * 22.08): пока разделов было три и все с запасом, лишняя норма ни разу не вылезла наружу.
+ *
+ * `perDay` принимает и число (прежнее поведение - одна норма на все разделы), и функцию
+ * от раздела (WS6b, `norms.ts::newPerDay`): норма ввода своя у каждого раздела, и общий
+ * остаток обязан считать каждое слагаемое СВОИМ числом, а не одним на всю колоду.
  */
-export function newBudgetTotal(all: CardView[], perDay: number, journal: JournalLine[], day: string = dayKey()): number {
+export function newBudgetTotal(
+  all: CardView[],
+  perDay: number | ((s: Section) => number),
+  journal: JournalLine[],
+  day: string = dayKey()
+): number {
   return SECTIONS.reduce((сумма, s) => {
     const раздел = all.filter(c => sectionOf(c) === s)
     const новых = раздел.filter(c => !c.suspended && c.fsrs.state === State.New).length
-    return сумма + Math.min(новых, newBudgetFor(раздел, perDay, journal, day))
+    const норма = typeof perDay === 'function' ? perDay(s) : perDay
+    return сумма + Math.min(новых, newBudgetFor(раздел, норма, journal, day))
   }, 0)
 }
 

@@ -15,7 +15,7 @@ import {
 } from './journal'
 import type { CardRec, CardView, Format, JournalRec, QuestionRec, QuestionView, ReadingRec, ReadingView, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS } from './types'
-import { NEW_PER_DAY } from './norms'
+import { newPerDay } from './norms'
 import { setSoundEnabled } from './sound'
 import { migrateSettings } from './settings'
 
@@ -743,7 +743,7 @@ function updateBadge() {
   if (typeof nav.setAppBadge !== 'function') return
   try {
     const все = state.cards.map(cardView)
-    const budget = newBudgetTotal(все, NEW_PER_DAY.norm, state.journal, dayKey())
+    const budget = newBudgetTotal(все, s => newPerDay(s, 'norm'), state.journal, dayKey())
     const c = homeCounts(все, budget)
     void nav.setAppBadge(c.learnDue + c.revDue).catch(() => {})
   } catch { /* ignore */ }
