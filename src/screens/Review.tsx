@@ -324,6 +324,12 @@ export default function Review() {
   // от 0 обязательно, иначе интро-«Уже знаю это слово» подхватило бы чужое старое
   // значение с предыдущей карточки как якобы измеренное чистое время ответа.
   const answeredMs = useRef<number | null>(null)
+  /* F20/C12: начало отсчёта ЧИСТОГО времени ответа. Обычно совпадает с моментом показа
+     (shownAt), но подсказка C12 сдвигает его на себя: скелет слова начинает задание заново,
+     и время первой попытки вместе с чтением подсказки к скорости второй отношения не имеет.
+     Отдельная ссылка, а не сдвиг shownAt: shownAt кормит зачётные минуты урока и кап
+     cardTimeCap - время, проведённое над карточкой, подсказкой не сокращается. */
+  const answerFrom = useRef(Date.now())
   // зачётные секунды: тот же кап на карточку, что и в журнале — таймер согласован с минутами дня
   const creditedSec = useRef(0)
   // минуты, уже сделанные сегодня ДО этой сессии — таймер минимума общедневной, не сессионный
@@ -375,6 +381,7 @@ export default function Review() {
     setSaveError('')
     setMarkError('')
     shownAt.current = Date.now()
+    answerFrom.current = shownAt.current
     answeredMs.current = null
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [head && `${head.view.path}#${head.skill}#${step}`])
@@ -634,7 +641,7 @@ export default function Review() {
    */
   function giveUp() {
     if (!task || revealed) return
-    answeredMs.current = Date.now() - shownAt.current
+    answeredMs.current = Date.now() - answerFrom.current
     setGaveUp(true)
     revealAnswer()
   }
@@ -645,12 +652,15 @@ export default function Review() {
    * как только подсказка раскрыта (условие в разметке ниже - attempts >= 1 && !hintUsed).
    *
    * Раскрытие начинает задание заново: поле очищается (второй заход вводится с нуля, а не
-   * правкой промаха), скелет встаёт отдельной строкой над полем.
+   * правкой промаха), скелет встаёт отдельной строкой над полем, и отсчёт чистого времени
+   * ответа (F20) стартует здесь - в answer_ms второй попытки не должно быть ни первой
+   * попытки, ни чтения подсказки.
    */
   function applyHint() {
     if (!task || task.format !== 'type' || revealed || hintUsed || attempts < 1) return
     setHintUsed(true)
     setTyped('')
+    answerFrom.current = Date.now()
     inputRef.current?.focus()
   }
 
@@ -668,7 +678,7 @@ export default function Review() {
     // F20: момент ответа для форматов без объективного вердикта (простой показ) -
     // submitObjective/giveUp фиксируют свой раньше и этим значением не перетираются
     // (см. их собственные присваивания), здесь только запасной путь для «Показать ответ».
-    if (answeredMs.current === null) answeredMs.current = Date.now() - shownAt.current
+    if (answeredMs.current === null) answeredMs.current = Date.now() - answerFrom.current
     play('reveal')
     setRevealed(true)
   }
@@ -704,12 +714,23 @@ export default function Review() {
       итог = исход
     }
 
-    answeredMs.current = Date.now() - shownAt.current
+    answeredMs.current = Date.now() - answerFrom.current
     setPicked(value)
     setVerdict(итог)
     if (итог === 'typo' || итог === 'twin') play('typo')
     else soundOutcome(итог === 'correct' || итог === 'cued')
     setRevealed(true)
+  }
+
+  /**
+   * Окно знакомства этой единицы - переznakomство «Подзабылось», а не первое знакомство:
+   * слово провалено в этой сессии (lapsed) либо пришло в Relearning из прошлой. Тот же
+   * признак, по которому окно подписывается «Подзабылось» (см. isReintro в разметке) и по
+   * которому его выдаёт baseFormat (scheduler.ts) - один источник правды на подпись,
+   * выдачу и списание бюджета REINTRO_PER_LESSON.
+   */
+  function isReintroScreen(item: StudyItem): boolean {
+    return lapsed.current.has(itemKey(item)) || item.fsrs.state === State.Relearning
   }
 
   async function grade(g: Grade) {
@@ -725,6 +746,8 @@ export default function Review() {
 
       // окно-знакомство показано: тратит СВОЙ бюджет (F82), флаг провала снят
       if (task.format === 'intro') {
+        // порядок важен: признак «Подзабылось» читается ДО снятия флага провала
+        const reintro = isReintroScreen(task.item)
         lapsed.current.delete(itemKey(task.item))
         /* Знакомства новых слов считаем отдельно: дневной лимит про них, а не про «Подзабылось».
            Счётчик растёт на ЛЮБОЙ оценке знакомства, включая «Уже знаю это слово» (Rating.Easy).
@@ -732,8 +755,12 @@ export default function Review() {
            такое слово не тратил: остаток дня (dayNewLeft - freshIntros) оставался прежним, а
            ступень bonusNew вводила сверх него ещё одно слово - дневная норма NEW_PER_DAY
            превышалась ровно на число «уже знаю» за урок. */
-        if (task.item.fsrs.state === State.New && !introduced.current.has(itemKey(task.item))) freshIntros.current++
-        else reintroShown.current++
+        /* F82-bis: бюджет «Подзабылось» списывает ТОЛЬКО окно «Подзабылось». Раньше здесь стоял
+           else к проверке новизны, и слот REINTRO_PER_LESSON уходил на любое окно, которое не
+           прошло эту проверку, - в том числе на повторный показ знакомства уже введённого слова.
+           Урок терял окна переznakomства, ни разу их не показав. */
+        if (reintro) reintroShown.current++
+        else if (task.item.fsrs.state === State.New && !introduced.current.has(itemKey(task.item))) freshIntros.current++
       }
       // интро — знакомство, не вспоминание: FSRS не трогаем; отработка через пару карточек
       if (task.format === 'intro' && g !== Rating.Easy) {
@@ -936,7 +963,7 @@ export default function Review() {
   const isLeechFirstShow = task.format === 'reveal' && leechReturned(card, new Date()) === 'first'
   // переznakomство: слово не смогли вспомнить («Заново») — то же окно, подпись «Подзабылось».
   // Ловим и внутрисессионный провал (lapsed, на любой стадии), и приход в Relearning из прошлой сессии.
-  const isReintro = isIntro && (lapsed.current.has(itemKey(task.item)) || task.item.fsrs.state === State.Relearning)
+  const isReintro = isIntro && isReintroScreen(task.item)
   const sentence = task.ctx
   /* Перевод ровно того предложения, что показано: контексты ротируются, поэтому
      перевод берётся по индексу в contexts, а не первым из списка. Предложение
