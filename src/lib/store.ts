@@ -289,7 +289,10 @@ export async function fullResync(): Promise<number> {
   await startSync()
   // startSync ошибку не бросает — она оседает в syncStatus; для вызывающего это провал.
   // Приведение типа нужно, потому что TS помнит присвоенное выше 'syncing' и не знает про мутацию внутри startSync.
-  if ((state.syncStatus as SyncStatus) !== 'ok') {
+  // `warning` (F30, git-конфликт или карточка в карантине) провалом пересинхронизации не считается:
+  // карточки загружены, а предупреждение остаётся видно на главной строкой syncError.
+  const done = (state.syncStatus as SyncStatus) === 'ok' || (state.syncStatus as SyncStatus) === 'warning'
+  if (!done) {
     throw new Error(state.syncError || 'Не удалось загрузить карточки — нажмите Синк.')
   }
   return state.cards.length
@@ -319,9 +322,17 @@ export function currentSettings(): Settings {
   return state.settings
 }
 
-/** Несинхронизированные изменения: строки журнала + dirty-карточки */
+/**
+ * Несинхронизированные изменения: строки журнала + dirty-карточки.
+ *
+ * F30: карточка в карантине (`broken`) считается наравне с остальными. Прежний фильтр
+ * `dirty && !broken` повторял фильтр отправки, и застрявшая карточка исчезала из счётчика
+ * ровно потому, что её нельзя отправить: экран показывал «всё синхронизировано» при живой
+ * неотправленной оценке. Счётчик отвечает на вопрос «сколько работы ещё дома», а не
+ * «сколько уедет ближайшим push» (см. isStuck в sync.ts).
+ */
 export function unsyncedCount(): number {
-  return state.journal.filter(j => !j.synced).length + state.cards.filter(c => c.dirty && !c.broken).length
+  return state.journal.filter(j => !j.synced).length + state.cards.filter(c => c.dirty).length
 }
 
 /**

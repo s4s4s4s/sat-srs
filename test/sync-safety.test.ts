@@ -33,12 +33,13 @@ import {
   applyPull, putCard, getAllCards, clearLocalData,
   MASS_DELETE_CONFIRM_MS, MassDeleteError, type MassDeletePending
 } from '../src/lib/db'
-import { isCardPath, isJournalPath, massDeleteMessage } from '../src/lib/sync'
+import { isCardPath, isJournalPath, massDeleteMessage, isStuck, stuckCards, stuckMessage, joinWarnings, STUCK_SHOW } from '../src/lib/sync'
 import { clampDueBeforeCap, journalElapsedMs, leechTransition } from '../src/lib/store'
 import { dueCap, nextAttempt, newIntroAllowed, PRIMARY_DATE, EXAM_DATE } from '../src/lib/scheduler'
 import { cardTimeCap } from '../src/lib/journal'
 import { isLeech, LEECH_STABILITY_DAYS } from '../src/lib/metrics'
 import { endOfStudyDay, dayKey, calendarKey, startOfStudyDay, addDaysKey } from '../src/lib/daytime'
+import { screenSource } from './screen-source'
 import type { CardRec, JournalRec } from '../src/lib/types'
 
 let passed = 0
@@ -603,6 +604,51 @@ async function quarantineChecks(): Promise<void> {
   await clearLocalData()
 }
 
+// ---- 10. F30: застрявшая карточка не молчит --------------------------------
+
+function stuckChecks(): void {
+  const cards = [
+    cardRec({ word: 'a' }, { path: 'Учёба/Карточки/buttress.md', dirty: 1, broken: 0 }),
+    cardRec({ word: 'b' }, { path: 'Учёба/Карточки/placate.md', dirty: 1, broken: 1 }),
+    cardRec({ word: 'c' }, { path: 'Учёба/Карточки/candid.md', dirty: 0, broken: 1 }),
+    cardRec({ word: 'd' }, { path: 'Учёба/Карточки/venerate.md', dirty: 0, broken: 0 })
+  ]
+  const stuck = stuckCards(cards)
+  assert(stuck.length === 1 && stuck[0].path.endsWith('placate.md'),
+    `застрявшая - это dirty И broken, получено: ${stuck.map(c => c.path).join(', ')}`)
+  assert(!isStuck({ dirty: 1, broken: 0 }) && !isStuck({ dirty: 0, broken: 1 }) && !isStuck({}),
+    'ни битый файл без работы, ни работа без битого файла застрявшими не считаются')
+  group('F30: застрявшая карточка - та, у которой есть и неотправленная работа, и битый файл')
+
+  const one = stuckMessage(['Учёба/Карточки/placate.md'])
+  assert(one === '⚠️ 1 карточка ждёт починки файла: placate', `единственное число сломано: ${one}`)
+  const two = stuckMessage(['Учёба/Карточки/placate.md', 'Учёба/Карточки/candid.md'])
+  assert(two === '⚠️ 2 карточки ждут починки файла: placate, candid', `множественное число сломано: ${two}`)
+  const many = stuckMessage(Array.from({ length: 7 }, (_, i) => `Учёба/Карточки/w${i}.md`))
+  assert(many.startsWith('⚠️ 7 карточек ждут починки файла: w0, w1, w2, w3, w4') && many.endsWith('и ещё 2'),
+    `длинный список должен обрываться на ${STUCK_SHOW} с хвостом «и ещё N»: ${many}`)
+  group('F30: предупреждение называет число и слаги файлов, которые надо починить')
+
+  // два предупреждения одного цикла (git-конфликт и карантин) не вытесняют друг друга
+  assert(joinWarnings(undefined, undefined) === undefined, 'без предупреждений строки быть не должно')
+  assert(joinWarnings('конфликт', undefined) === 'конфликт', 'единственное предупреждение остаётся как есть')
+  assert(joinWarnings('конфликт', 'карантин') === 'конфликт; карантин', 'два предупреждения показываются оба')
+  group('F30: предупреждения цикла сводятся в одну строку, не затирая друг друга')
+
+  /* Структурно (React и IndexedDB-состояния store в node нет): исход цикла и счётчик на экране
+     обязаны видеть застрявшую карточку. Проверка ловит возврат прежних фильтров. */
+  const doSyncBody = funcBody(source('sync.ts'), 'async function doSync')
+  assert(doSyncBody.includes('stuckCards(cards)'), 'doSync обязан считать застрявшие карточки')
+  assert(!doSyncBody.includes("status: 'ok'"),
+    'doSync не должен возвращать жёсткий ok: статус успешного цикла решает наличие предупреждения')
+  const counter = funcBody(source('store.ts'), 'export function unsyncedCount')
+  assert(!counter.includes('broken'),
+    'unsyncedCount не должен отсеивать битые карточки: неотправленная работа есть и у них')
+  const home = screenSource('Home.tsx')
+  assert(home.includes("app.syncStatus === 'warning'"), 'главная обязана показывать статус warning как требующий внимания')
+  group('F30 (структурно): цикл синка, счётчик несинхронизированного и главная видят карантин')
+}
+
 async function main(): Promise<void> {
   console.log('SRS слой данных: слияние/журнал/удаление/атомарность/время/срок/пиявка/карантин')
   mergeChecks()
@@ -614,6 +660,7 @@ async function main(): Promise<void> {
   movingCapChecks()
   leechChecks()
   await quarantineChecks()
+  stuckChecks()
   const live = liveDeckChecks()
   console.log(`\nВсе проверки слоя данных пройдены (${passed} групп)${live ? '' : ', живая колода не подключалась'}.`)
 }

@@ -1,5 +1,5 @@
 import { GitHubClient, GhError, type TreeEntry } from './github'
-import { parseMd, serializeMd, mergeCard, cardView } from './yamlfm'
+import { parseMd, serializeMd, mergeCard, cardView, slugFromPath } from './yamlfm'
 import { parseNdjson, toNdjson } from './journal'
 import { buildReport } from './report'
 import { buildMetricsSnapshot, appendDailySnapshot } from './metrics'
@@ -7,8 +7,18 @@ import { EXAM_DATE } from './scheduler'
 import * as db from './db'
 import type { JournalRec, QuestionRec, ReadingRec, Settings } from './types'
 import { monthOfDay, dayKey } from './daytime'
+import { множ } from './plural'
 
-export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'error' | 'ok'
+/**
+ * Исход цикла синхронизации.
+ *
+ * `warning` (F30) - синк прошёл, но часть работы ученика осталась дома и сама не уедет:
+ * карточка в карантине (битый YAML, git-конфликт) не берётся в push и не считается «отправленной».
+ * Отдельный статус нужен именно потому, что `ok` глушит экранное предупреждение на главной:
+ * баннер «N изменений не синхронизировано» показывается только при статусе, отличном от `ok`,
+ * и застрявшая карточка молчала обеими своими половинами - и в счётчике, и в статусе.
+ */
+export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'error' | 'ok' | 'warning'
 
 export interface SyncResult {
   status: SyncStatus
@@ -102,6 +112,40 @@ export function massDeleteMessage(e: db.MassDeleteError): string {
     + 'при любом другом составе подтверждение не сработает.'
 }
 
+/* ---- F30: карточки, застрявшие в карантине ------------------------------- */
+
+/**
+ * Карточка с неотправленной работой, файл которой битый: push её не берёт (отправить
+ * сломанный YAML значит записать в колоду мусор), и сама она не починится - нужен человек,
+ * который поправит файл в vault. Пока такая карточка есть, синк не «ок».
+ *
+ * Предикат вынесен из doSync отдельной функцией не ради красоты: тот же фильтр нужен
+ * счётчику `unsyncedCount` в store.ts, и два независимых списанных от руки условия
+ * разъезжаются молча - счётчик показывал бы ноль там, где статус говорит о застрявшем.
+ */
+export const isStuck = (c: { dirty?: number; broken?: number }): boolean => !!c.dirty && !!c.broken
+
+export const stuckCards = <T extends { dirty?: number; broken?: number }>(cards: T[]): T[] => cards.filter(isStuck)
+
+/** Сколько слагов называем поимённо: список нужен, чтобы найти файл, а не чтобы прочитать всю колоду. */
+export const STUCK_SHOW = 5
+
+/**
+ * Человекочитаемое предупреждение о застрявших карточках: сколько их и какие именно.
+ * Слаг - это имя файла в vault, по нему карточка и ищется руками.
+ */
+export function stuckMessage(paths: string[]): string {
+  const names = paths.slice(0, STUCK_SHOW).map(slugFromPath)
+  const tail = paths.length > STUCK_SHOW ? ` и ещё ${paths.length - STUCK_SHOW}` : ''
+  return `⚠️ ${множ(paths.length, 'карточка ждёт', 'карточки ждут', 'карточек ждут')} починки файла: ${names.join(', ')}${tail}`
+}
+
+/** Свод предупреждений цикла в одну строку: их может быть два (git-конфликт и карантин). */
+export function joinWarnings(...parts: (string | undefined)[]): string | undefined {
+  const live = parts.filter((p): p is string => !!p)
+  return live.length ? live.join('; ') : undefined
+}
+
 const metricsPathOf = (base: string) => `${base}/${JOURNAL_DIR}/_метрики.ndjson`
 
 /** Слитый криво файл: писать такой нельзя, показывать — незачем (см. места вызова). */
@@ -148,8 +192,14 @@ async function doSync(settings: Settings): Promise<SyncResult> {
       const journal = await db.getAllJournal()
       const dirtyCards = cards.filter(c => c.dirty && !c.broken)
       const unsynced = journal.filter(j => !j.synced)
+      /* F30: карточки, которые push взять не может (битый файл), не молчат. Считаем их ДО выхода:
+         при пустой очереди отправки цикл раньше возвращал ровный `ok` с pushedFiles=0, и застрявшая
+         оценка не показывалась ни статусом, ни счётчиком. */
+      const stuck = stuckCards(cards)
+      const warn = joinWarnings(warning, stuck.length ? stuckMessage(stuck.map(c => c.path)) : undefined)
+      const status: SyncStatus = warn ? 'warning' : 'ok'
       if (!dirtyCards.length && !unsynced.length) {
-        return { status: 'ok', pulledCards: pulled, pulledTexts: texts, pulledQuestions: questions, pushedFiles: 0, conflicts, warning }
+        return { status, pulledCards: pulled, pulledTexts: texts, pulledQuestions: questions, pushedFiles: 0, conflicts, warning: warn }
       }
 
       const files: { path: string; content: string }[] = dirtyCards.map(c => ({
@@ -232,7 +282,7 @@ async function doSync(settings: Settings): Promise<SyncResult> {
       }
       await db.kvSet('lastRemoteCommit', commitSha)
       await db.kvSet('lastSyncAt', Date.now())
-      return { status: 'ok', pulledCards: pulled, pulledTexts: texts, pulledQuestions: questions, pushedFiles: files.length, conflicts, warning }
+      return { status, pulledCards: pulled, pulledTexts: texts, pulledQuestions: questions, pushedFiles: files.length, conflicts, warning: warn }
     }
     return { status: 'error', error: 'Не удалось записать: ветка убегает (6 попыток). Оценки сохранены локально — попробуйте позже.' }
   } catch (e: any) {

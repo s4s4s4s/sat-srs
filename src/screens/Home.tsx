@@ -400,7 +400,9 @@ export default function Home() {
         </div>
       </div>
 
-      <div className={`syncline${app.syncStatus === 'error' ? ' err' : ''}`}>{syncText}</div>
+      {/* F30: `warning` (карточка ждёт починки файла, git-конфликт) подсвечивается как ошибка -
+          это не сводка, а просьба сходить в vault; текст приходит из res.warning через syncError. */}
+      <div className={`syncline${app.syncStatus === 'error' || app.syncStatus === 'warning' ? ' err' : ''}`}>{syncText}</div>
       {(() => {
         const n = unsyncedCount()
         if (n > 0 && app.syncStatus !== 'syncing' && app.syncStatus !== 'ok') {
