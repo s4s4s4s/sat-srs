@@ -658,9 +658,32 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
   const eod = endOfStudyDay(now)
   const items = expandItems(cards, now)
 
-  const learning = items
+  const learningDue = items
     .filter(i => isLearning(i.fsrs.state) && i.fsrs.due.getTime() <= now.getTime() + LEARN_AHEAD_MS)
     .sort((a, b) => a.fsrs.due.getTime() - b.fsrs.due.getTime())
+
+  /* ЕДИНАЯ ВАЛЮТА ПОТОЛКОВ (F14). Повтор созревшей карточки - это Review И Relearning:
+     в Relearning попадают ТОЛЬКО из Review, это провал уже выученного слова, а не знакомство.
+     Дневной остаток (reviewsLeftToday) считал их в «сделано» с самого начала, но резался по
+     нему один лишь бакет overdue, а весь learning-бакет шёл мимо обоих потолков. Замер на
+     коде до правки: день, где счётчик показывает 0 повторов до потолка, всё равно выдавал
+     уроку 80 карточек Relearning - 260 повторов вместо объявленных 180, и разрыв тем шире,
+     чем больше провалов (при 30% Again симуляция аудита дала 246 против 180).
+
+     Провалы идут первыми: карточка, которую только что не вспомнили, ближе всех к полному
+     забыванию, и день обязан потратить остаток на неё раньше, чем на обычную просрочку.
+
+     Learning (сегодняшнее знакомство и его отработка) в потолок повторов НЕ входит и в
+     «сделано» не считается: у ввода своя граница (norms.ts::NEW_PER_DAY, NEW_PER_LESSON), и
+     срезать отработку только что введённого слова дневным потолком значит бросить знакомство
+     недоделанным. Обе стороны учёта согласованы: что не считается в знаменателе, то не
+     режется и в числителе. */
+  const dayLeft = reviewsLeftToday(items, now)
+  const lapsedTaken = learningDue
+    .filter(i => i.fsrs.state === State.Relearning)
+    .slice(0, Math.min(MAX_REVIEW_PER_LESSON, dayLeft))
+  const takenKeys = new Set(lapsedTaken.map(itemKey))
+  const learning = learningDue.filter(i => i.fsrs.state !== State.Relearning || takenKeys.has(itemKey(i)))
 
   /* Потолок повторов за урок. Его не было вовсе: очередь брала ВСЁ, что
      просрочено, без ограничения.
@@ -700,8 +723,10 @@ export function buildQueue(cards: CardView[], newBudget: number, now: Date = new
      Урочный (MAX_REVIEW_PER_LESSON): про длину одного захода: 60 повторов,
      это 12-15 минут, урок такой длины начинают. Дневной (MAX_REVIEW_PER_DAY):
      про сутки целиком, без него второй урок выдавал ещё до 60 повторов, третий ещё,
-     и защиты от лавины просрочки на уровне дня не было вовсе. */
-  const review = shuffle(overdue.slice(0, Math.min(MAX_REVIEW_PER_LESSON, reviewsLeftToday(items, now))))
+     и защиты от лавины просрочки на уровне дня не было вовсе.
+     Оба потолка общие для просрочки и провалов: место, уже занятое Relearning, просрочке
+     не достаётся, иначе единая валюта снова распадётся на две (F14). */
+  const review = shuffle(overdue.slice(0, Math.max(0, Math.min(MAX_REVIEW_PER_LESSON, dayLeft) - lapsedTaken.length)))
 
   // выбор новых: сначала error/grammar (закрывают доказанные пробелы), потом pt-разбор, потом
   // math, потом словарь; словарь идёт уровнями (Duolingo-путь): level ASC, внутри уровня —

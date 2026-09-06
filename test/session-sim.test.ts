@@ -1701,6 +1701,69 @@ function dailyReviewCapChecks(): void {
 }
 
 /**
+ * Провал зрелой карточки: Relearning со сроком «сейчас» (в Relearning попадают только из Review).
+ * Провал случился ВЧЕРА (last_review до rollover 04:00), поэтому в «сделано сегодня» он не
+ * входит и остаток дня целиком доступен ему самому.
+ */
+function relearnCard(word: string): CardView {
+  const v = reviewCard(word, 1, -600_000)
+  v.fsrs = { ...v.fsrs, state: State.Relearning, lapses: 1, due: new Date(BASE - 600_000), last_review: new Date(BASE - 8 * 3600_000) }
+  return v
+}
+
+/**
+ * F14: потолки повторов считаются в одной валюте с тем, что записано в «сделано».
+ *
+ * `reviewsLeftToday` с самого начала считал сделанным Review И Relearning, а срезался по
+ * этому остатку один только бакет просрочки: весь learning-бакет (Learning + Relearning)
+ * уходил в урок целиком. Провал зрелого слова попадал в знаменатель лимита, но самим лимитом
+ * не ограничивался, и чем хуже шёл день, тем сильнее фактическая нагрузка превышала
+ * объявленные MAX_REVIEW_PER_DAY: замер аудита на 400 просроченных карточках дал 246 оценок
+ * за день при 10-30% провалов, репро на этом дереве - 260 повторов при нулевом остатке дня.
+ *
+ * Контракт: повтор созревшей карточки - это Review и Relearning вместе, и оба потолка (урочный
+ * и дневной) распространяются на них одинаково. Знакомство сегодняшнего слова (Learning) вне
+ * этого счёта: у ввода своя граница NEW_PER_DAY, и в «сделано» Learning не входит - обе
+ * стороны учёта согласованы.
+ */
+function relearnCapChecks(): void {
+  const now = new Date(BASE)
+  const ОСТАТОК = 20
+  const провалы = Array.from({ length: 40 }, (_, i) => relearnCard(`провал${i}`))
+  const просрочка = Array.from({ length: 40 }, (_, i) => reviewCard(`долг${i}`, 1, -(i + 1) * 3600_000))
+  const сделано = Array.from({ length: MAX_REVIEW_PER_DAY - ОСТАТОК }, (_, i) => doneTodayCard(`сделано${i}`))
+
+  const q = buildQueue([...провалы, ...просрочка, ...сделано], 0, now)
+  const повторов = q.filter(i => i.fsrs.state === State.Review || i.fsrs.state === State.Relearning).length
+  const relearn = q.filter(i => i.fsrs.state === State.Relearning).length
+  assert(повторов === ОСТАТОК,
+    `дневной потолок обязан считать провалы и просрочку одной валютой: остаток дня ${ОСТАТОК}, урок выдал ${повторов}`)
+  assert(relearn === ОСТАТОК,
+    `остаток дня уходит провалам раньше просрочки: Relearning в уроке ${relearn} из ${повторов}`)
+
+  // день исчерпан целиком: провалы не проходят мимо потолка, как проходили до правки
+  const исчерпан = buildQueue([...провалы, ...просрочка, ...Array.from({ length: MAX_REVIEW_PER_DAY }, (_, i) => doneTodayCard(`всё${i}`))], 0, now)
+  assert(исчерпан.filter(i => i.fsrs.state === State.Relearning).length === 0,
+    `при нулевом остатке дня урок не имеет права выдавать провалы, выдано ${исчерпан.filter(i => i.fsrs.state === State.Relearning).length}`)
+
+  // урочный потолок тоже общий: 60 повторов за заход, из чего бы они ни состояли
+  const свежийДень = buildQueue([...провалы, ...просрочка], 0, now)
+  const заход = свежийДень.filter(i => i.fsrs.state === State.Review || i.fsrs.state === State.Relearning).length
+  assert(заход === MAX_REVIEW_PER_LESSON,
+    `урочный потолок общий для провалов и просрочки: ожидалось ${MAX_REVIEW_PER_LESSON}, получено ${заход}`)
+
+  /* Знакомство сегодняшнего слова потолком повторов не режется: у ввода своя граница, и
+     отработка только что введённого слова обязана дойти до конца даже в исчерпанный день. */
+  const сегодняшние = Array.from({ length: 5 }, (_, i) => learningCard(`сегодня${i}`, BASE - 60_000))
+  const сИсчерпанным = buildQueue([...сегодняшние, ...Array.from({ length: MAX_REVIEW_PER_DAY }, (_, i) => doneTodayCard(`всё${i}`))], 0, now)
+  assert(сИсчерпанным.filter(i => i.fsrs.state === State.Learning).length === 5,
+    'Learning вне потолка повторов: сегодняшнее знакомство доводится до отработки при любом остатке дня')
+
+  console.log('  ✓ F14: провалы и просрочка делят один потолок дня и урока, знакомство считается отдельно')
+  passed++
+}
+
+/**
  * Пиявка изымается из уроков на время переработки.
  *
  * Флаг ставился и снимался, но состав урока не менял: карточка, про которую уже
@@ -2125,6 +2188,7 @@ function main(): void {
   afkCapChecks()
   tomorrowCountChecks()
   dailyReviewCapChecks()
+  relearnCapChecks()
   leechQuarantineChecks()
   leechReturnedChecks()
   leechCapChecks()

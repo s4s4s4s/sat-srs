@@ -34,7 +34,7 @@ import { clampDueBeforeCap, journalElapsedMs, leechTransition } from '../src/lib
 import { dueCap, nextAttempt, newIntroAllowed, PRIMARY_DATE, EXAM_DATE } from '../src/lib/scheduler'
 import { cardTimeCap } from '../src/lib/journal'
 import { isLeech, LEECH_STABILITY_DAYS } from '../src/lib/metrics'
-import { endOfStudyDay } from '../src/lib/daytime'
+import { endOfStudyDay, dayKey, calendarKey, startOfStudyDay, addDaysKey } from '../src/lib/daytime'
 import type { CardRec, JournalRec } from '../src/lib/types'
 
 let passed = 0
@@ -280,6 +280,10 @@ function elapsedChecks(): void {
    зажим на ФИКСИРОВАННОМ потолке, поэтому он взят у dueCap на явную дату, а не
    константой: потолок теперь функция времени (E3), и подставлять его вслепую нельзя. */
 const CAP_SEP = dueCap(new Date(2026, 8, 5, 10, 0, 0))
+/* Учебный день потолка и его начало (04:00) - последний легальный слот зажима (F13).
+   Сам CAP_SEP - локальная полночь 26.09, и по учебному дню это ещё 25-е. */
+const КЛЮЧ_ПОТОЛКА = calendarKey(CAP_SEP)
+const СЛОТ_ПОТОЛКА = startOfStudyDay(КЛЮЧ_ПОТОЛКА)
 
 /** Прежняя формула — для доказательства, что дефект был, а не показался. */
 function oldClamp(next: FsrsCard, now: Date, rnd: number): Date {
@@ -299,7 +303,10 @@ function dueCapChecks(): void {
     const r = clampDueBeforeCap(strong, now, CAP_SEP, () => i / 200)
     assert(r.due > now, `срок ${r.due.toISOString()} не должен быть в прошлом или сегодня-в-прошлом`)
     assert(r.due >= endOfStudyDay(now), 'срок не должен возвращать карточку в сегодняшнюю очередь')
-    assert(r.due <= CAP_SEP, `срок ${r.due.toISOString()} не должен уезжать за потолок`)
+    // потолок назван датой, и граница проверяется учебным днём, а не меткой времени (F13):
+    // локальная полночь 26.09 принадлежит учебному дню 25.09, и сравнение по времени
+    // запрещало ровно тот слот, ради которого потолок и поставлен на 26.09
+    assert(dayKey(r.due) <= КЛЮЧ_ПОТОЛКА, `срок ${r.due.toISOString()} не должен уезжать за учебный день потолка`)
     assert(r.scheduled_days === Math.round((r.due.getTime() - now.getTime()) / DAY),
       `scheduled_days должен считаться от фактического срока, получено ${r.scheduled_days}`)
     assert(r.scheduled_days >= 0, 'отрицательный интервал не маскируется единицей и не пишется в журнал')
@@ -315,13 +322,14 @@ function dueCapChecks(): void {
   assert(narrow.size <= 6 && narrow.size >= 4, `окно хрупкой карточки — около недели, получено ${narrow.size} дней`)
   assert(wide.size > narrow.size, 'прочные карточки уезжают раньше хрупких — разброс по стабильности сохранён')
   assert(Math.min(...wide) < Math.min(...narrow), 'нижняя граница окна у прочной карточки должна быть раньше')
-  assert(Math.max(...wide) === CAP_SEP.getTime() && Math.max(...narrow) === CAP_SEP.getTime(), 'верхняя граница окна — сам потолок')
+  assert(Math.max(...wide) === СЛОТ_ПОТОЛКА.getTime() && Math.max(...narrow) === СЛОТ_ПОТОЛКА.getTime(),
+    'верхняя граница окна - учебный день потолка целиком, а не его канун')
   group('срок: разброс по стабильности сохранён, всё окно лежит между now и потолком')
 
   // меньше суток до потолка: разыгрывать нечего, карточка получает последний легальный слот
   const late = new Date(CAP_SEP.getTime() - 3600_000)
   const r = clampDueBeforeCap(strong, late, CAP_SEP, () => 0.99)
-  assert(r.due.getTime() === CAP_SEP.getTime(), 'при остатке меньше суток срок — сам потолок')
+  assert(r.due.getTime() === СЛОТ_ПОТОЛКА.getTime(), 'при остатке меньше суток срок - начало учебного дня потолка')
   assert(r.due > late && r.scheduled_days === 0, 'и он всё равно в будущем, а интервал честно нулевой')
   group('срок: остаток меньше суток — последний слот перед потолком, а не розыгрыш в прошлое')
 
@@ -372,20 +380,46 @@ function movingCapChecks(): void {
 
   for (let i = 0; i < 100; i++) {
     const r = clampDueBeforeCap(strong, now28, undefined, () => i / 100)
-    assert(r.due <= канун, `28.09: срок ${r.due.toISOString()} обязан лечь не позже кануна 02.10`)
+    assert(dayKey(r.due) <= calendarKey(канун), `28.09: срок ${r.due.toISOString()} обязан лечь не позже учебного дня кануна 02.10`)
     assert(r.due > now28 && r.due >= endOfStudyDay(now28), '28.09: срок не возвращает карточку в сегодняшнюю очередь')
     assert(r.scheduled_days === Math.round((r.due.getTime() - now28.getTime()) / DAY), '28.09: интервал считается от фактического срока')
   }
   const дефолт = clampDueBeforeCap(strong, now28)
-  assert(дефолт.due <= канун && дефолт.due > now28, 'потолок по умолчанию берётся у dueCap(now), а не у константы')
+  assert(dayKey(дефолт.due) <= calendarKey(канун) && дефолт.due > now28, 'потолок по умолчанию берётся у dueCap(now), а не у константы')
   group('E3: 28.09 карточка со стабильностью 20 получает срок не позже кануна 02.10')
 
   for (let i = 0; i < 100; i++) {
     const r = clampDueBeforeCap(strong, послеПопытки, undefined, () => i / 100)
-    assert(r.due <= потолокНоября, `05.10: срок ${r.due.toISOString()} обязан лечь не позже 31.10`)
+    assert(dayKey(r.due) <= calendarKey(потолокНоября), `05.10: срок ${r.due.toISOString()} обязан лечь не позже учебного дня 31.10`)
     assert(r.due > послеПопытки && r.due >= endOfStudyDay(послеПопытки), '05.10: срок не возвращает карточку в сегодняшнюю очередь')
   }
   group('E3: 05.10 зажим снова работает и держит срок до 31.10')
+
+  /* F13: зажим считает учебными днями, а не метками времени.
+     Репро дефекта: 25.09 (канун потолка 26.09) нижняя граница окна - конец учебного дня,
+     то есть 26.09 04:00, - оказывалась ПОЗЖЕ потолка-полуночи, слотов выходило ноль, и срок
+     назначался на сам потолок 26.09 00:00, чей учебный день - сегодняшний 25.09. Карточка
+     возвращалась в идущий урок (критерий очереди `due < endOfStudyDay(now)`), а учебный день
+     26.09 - последний перед восьмидневным окном без потолка - не получал ни одной карточки. */
+  for (const [метка, now] of [['25.09', new Date(2026, 8, 25, 12, 0, 0)], ['24.09', new Date(2026, 8, 24, 12, 0, 0)],
+    ['20.09', new Date(2026, 8, 20, 12, 0, 0)]] as [string, Date][]) {
+    const дни = new Set<string>()
+    for (let i = 0; i < 100; i++) {
+      const r = clampDueBeforeCap(fsrs({ stability: 80, due: new Date(2026, 11, 20) }), now, CAP_SEP, () => i / 100)
+      assert(dayKey(r.due) !== dayKey(now), `${метка}: зажатый срок не имеет права попасть в сегодняшний учебный день (${r.due.toISOString()})`)
+      assert(dayKey(r.due) >= addDaysKey(dayKey(now), 1), `${метка}: срок не раньше завтрашнего учебного дня`)
+      assert(r.due >= endOfStudyDay(now), `${метка}: срок не виден сегодняшней очереди`)
+      assert(dayKey(r.due) <= КЛЮЧ_ПОТОЛКА, `${метка}: срок не позже учебного дня потолка`)
+      дни.add(dayKey(r.due))
+    }
+    assert(дни.has(КЛЮЧ_ПОТОЛКА), `${метка}: учебный день потолка ${КЛЮЧ_ПОТОЛКА} обязан получать карточки, а не простаивать`)
+  }
+  // накануне потолка разыгрывать нечего: единственный законный слот - сам день потолка
+  const канунПотолка = new Date(2026, 8, 25, 12, 0, 0)
+  const слоты = new Set(Array.from({ length: 20 }, (_, i) => clampDueBeforeCap(strong, канунПотолка, CAP_SEP, () => i / 20).due.getTime()))
+  assert(слоты.size === 1 && [...слоты][0] === СЛОТ_ПОТОЛКА.getTime(),
+    `25.09 весь розыгрыш обязан лечь в начало учебного дня 26.09, получено ${[...слоты].map(t => new Date(t).toISOString()).join(', ')}`)
+  group('F13: зажим считает учебными днями - ничего не падает в сегодняшний день, день потолка используется')
 
   /* Второго горба после 03.10 быть не должно: окно 5-14 дней перед потолком ведёт себя
      в октябре ровно так же, как в сентябре, и разброс не схлопывается в один день. */
@@ -393,7 +427,8 @@ function movingCapChecks(): void {
     const now = new Date(2026, 9, день, 10, 0, 0)
     const дни = new Set(Array.from({ length: 60 }, (_, i) => clampDueBeforeCap(strong, now, undefined, () => i / 60).due.getTime()))
     assert(дни.size >= 5, `04-07.10: окно розыгрыша схлопнулось до ${дни.size} дней - это и есть второй горб`)
-    assert(Math.max(...дни) === потолокНоября.getTime(), 'верхняя граница окна - сам потолок 31.10')
+    assert(Math.max(...дни) === startOfStudyDay(calendarKey(потолокНоября)).getTime(),
+      'верхняя граница окна - учебный день потолка 31.10 целиком')
     assert(Math.min(...дни) >= new Date(2026, 9, 17).getTime(), 'окно шире 14 дней быть не может')
   }
   group('E3: после 03.10 разброс сроков держится (5-14 дней перед 31.10), второго горба нет')

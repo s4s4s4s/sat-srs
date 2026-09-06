@@ -7,7 +7,7 @@ import { cardView, fsrsFromKey, fsrsToFm, readingView, slugFromPath } from './ya
 import { questionView, PACE_SEC } from './practice'
 import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, dueCap, type Section, type TypeVerdict } from './scheduler'
 import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
-import { dayKey, isoLocal, setHomeOffset, endOfStudyDay } from './daytime'
+import { dayKey, isoLocal, setHomeOffset, endOfStudyDay, startOfStudyDay, calendarKey, addDaysKey } from './daytime'
 import {
   newId, matureRetention, sessionAccuracy, cardTimeCap, READ_CAP_MINUTES,
   readingSrc, isMarked, markCount, readingPassed, deckHasWord, normWord, MARK_SENTENCE_MAX
@@ -304,17 +304,41 @@ export function unsyncedCount(): number {
  * четверть колоды не освежалась ни разу перед 03.10. Выход из зажима остаётся, но означает
  * теперь другое: до ближайшего потолка меньше суток, втискивать повтор некуда.
  *
+ * СЧЁТ ИДЁТ УЧЕБНЫМИ ДНЯМИ, А НЕ МИЛЛИСЕКУНДАМИ (F13). Потолок назван календарной датой
+ * («26.09»), а день катится в 04:00, и арифметика по меткам времени разъезжалась с календарём
+ * дважды. Во-первых, срок ложился ровно на локальную полночь, чей учебный день предыдущий:
+ * розыгрыш, читаемый как «26.09», приходил на занятие 25.09, и учебный день потолка не получал
+ * ни одной зажатой карточки. Во-вторых, накануне потолка нижняя граница окна (`endOfStudyDay`,
+ * 26.09 04:00) оказывалась ПОЗЖЕ потолка (26.09 00:00): разность отрицательная, слотов ноль,
+ * срок назначался на сам потолок, то есть в уже идущий учебный день, и карточка возвращалась
+ * в сегодняшнюю очередь (критерий `due < endOfStudyDay(now)` в buildQueue). Замер на текущем
+ * коде: 25.09 все 100 розыгрышей падали в учебный день 25.09, день 26.09 не использовался ни
+ * при каком `now`.
+ *
+ * Поэтому слот здесь - учебный день, а его момент - начало этого дня (`startOfStudyDay`, 04:00):
+ * такой срок не виден сегодняшнему уроку и целиком принадлежит своему дню. Диапазон - от
+ * завтрашнего учебного дня до дня потолка включительно.
+ *
  * `rnd` вынесен в параметр, чтобы розыгрыш можно было проверить тестом, а не поверить в него.
  */
 export function clampDueBeforeCap(next: FsrsCard, now: Date, cap: Date = dueCap(now), rnd: () => number = Math.random): FsrsCard {
-  if (next.state !== State.Review || now >= cap || next.due <= cap) return next
+  if (next.state !== State.Review) return next
+  const capDay = calendarKey(cap)                 // учебный день потолка - последний легальный слот
+  if (dayKey(next.due) <= capDay) return next     // FSRS и так уложился в потолок
+  const first = addDaysKey(dayKey(now), 1)        // не раньше завтрашнего учебного дня
+  if (first > capDay) return next                 // втискивать некуда: потолок уже сегодня или позади
   const span = Math.min(14, Math.max(5, Math.round(next.stability / 10)))
-  const earliest = Math.max(endOfStudyDay(now).getTime(), cap.getTime() - span * 86400_000)
-  const slots = Math.max(0, Math.floor((cap.getTime() - earliest) / 86400_000))
-  const due = new Date(cap.getTime() - Math.floor(rnd() * (slots + 1)) * 86400_000)
-  // интервал считаем от фактически полученного срока: ноль здесь — честное «меньше суток»
+  const earliest = maxKey(addDaysKey(capDay, 1 - span), first)   // окно шириной span, потолок включительно
+  const slots = Math.round((startOfStudyDay(capDay).getTime() - startOfStudyDay(earliest).getTime()) / 86400_000)
+  const due = startOfStudyDay(addDaysKey(capDay, -Math.floor(rnd() * (slots + 1))))
+  // интервал считаем от фактически полученного срока: ноль здесь - честное «меньше суток»
   // (у метрик для него есть свой бакет), а замаскированная единица врала бы отчётности
   return { ...next, due, scheduled_days: Math.round((due.getTime() - now.getTime()) / 86400_000) }
+}
+
+/** Более поздний из двух учебных дней. Ключи YYYY-MM-DD сравнимы как строки. */
+function maxKey(a: string, b: string): string {
+  return a > b ? a : b
 }
 
 /**

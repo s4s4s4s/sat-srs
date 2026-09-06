@@ -39,6 +39,32 @@ export function endOfStudyDay(t: Date = new Date()): Date {
   return d
 }
 
+/**
+ * Начало учебного дня `key`: те самые 04:00 домашнего времени, с которых он идёт.
+ *
+ * Обратна `dayKey`: `dayKey(startOfStudyDay(k)) === k`, а `startOfStudyDay(addDaysKey(dayKey(t), 1))`
+ * равно `endOfStudyDay(t)`. Нужна там, где срок назначается НА УЧЕБНЫЙ ДЕНЬ, а не на календарную
+ * дату: локальная полночь принадлежит ПРЕДЫДУЩЕМУ учебному дню (rollover 04:00), и срок, выставленный
+ * на 00:00, приходит на день раньше, чем читается глазами.
+ */
+export function startOfStudyDay(key: string): Date {
+  const [y, m, d] = key.split('-').map(Number)
+  if (homeOffsetMin !== null) return new Date(Date.UTC(y, m - 1, d, ROLLOVER_H) - homeOffsetMin * 60_000)
+  return new Date(y, m - 1, d, ROLLOVER_H, 0, 0, 0)
+}
+
+/**
+ * YYYY-MM-DD КАЛЕНДАРНОЙ даты момента (без переноса 04:00), в отличие от `dayKey`.
+ * Нужна для дат, названных календарём, а не занятиями: даты попыток и потолок сроков
+ * заданы датой («26.09»), и превращать их в учебный день сдвигом на четыре часа нельзя.
+ */
+export function calendarKey(t: Date = new Date()): string {
+  const d = homeOffsetMin !== null ? new Date(t.getTime() + homeOffsetMin * 60_000) : t
+  return homeOffsetMin !== null
+    ? `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`
+    : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 export function addDaysKey(key: string, days: number): string {
   const [y, m, d] = key.split('-').map(Number)
   const dt = new Date(y, m - 1, d + days, 12)
