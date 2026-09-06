@@ -19,7 +19,8 @@ import {
   speedStats, typoSplit, gaveUpShare, cuedStats, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
   intervalBucketOf, enoughForPct, isLeechCard, orphanedLines,
   PRIMARY_DATE, EXAM_DATE, NEW_STOP_DATE, NEW_STOP_BY_SECTION, nextAttempt, TARGET_REVIEW, TARGET_MATURE, MIN_N_FOR_PCT,
-  MATURE_STABILITY_DAYS, READY_R
+  MATURE_STABILITY_DAYS, READY_R,
+  capacityEstimate, gradesPerCard, CAPACITY_WINDOW_DAYS, RULE_GRADES
 } from '../src/lib/metrics'
 import { dayKey, addDaysKey } from '../src/lib/daytime'
 import { parseMd, cardView } from '../src/lib/yamlfm'
@@ -464,6 +465,67 @@ function nextAttemptMetricChecks(): void {
   group('E3: examReady и pace берут даты у ближайшей попытки и у стопа своего раздела')
 }
 
+// ---- capacityEstimate / gradesPerCard (WS7, D7) ---------------------------
+
+/**
+ * D7: главное число - готовность к попытке по прогнозной R, цель от измеренной ёмкости.
+ * 06.09.2026 отчёт требовал «довести ещё 219, +14,6/день, отстаёшь на 68 дн» при 28 днях
+ * до попытки и медиане 2,4 доведения в день - цель разъехалась с ёмкостью вчетверо, тот же
+ * прецедент, что и с «400 готовых слов» 17.08.2026 (см. комментарий в metrics.ts).
+ */
+function m9CapacityChecks(): void {
+  const now = new Date(2026, 8, 15, 12, 0, 0)   // 15.09.2026
+  const today = dayKey(now)
+
+  // ---- capacityEstimate: медиана оценок в учебный день × оставшиеся учебные дни.
+  // Фикстура «занимался через день» на окне 14 дней: 7 учебных дней по 34 оценки.
+  const studyJournal: JournalLine[] = []
+  for (let i = 0; i < 14; i += 2) {
+    const day = addDaysKey(today, -i)
+    for (let k = 0; k < 34; k++) studyJournal.push(rev({ day, rating: 3 }))
+  }
+  const until = new Date(now.getTime() + 14 * 86400_000)   // 14 дней до until
+  const ce = capacityEstimate(studyJournal, now, until, 14)
+  assert(Math.abs(ce.studyFrequency - 0.5) < 1e-9, `M9: частота учебных дней «через день» ожидалась 0.5, получено ${ce.studyFrequency}`)
+  assert(ce.gradesPerStudyDay === 34, `M9: медиана оценок в учебный день ожидалась 34, получено ${ce.gradesPerStudyDay}`)
+  assert(ce.studyDaysRemaining === 7, `M9: 14 дней до until при частоте 0.5 - ожидалось 7 учебных дней, получено ${ce.studyDaysRemaining}`)
+  assert(ce.capacity === 238, `M9: capacity ожидалась 238 (34 × 7), получено ${ce.capacity}`)
+
+  // ---- gradesPerCard: медиана по скользящему окну, а не по всей истории.
+  // Хвост пиявки (50 оценок одного слова) лежит ЗА окном и не должен сдвинуть медиану.
+  const cardJournal: JournalLine[] = []
+  const addGrades = (slug: string, n: number, day: string) => {
+    for (let k = 0; k < n; k++) cardJournal.push(rev({ slug, day, rating: 3 }))
+  }
+  addGrades('a', 3, addDaysKey(today, -1))
+  addGrades('b', 5, addDaysKey(today, -2))
+  addGrades('c', 7, addDaysKey(today, -3))
+  addGrades('leech', 50, addDaysKey(today, -40))   // за окном CAPACITY_WINDOW_DAYS=21
+  const gpc = gradesPerCard(cardJournal, now)
+  assert(gpc === 5, `M9: gradesPerCard по окну - медиана {3,5,7}=5, хвост пиявки за окном игнорируется; получено ${gpc}`)
+
+  // ---- pace: capacity/wordsAffordable/rulesAffordable приходят из тех же чистых функций
+  const cards = [vocab('ready', reviewFsrs(300, 4), 1)]
+  const stopDate = new Date(now.getTime() + 30 * 86400_000)
+  const pc = pace(cards, studyJournal, stopDate, now)
+  const ceDefault = capacityEstimate(studyJournal, now, stopDate)   // окно по умолчанию, как в pace()
+  const gpcDefault = gradesPerCard(studyJournal, now) || 1
+  assert(pc.capacity === ceDefault.capacity, `M9: pace.capacity обязан совпадать с capacityEstimate(окно ${CAPACITY_WINDOW_DAYS} дн по умолчанию), получено ${pc.capacity} против ${ceDefault.capacity}`)
+  assert(pc.wordsAffordable === Math.floor(ceDefault.capacity / gpcDefault), `M9: wordsAffordable обязан быть floor(capacity / gradesPerCard), получено ${pc.wordsAffordable}`)
+  assert(pc.rulesAffordable === Math.floor(ceDefault.capacity / RULE_GRADES), `M9: rulesAffordable обязан быть floor(capacity / RULE_GRADES), получено ${pc.rulesAffordable}`)
+
+  // ---- examReady к дате из nextAttempt(now): при now 05.10 считает на 07.11
+  const now0510 = new Date(2026, 9, 5, 12, 0, 0)
+  const attempt = nextAttempt(now0510)
+  assert(attempt.getTime() === EXAM_DATE.getTime(), 'M9: 05.10 ближайшая попытка - 07.11 (EXAM_DATE)')
+  const cardsReady = [vocab('r1', reviewFsrs(300, 4), 1), vocab('r2', reviewFsrs(1, 60), 1)]
+  const erAtAttempt = examReady(cardsReady, attempt)
+  const erAt0711 = examReady(cardsReady, EXAM_DATE)
+  assert(erAtAttempt.ready === erAt0711.ready, 'M9: examReady(cards, nextAttempt(05.10)) обязан считать готовность на 07.11')
+
+  group('M9: capacityEstimate/gradesPerCard - ёмкость от измеренного темпа, pace несёт capacity/wordsAffordable/rulesAffordable')
+}
+
 // ---- цель: Review + зрелые ------------------------------------------------
 
 function goalChecks(): void {
@@ -646,6 +708,7 @@ function main(): void {
   speedTypoChecks()
   paceChecks()
   nextAttemptMetricChecks()
+  m9CapacityChecks()
   snapshotChecks()
   orphanedLinesChecks()
   liveDeckOrphanCheck()
