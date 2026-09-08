@@ -132,9 +132,38 @@ export function matureRetention(r: { passRev: number; totalRev: number }): numbe
   return r.totalRev > 0 ? Math.round((r.passRev / r.totalRev) * 100) : null
 }
 
+/**
+ * Хронология строк журнала: сначала `ts`, при равенстве - `ms` (тайбрейк D1; в старых
+ * строках поля нет, оно читается как 0). Один порядок на все каналы журнала: попытки практики
+ * (`attemptsFor` в practice.ts) и попытки логики (`logicAttempts` в logic.ts) обязаны
+ * упорядочиваться одинаково, иначе правило тайбрейка правится в двух местах и разъезжается.
+ */
+export function byLineTime(a: JournalLine, b: JournalLine): number {
+  return a.ts.localeCompare(b.ts) || (a.ms ?? 0) - (b.ms ?? 0)
+}
+
 /** Кап зачётного времени на карточку: math-задачи решаются дольше слов */
 export function cardTimeCap(kind?: string): number {
   return kind === 'math' ? 180_000 : CARD_TIME_CAP_MS
+}
+
+/**
+ * Замер времени, который уедет в журнал.
+ *
+ * Потолок cardTimeCap («AFK-защита») применялся к зачётным минутам и к таймеру на экране, но
+ * не к полю `elapsed_ms` самой строки - и в журнал попадали замеры вида «ответ за 25 минут»
+ * (ученик отошёл, карточка осталась открытой): в живом журнале таких строк 28 из 537. Это не
+ * медленный ответ, а отсутствие замера, и медиану времени ответа - от которой считается порог
+ * «медленно» - они тянут на себя. Чиним на записи, а не на каждом чтении: журнал уходит
+ * тьютору и в метрики как есть, и починку на чтении однажды забудут сделать.
+ *
+ * Живёт здесь, а не в store.ts (где стояла до 09.09.2026): поле строки журнала и его потолок -
+ * одна тема, и писать строку журнала умеет теперь не только `rateItem` (см. `logicReviewLine`
+ * в logic.ts). store.ts продолжает отдавать её наружу реэкспортом, чтобы старые импорты жили.
+ */
+export function journalElapsedMs(elapsedMs: number, kind?: string): number {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return 0
+  return Math.min(elapsedMs, cardTimeCap(kind))
 }
 
 /** Минуты ревью по дням (с капом на карточку) */

@@ -1,6 +1,7 @@
 import { fsrs, generatorParameters, State, type FSRS } from 'ts-fsrs'
 import type { CardView, JournalLine } from './types'
-import { isLevelled, sectionOf, nextAttempt, NEW_STOP_DATE } from './scheduler'
+import { isLevelled, isLogicCard, sectionOf, nextAttempt, NEW_STOP_DATE } from './scheduler'
+import { logicSliceCounts } from './logic'
 import type { Section } from './scheduler'
 import { addDaysKey, dayKey } from './daytime'
 import { byTime, minutesByDay, readMinutesByDay, PRACTICE_UNIT_RATIO_FLOOR, reviewsByDay, isGraded } from './journal'
@@ -51,6 +52,13 @@ export function isLeech(f: { reps: number; stability: number } | null | undefine
 /** Карточка-пиявка: пиявкой оказалось само слово или его prep-навык.
  *  Одно определение на отчёт, снимок метрик и экран - списки и счётчик обязаны сходиться. */
 export function isLeechCard(v: CardView): boolean {
+  /* Карточка логики пиявкой не бывает по устройству раздела (09.09.2026): её fsrs заморожен
+     тем, что успел накопить старый поток (у `log-ii-most-trebuet-cifry` это reps 8 при
+     стабильности меньше двух дней - формально образцовая пиявка), а нового счёта нет и не
+     будет. Пиявка означает «слово сопротивляется, переформулируй карточку»; вопрос к тексту
+     не заучивается вовсе, и лечится он не переформулировкой, а разбором - его судьбу решает
+     `logicStatus` (logic.ts), а не порог повторов. */
+  if (isLogicCard(v)) return false
   return isLeech(v.fsrs) || isLeech(v.fsrsPrep)
 }
 /* Цель. 17.08.2026 прежняя - «400 готовых слов к 03.10» - отменена как
@@ -506,7 +514,7 @@ export interface SectionMaturity { total: number; reviewCount: number; matureCou
  * почти целиком состоит из карточек kind error/grammar/math, которые `isCandidate` не видит
  * вовсе, а именно они здесь и есть смысл. Приостановленные карточки исключены, как и везде.
  */
-export function maturityBySection(cards: CardView[]): Record<Section, SectionMaturity> {
+export function maturityBySection(cards: CardView[], journal: JournalLine[] = []): Record<Section, SectionMaturity> {
   const out: Record<Section, SectionMaturity> = {
     rw: { total: 0, reviewCount: 0, matureCount: 0 },
     logic: { total: 0, reviewCount: 0, matureCount: 0 },
@@ -514,12 +522,20 @@ export function maturityBySection(cards: CardView[]): Record<Section, SectionMat
     math: { total: 0, reviewCount: 0, matureCount: 0 }
   }
   for (const v of cards) {
-    if (v.suspended) continue
+    if (v.suspended || isLogicCard(v)) continue
     const o = out[sectionOf(v)]
     o.total++
     if (v.fsrs.state === State.Review) o.reviewCount++
     if (v.fsrs.stability >= MATURE_STABILITY_DAYS) o.matureCount++
   }
+  /* Логика меряется не стабильностью FSRS, а журналом (09.09.2026): её карточки планировщик
+     не оценивает, `state`/`stability` заморожены навсегда, и любое число, снятое с них,
+     было бы отчётом о механике, которой больше нет. «Доведено» и «закреплено» у раздела
+     совпадают и означают одно: вопрос разобран верно (`solved`) - второго показа у него не
+     будет. Без журнала раздел честно показывает нули, а не выдуманную зрелость. */
+  const логика = cards.filter(v => !v.suspended && isLogicCard(v))
+  const c = logicSliceCounts(логика, journal)
+  out.logic = { total: логика.length, reviewCount: c.solved, matureCount: c.solved }
   return out
 }
 

@@ -10,7 +10,7 @@ import { buildCorpusIndex, corpusHits as corpusHitsOf } from './corpus'
 import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay, startOfStudyDay, calendarKey, addDaysKey } from './daytime'
 import {
-  newId, matureRetention, sessionAccuracy, cardTimeCap, READ_CAP_MINUTES,
+  newId, matureRetention, sessionAccuracy, journalElapsedMs, READ_CAP_MINUTES,
   readingSrc, isMarked, markCount, readingPassed, deckHasWord, normWord, MARK_SENTENCE_MAX,
   RUN_MIN_REVIEWS
 } from './journal'
@@ -411,20 +411,9 @@ function maxKey(a: string, b: string): string {
   return a > b ? a : b
 }
 
-/**
- * Замер времени, который уедет в журнал.
- *
- * Потолок cardTimeCap (journal.ts, «AFK-защита») применялся к зачётным минутам и к таймеру
- * на экране, но не к полю `elapsed_ms` самой строки — и в журнал попадали замеры вида «ответ
- * за 25 минут» (ученик отошёл, карточка осталась открытой): в живом журнале таких строк 28 из
- * 537. Это не медленный ответ, а отсутствие замера, и медиану времени ответа — от которой
- * считается порог «медленно» — они тянут на себя. Чиним на записи, а не на каждом чтении:
- * журнал уходит тьютору и в метрики как есть, и починку на чтении однажды забудут сделать.
- */
-export function journalElapsedMs(elapsedMs: number, kind?: string): number {
-  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return 0
-  return Math.min(elapsedMs, cardTimeCap(kind))
-}
+/** Потолок замера времени в строке журнала живёт в journal.ts рядом с самим полем
+ *  (`journalElapsedMs`); здесь остаётся реэкспорт для прежних импортов из store. */
+export { journalElapsedMs } from './journal'
 
 /* Во сколько раз стабильность должна превысить порог пиявки, чтобы флаг сняли.
    Снимать по простому !isLeech нельзя: у порога стабильность гуляет, флаг дёргался бы
@@ -759,7 +748,8 @@ function updateBadge() {
   try {
     const все = state.cards.map(cardView)
     const budget = newBudgetTotal(все, s => newPerDay(s, 'norm'), state.journal, dayKey())
-    const c = homeCounts(все, budget)
+    // журнал обязателен: без него раздел логики считается по замороженному fsrs.state (logic.ts)
+    const c = homeCounts(все, budget, new Date(), state.journal)
     void nav.setAppBadge(c.learnDue + c.revDue).catch(() => {})
   } catch { /* ignore */ }
 }
