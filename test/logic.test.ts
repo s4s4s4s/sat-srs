@@ -41,7 +41,7 @@ function logicCard(slug: string, o: Partial<CardView> = {}): CardView {
     context: 'Вопрос к отрывку.', contexts: ['Вопрос к отрывку.'], contextsRu: [],
     meaning_en: '', meaning_ru: '', roots: '',
     source: 'pt4', added: '2026-08-01', level: 999, kind: 'error', domain: 'II',
-    confusables: [], synonyms: [], from_mark: [], leech: '',
+    confusables: [], synonyms: [], other_senses: [], from_mark: [], leech: '',
     choices: ['A', 'B', 'C', 'D'], answerText: 'A', answerNum: '',
     desmos: false, explain: 'разбор', suspended: false,
     fsrs: createEmptyCard(NOW),

@@ -82,6 +82,51 @@ function fmRoundtripChecks(): void {
   group('serializeMd/parseMd: круговой обход без потери полей и дрейфа значений (числа, булевы, массивы, вложенный fsrs-блок)')
 }
 
+/**
+ * serializeMd/parseMd: other_senses - список объектов, а не список строк или единая строка.
+ * Это главный риск задачи: приложение ПЕРЕПИСЫВАЕТ файл карточки при каждой сохранённой
+ * оценке (store.ts берёт rec.fm целиком и патчит только fsrs-блок, см. `fm = { ...rec.fm,
+ * ...fmPatch }`), и если сериализатор расплющит список map-ов в список строк или потеряет
+ * элемент, первая же оценка молча стирает значения из карточек колоды в git. Проверяем два
+ * оборота подряд (файл → fm → файл → fm), чтобы исключить и потерю данных, и дрейф формы.
+ */
+function otherSensesRoundtripChecks(): void {
+  const fm = {
+    word: 'assay', pos: 'noun',
+    other_senses: [
+      { pos: 'verb', en: 'to test a metal or ore for its composition', ru: 'анализировать, проверять пробу' },
+      { pos: 'verb', en: 'to attempt', ru: 'пытаться' }
+    ]
+  }
+  const body = 'Тело карточки.\n'
+  const s1 = serializeMd(fm, body)
+  const { fm: fm2, body: body2, broken } = parseMd(s1)
+  assert(!broken, 'other_senses не должен ломать разбор frontmatter')
+  assert(body2 === body, 'тело обязано пережить круг без изменений')
+  assert(Array.isArray(fm2.other_senses) && fm2.other_senses.length === 2,
+    'other_senses обязан остаться списком из двух элементов после круга сериализации')
+  assert(fm2.other_senses.every((s: any) => s && typeof s === 'object' && !Array.isArray(s)),
+    'каждый элемент other_senses обязан остаться отдельным map-ом (pos/en/ru), а не расплющиться в строку')
+  assert(JSON.stringify(Object.keys(fm2.other_senses[0])) === JSON.stringify(['pos', 'en', 'ru']),
+    'ключи элемента обязаны сохранить порядок pos/en/ru')
+  assert(JSON.stringify(fm2.other_senses) === JSON.stringify(fm.other_senses),
+    'other_senses обязан пережить круг сериализации побайтово без потерь и без изменения формы')
+
+  // второй оборот (fm2 -> файл -> fm3) обязан дать тот же результат: сериализатор не дрейфует
+  const s2 = serializeMd(fm2, body2)
+  const { fm: fm3 } = parseMd(s2)
+  assert(JSON.stringify(fm3.other_senses) === JSON.stringify(fm.other_senses),
+    'второй круг сериализации не должен ничего менять в other_senses (стабильность)')
+
+  // пустой список ([] = «сверено, других значений нет») тоже обязан пережить круг как []
+  const s3 = serializeMd({ word: 'x', other_senses: [] }, body)
+  const { fm: fm4 } = parseMd(s3)
+  assert(Array.isArray(fm4.other_senses) && fm4.other_senses.length === 0,
+    'other_senses: [] обязан пережить круг как пустой список, а не пропасть и не стать null/undefined')
+
+  group('serializeMd/parseMd: other_senses (список map-ов pos/en/ru) переживает круг сериализации без потерь и без изменения формы')
+}
+
 // ---- cardView: поле synonyms (fm.synonyms, допустимые ответы ввода помимо word) ----
 
 function cardViewSynonymsChecks(): void {
@@ -96,6 +141,42 @@ function cardViewSynonymsChecks(): void {
   assert(Array.isArray(withoutSynonyms.synonyms) && withoutSynonyms.synonyms.length === 0,
     'отсутствие fm.synonyms должно давать пустой массив, а не undefined')
   group('cardView: отсутствие fm.synonyms даёт []')
+}
+
+// ---- cardView: поле other_senses (fm.other_senses, остальные значения слова) ----
+
+function cardViewOtherSensesChecks(): void {
+  const withSenses = cardView(localCard({
+    word: 'assay',
+    other_senses: [
+      { pos: 'verb', en: 'to test a metal or ore for its composition', ru: 'анализировать, проверять пробу' },
+      { pos: 'verb', en: 'to attempt', ru: 'пытаться' }
+    ]
+  }))
+  assert(Array.isArray(withSenses.other_senses) && withSenses.other_senses.length === 2,
+    'cardView должна прочитать fm.other_senses как массив значений')
+  assert(withSenses.other_senses[0].pos === 'verb' && withSenses.other_senses[0].en === 'to test a metal or ore for its composition'
+    && withSenses.other_senses[0].ru === 'анализировать, проверять пробу',
+    'cardView не должна менять поля значения')
+  group('cardView: читает fm.other_senses')
+
+  const notSynced = cardView(localCard({ word: 'assay' }))
+  assert(Array.isArray(notSynced.other_senses) && notSynced.other_senses.length === 0,
+    'отсутствие fm.other_senses (ещё не сверено) должно давать пустой массив, а не undefined')
+  group('cardView: отсутствие fm.other_senses даёт []')
+
+  const checkedEmpty = cardView(localCard({ word: 'assay', other_senses: [] }))
+  assert(Array.isArray(checkedEmpty.other_senses) && checkedEmpty.other_senses.length === 0,
+    'other_senses: [] (сверено, других значений нет) должно остаться пустым массивом')
+  group('cardView: other_senses: [] (сверено, других значений нет) читается как []')
+
+  // Брак валидатора колоды (элемент без en и без ru) не роняет карточку и не выбрасывается
+  // молча - поля приводятся к строкам, отсутствующие остаются пустыми.
+  const broken = cardView(localCard({ word: 'assay', other_senses: [{ pos: 'verb' }, 'не объект', null] }))
+  assert(broken.other_senses.length === 1 && broken.other_senses[0].pos === 'verb'
+    && broken.other_senses[0].en === '' && broken.other_senses[0].ru === '',
+    'элемент без en/ru должен остаться в списке с пустыми полями, а не пропасть; элементы не-объекты пропускаются')
+  group('cardView: other_senses с браком валидатора (элемент без en/ru) не роняет карточку и не отбрасывается молча')
 }
 
 function fmUnicodeChecks(): void {
@@ -392,7 +473,9 @@ function liveDeckChecks(): void {
 function main(): void {
   console.log('Слой данных — yamlfm/journal/db: круговые обходы и зоны владения')
   fmRoundtripChecks()
+  otherSensesRoundtripChecks()
   cardViewSynonymsChecks()
+  cardViewOtherSensesChecks()
   fmUnicodeChecks()
   fmLongLineChecks()
   fmNbspChecks()

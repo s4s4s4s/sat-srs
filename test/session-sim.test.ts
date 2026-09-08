@@ -55,7 +55,7 @@ function baseView(word: string, level: number, kind: string): CardView {
        что на ней проверяют. */
     meaning_en: `meaning of ${word}`, meaning_ru: `${word} по-русски`, roots: '',
     source: 'test', added: '2026-07-20', level, kind,
-    domain: '', confusables: [], synonyms: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
+    domain: '', confusables: [], synonyms: [], other_senses: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
     desmos: false, explain: '', suspended: false,
     fsrs: createEmptyCard(new Date(BASE)),
     prep: '', prepContext: '', fsrsPrep: null
@@ -157,6 +157,11 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
      урок: в приложении её считает newIntroducedOn по журналу, здесь - это множество.
      Без него второй урок дня начинал норму заново, и симуляция не видела бы перерасхода. */
   const ratedNewToday = new Set<string>()
+  /* Упражнений (оценённых показов) за ДЕНЬ, а не за урок: ровно то, что Review.tsx рисует
+     рядом с полоской как «N из цели» (baseUnits прошлых заходов плюс reviews текущего), и
+     ровно то, чем цель зажимает знаменатель полоски (ProgressInput.doneToday). Окно-
+     знакомство сюда не попадает: оценки оно не даёт (A7). */
+  let unitsToday = 0
   // эмуляция forcedTodaySlugs: slug → { первый урок со знакомством, уроки с отработкой после него }
   const introAt = new Map<string, number>()
   const practiceAt = new Map<string, Set<number>>()
@@ -249,7 +254,10 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
         // WS5b: по умолчанию симуляция проверяет полоску от точного объёма урока, не от
         // цели захода - Infinity держит прежнее поведение; клетка на конечную цель ниже
         // (goalProgressChecks) передаёт opts.goal явно
-        goal: opts.goal ?? Infinity
+        goal: opts.goal ?? Infinity,
+        // цель дневная, поэтому и счётчик дневной: упражнения всех уроков этого прогона,
+        // а не экраны текущего урока (в них считается только знаменатель полоски)
+        doneToday: unitsToday
       }
       pctFloor = Math.max(pctFloor, lessonProgress(input))
       return {
@@ -383,6 +391,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       sinceIntro++
       batchIntros = 0
       drilled.set(itemKey(head), (drilled.get(itemKey(head)) ?? 0) + 1)
+      unitsToday++ // зеркалит res.current.reviews++ в Review.tsx: считаем ОЦЕНЁННЫЙ показ
       if (introAt.has(head.view.slug)) {
         const s = practiceAt.get(head.view.slug) ?? new Set<number>()
         s.add(lesson)
@@ -2888,20 +2897,30 @@ function progressBarChecks(): void {
 /**
  * WS5b: цель захода (`ProgressInput.goal`) зажимает знаменатель полоски сверху.
  *
- * Два свойства формулы `min(goal, estimateShowsLeft + shown)`, не покрытые остальными
- * сценариями (там `goal: Infinity` - прежнее поведение):
+ * Свойства зажима, не покрытые остальными сценариями (там `goal: Infinity` - прежнее
+ * поведение):
  *   1. реальный остаток БОЛЬШЕ цели - знаменатель зажат целью, а не точной оценкой;
  *   2. реальный остаток МЕНЬШЕ цели - цель ничего не подменяет, знаменатель точен как раньше.
  * Отдельно - храповик: при зажатой цели рост числителя по ходу урока не даёт полоске
  * откатиться назад (`checkProgress` на прогоне с конечным `goal`, а не только с Infinity).
+ *
+ * Сценарии 5 и 6 - про единицы измерения: цель задана в УПРАЖНЕНИЯХ и считается от начала
+ * ДНЯ, а знаменатель полоски - в ЭКРАНАХ текущего урока. Окно-знакомство даёт экран без
+ * упражнения (5), а утренний заход даёт упражнения без экранов этого урока (6); прямое
+ * `min(total, goal)` врало и там и там, показывая 100% при счётчике «10 из 12».
  */
 function goalProgressChecks(): void {
   const item = (word: string): StudyItem => {
     const view = reviewCard(word)
     return { view, skill: 'recall', fsrs: view.fsrs }
   }
-  const baseInput = (queueLen: number, shown: number, goal: number): ProgressInput => ({
+  /* doneToday по умолчанию равен shown: в этой очереди все показы - упражнения (окон нет),
+     а урок начат с нуля, поэтому счётчик упражнений дня совпадает с числом показов. Именно
+     в этих условиях старая формула `min(goal, ...)` и была верна; сценарии 5-6 ниже берут
+     случаи, где единицы расходятся, и там doneToday задаётся явно. */
+  const baseInput = (queueLen: number, shown: number, goal: number, doneToday = shown): ProgressInput => ({
     shown,
+    doneToday,
     queue: Array.from({ length: queueLen }, (_, i) => item(`q${i}`)),
     pending: [],
     isIntro: () => false,
@@ -2966,6 +2985,75 @@ function goalProgressChecks(): void {
   const reachedAt = clampedBars.findIndex(b => b.pct >= 1 - 1e-9)
   assert(reachedAt >= 0 && reachedAt < clampedBars.length - 1,
     '[цель/боевая-симуляция] цель короче урока обязана закрыть полоску раньше последнего кадра')
+
+  /* 5. Окно-знакомство - экран, но не упражнение. Два новых слова (обоим положено окно) и
+     шесть повторов при цели дня 6. Старая формула сравнивала ЭКРАНЫ с целью в УПРАЖНЕНИЯХ:
+     на шестом экране она выдавала 100%, хотя оценено было только три упражнения, и храповик
+     фиксировал эту ложь до конца дня. Проходим урок экран за экраном той же моделью, что и
+     сам урок: окно слово не закрывает, оно возвращается отработкой следом. */
+  const newItem = (word: string): StudyItem => {
+    const view = newCard(word)
+    return { view, skill: 'recall', fsrs: view.fsrs }
+  }
+  const ЦЕЛЬ = 6
+  const introduced = new Set<string>()
+  let очередь: StudyItem[] = [newItem('gn1'), newItem('gn2'),
+    ...Array.from({ length: 6 }, (_, i) => item(`gr${i}`))]
+  let показано = 0
+  let сделано = 0
+  let оконОсталось = 2
+  let достигнуто = false
+  while (очередь.length) {
+    const голова = очередь[0]
+    const окно = голова.fsrs.state === State.New && !introduced.has(itemKey(голова))
+    const pct = lessonProgress({
+      shown: показано,
+      doneToday: сделано,
+      queue: очередь,
+      pending: [],
+      isIntro: it => it.fsrs.state === State.New && !introduced.has(itemKey(it)),
+      introsLeft: оконОсталось,
+      reintroLeft: 0,
+      introduced,
+      forced: new Set(),
+      drilled: new Map(),
+      fillerAvailable: false,
+      bonusNew: [],
+      goal: ЦЕЛЬ
+    })
+    // упражнений дня к концу ЭТОГО экрана: окно оценки не даёт, отработка даёт
+    const послеЭкрана = сделано + (окно ? 0 : 1)
+    if (послеЭкрана >= ЦЕЛЬ) {
+      assert(Math.abs(pct - 1) < 1e-9,
+        `[цель/окна] экран, закрывающий цель (${послеЭкрана} из ${ЦЕЛЬ}), обязан дать 100%, а дал ${(pct * 100).toFixed(1)}%`)
+      достигнуто = true
+    } else {
+      // отработок в очереди хватает на остаток до цели, значит зажим целью обязан работать
+      assert(очередь.length >= ЦЕЛЬ - сделано,
+        `[цель/окна] предпосылка сценария нарушена: на экране ${показано + 1} в очереди ${очередь.length} отработок при остатке ${ЦЕЛЬ - сделано}`)
+      assert(pct < 1 - 1e-9,
+        `[цель/окна] 100% на экране ${показано + 1}, когда сделано ${сделано} упражнений из ${ЦЕЛЬ}: ${(pct * 100).toFixed(1)}%`)
+    }
+    показано++
+    if (окно) {
+      introduced.add(itemKey(голова))
+      оконОсталось--
+    } else {
+      сделано++
+      очередь = очередь.slice(1)
+    }
+  }
+  assert(достигнуто, '[цель/окна] сценарий не дошёл до цели: проверять нечего')
+
+  /* 6. Цель ДНЕВНАЯ, а урок - не весь день. Утренний заход дал 10 упражнений из 12, вечерний
+     урок начинается с нуля показов и восьми повторов в очереди: до цели остаётся ровно два
+     упражнения, то есть два экрана. Старый зажим не знал о сделанном утром и растягивал
+     знаменатель на двенадцать. */
+  const вечер = (shown: number, done: number): number => lessonProgress(baseInput(8 - shown, shown, 12, done))
+  assert(Math.abs(вечер(0, 10) - 1 / 2) < 1e-9,
+    `[цель/дневной остаток] первый экран вечернего захода при 10 из 12 ожидался 1/2, получено ${вечер(0, 10)}`)
+  assert(Math.abs(вечер(1, 11) - 1) < 1e-9,
+    `[цель/дневной остаток] второй экран закрывает цель и обязан дать 100%, получено ${вечер(1, 11)}`)
 
   console.log('  ✓ цель захода: знаменатель зажат сверху, не подменяет точный остаток снизу, храповик держит')
   passed++

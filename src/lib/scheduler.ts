@@ -1364,12 +1364,29 @@ function glossKey(part: string): string {
  * diverge — антонимы, но «мнениях» стоит у обоих, и без этой чистки правило
  * выбросило бы лучший дистрактор к слову вместо худшего.
  */
-function glossParts(v: CardView): Set<string> {
+function glossPartsOf(ru: string): Set<string> {
   const out = new Set<string>()
-  for (const part of (v.meaning_ru || '').toLowerCase().replace(/\([^)]*\)/g, ' ').split(/[,;/]| или /)) {
+  for (const part of (ru || '').toLowerCase().replace(/\([^)]*\)/g, ' ').split(/[,;/]| или /)) {
     const key = glossKey(part)
     if (key) out.add(key)
   }
+  return out
+}
+
+function glossParts(v: CardView): Set<string> {
+  return glossPartsOf(v.meaning_ru)
+}
+
+/**
+ * Все значения карточки как список (часть речи, ключи значения): основное значение
+ * (card.pos/meaning_ru) плюс каждое из other_senses со своей частью речи. C10: двойник по
+ * значению раньше сравнивал только основное значение при равном pos карточек целиком - слово
+ * с других частей речи (other_senses) не участвовало в сравнении вовсе, хотя может делить
+ * значение с другой карточкой именно этим, не основным, смыслом.
+ */
+function sensesOf(v: CardView): { pos: string; parts: Set<string> }[] {
+  const out = [{ pos: v.pos, parts: glossParts(v) }]
+  for (const s of v.other_senses) out.push({ pos: s.pos, parts: glossPartsOf(s.ru) })
   return out
 }
 
@@ -1404,11 +1421,16 @@ function glossParts(v: CardView): Set<string> {
  * felicitate) значений не делят и проверку проходят.
  */
 export function meaningTwin(card: CardView): (other: CardView) => boolean {
-  const parts = glossParts(card)
-  if (!parts.size) return () => false
+  const senses = sensesOf(card)
+  if (!senses.some(s => s.parts.size)) return () => false
   return other => {
-    if (other.pos !== card.pos) return false
-    for (const p of glossParts(other)) if (parts.has(p)) return true
+    for (const a of senses) {
+      if (!a.parts.size) continue
+      for (const b of sensesOf(other)) {
+        if (b.pos !== a.pos) continue
+        for (const p of b.parts) if (a.parts.has(p)) return true
+      }
+    }
     return false
   }
 }

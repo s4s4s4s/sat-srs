@@ -10,6 +10,13 @@ export interface CardRec {
   broken?: number       // 1 = frontmatter не разобрался; карточку не трогаем и не пишем
 }
 
+/** Одно из значений слова, помимо основного (meaning_en/meaning_ru) - fm.other_senses. */
+export interface Sense {
+  pos: string
+  en: string
+  ru: string
+}
+
 /** Типизированное представление карточки для UI/планировщика. */
 export interface CardView {
   path: string
@@ -29,6 +36,7 @@ export interface CardView {
   domain: string        // домен College Board (II/CS/EOI/SEC/ALG/AM/PSDA/GEO)
   confusables: string[] // авторские «путаемые» дистракторы от тьютора, приоритетнее выборки из колоды
   synonyms: string[]    // допустимые ответы ввода помимо word; задаёт тьютор
+  other_senses: Sense[] // остальные значения слова (fm.other_senses); нет поля = ещё не сверено, [] = сверено, других нет
   from_mark: string[]   // формы, в которых владелец отметил это слово как незнакомое (см. liveMarkedLemmas в journal.ts);
                         // пусто, если карточка добавлена не из живой отметки — совпадение по word тоже поднимает ввод
   leech: string         // дата пометки пиявкой (isLeech из metrics.ts: reps ≥ LEECH_REPS и stability < LEECH_STABILITY_DAYS), пусто = не пиявка

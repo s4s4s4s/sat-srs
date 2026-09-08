@@ -18,6 +18,16 @@ import type { StudyItem } from './types'
  * заполнители и лишнее новое слово подтягиваются только когда урок иначе встанет, —
  * поэтому поверх неё в Review.tsx стоит храповик: показанный процент не уменьшается.
  * Ученик может видеть, что идёт медленнее, чем думал; он не должен видеть, что идёт назад.
+ *
+ * Четвёртый случай той же ошибки - зажим целью (WS5b). `total = Math.min(total, goal)`
+ * сравнивал ЭКРАНЫ с ЦЕЛЬЮ ДНЯ В УПРАЖНЕНИЯХ, а это разные единицы дважды. Во-первых,
+ * окно-знакомство - экран, но не упражнение: два новых слова в уроке давали два экрана,
+ * которых счётчик «N из цели» не видит, и полоска обгоняла его на два. Во-вторых, цель
+ * дневная, а зажим считал урок с нуля: утренний заход из десяти упражнений в знаменатель
+ * не попадал вовсе. Отсюда 100% при счётчике «10 из 12», зафиксированные храповиком
+ * навсегда. Теперь цель переводится в экраны до сравнения: остаток `goal - doneToday`
+ * берётся в упражнениях и раскладывается по единицам очереди (`showsByUnit`), а потолком
+ * знаменателя становится число ЭКРАНОВ, за которое урок этот остаток закроет.
  */
 
 /**
@@ -60,14 +70,23 @@ export interface ProgressInput {
   /** Все лишние новые слова, которые лестница ещё вправе ввести сверх плана (`bonusNew`). */
   bonusNew: readonly StudyItem[]
   /**
-   * Цель захода (упражнений), WS5b: `RUN_MIN_REVIEWS` по умолчанию, из состояния сессии
-   * (`goal` в `store.ts`). Знаменатель полоски не может быть БОЛЬШЕ цели: заход из
-   * двадцати карточек в очереди не должен растягивать полоску на двадцать, если ученик
-   * закрывает день двенадцатью, `min(goal, estimateShowsLeft + shown)`. Если реальный
-   * остаток МЕНЬШЕ цели (короткий урок грамматики на пять карточек), цель ничего не
-   * подменяет: знаменатель остаётся точным, как и раньше.
+   * Цель ДНЯ в УПРАЖНЕНИЯХ, WS5b: `RUN_MIN_REVIEWS` по умолчанию, из состояния сессии
+   * (`goal` в `store.ts`). Знаменатель полоски не может быть БОЛЬШЕ работы, которая
+   * осталась до цели: заход из двадцати карточек в очереди не должен растягивать полоску
+   * на двадцать, если ученик закрывает день двенадцатью. Сравнивать цель со знаменателем
+   * напрямую нельзя - знаменатель в экранах, цель в упражнениях и считается от начала ДНЯ,
+   * а не урока; в экраны её переводит `goalCapShows` через `doneToday`. Если реальный
+   * остаток урока МЕНЬШЕ остатка до цели (короткий урок грамматики на пять карточек),
+   * цель ничего не подменяет: знаменатель остаётся точным, как и раньше.
    */
   goal: number
+  /**
+   * Упражнений дня, уже оценённых К ЭТОМУ экрану: сделанное в предыдущих заходах дня плюс
+   * оценённое в этой сессии (`baseUnits + res.current.reviews` в Review.tsx) - ровно тот
+   * счётчик, который экран рисует рядом с полоской как «N из цели». Текущий экран сюда
+   * НЕ входит: он ещё не оценён, а окном-знакомством может не дать упражнения вовсе.
+   */
+  doneToday: number
 }
 
 /**
@@ -99,7 +118,27 @@ function isFreshNew(item: StudyItem, input: ProgressInput): boolean {
 }
 
 /**
- * Оценка числа показов, которые уроку осталось выдать (текущий экран включён).
+ * Показы одной единицы очереди, разложенные по видам. Виды разделены не для красоты: окно
+ * оценки не даёт (A7), то есть в счётчик упражнений дня не попадает, а полоску двигает.
+ */
+export interface UnitShows {
+  /** Окно-знакомство: 1, если урок его действительно выдаст, иначе 0. Экран без упражнения. */
+  intros: number
+  /** Отработок (экран с оценкой), которые единица уроку ещё должна. */
+  drills: number
+}
+
+/** Всего экранов за единицу: и окно, и отработки идут в знаменатель полоски одинаково. */
+function unitTotal(u: UnitShows): number {
+  return u.intros + u.drills
+}
+
+/**
+ * Разбивка оценки по единицам `[...queue, ...pending]` в порядке урока: то самое, что
+ * `estimateShowsLeft` затем складывает в одно число. Отдельной функцией потому, что зажим
+ * целью (`goalCapShows`) обязан идти по единицам в том же порядке и по тем же правилам:
+ * ему нужно знать, на каком экране урок доберёт остаток УПРАЖНЕНИЙ до цели, а упражнения
+ * от экранов отличает только эта разбивка.
  *
  * Две причины, по которым единица из очереди не даст ни одного показа, — обе взяты
  * из правил урока, а не выдуманы здесь:
@@ -123,7 +162,7 @@ function isFreshNew(item: StudyItem, input: ProgressInput): boolean {
  * новым словом (оно и само может стать разделителем: два новых слова годятся друг
  * другу, если лимит окон выдерживает оба, — это правило самого `hasSeparator`).
  */
-export function estimateShowsLeft(input: ProgressInput): number {
+export function showsByUnit(input: ProgressInput): UnitShows[] {
   const units = [...input.queue, ...input.pending]
   const wantsIntro = units.map(it => input.isIntro(it))
   const freshNew = units.map(it => isFreshNew(it, input))
@@ -132,15 +171,16 @@ export function estimateShowsLeft(input: ProgressInput): number {
   // знакомства новых слов и окна «Подзабылось» (F82), и окно списывается со своего
   let introsLeft = input.introsLeft
   let reintroLeft = input.reintroLeft
-  const shows = units.map((it, i) => {
+  const shows: UnitShows[] = units.map((it, i) => {
+    const drills = drillsLeftFor(it, input, i >= input.queue.length)
     if (wantsIntro[i] && (freshNew[i] ? introsLeft > 0 : reintroLeft > 0)) {
       if (freshNew[i]) introsLeft--; else reintroLeft--
-      return drillsLeftFor(it, input, i >= input.queue.length) + (SHOWS_PER_INTRO - SHOWS_PER_REPEAT)
+      return { intros: SHOWS_PER_INTRO - SHOWS_PER_REPEAT, drills }
     }
     // окно не влезло в лимит: новое слово ждёт следующего урока и показов не даст,
-    // а «Подзабылось» отработается обычным упражнением — без окна, но экраном
-    if (wantsIntro[i] && freshNew[i]) return 0
-    return drillsLeftFor(it, input, i >= input.queue.length)
+    // а «Подзабылось» отработается обычным упражнением - без окна, но экраном
+    if (wantsIntro[i] && freshNew[i]) return { intros: 0, drills: 0 }
+    return { intros: 0, drills }
   })
 
   /* 2) A6: разделитель — любой показ другого слова ПОСЛЕ окна-знакомства. Текущий экран
@@ -152,20 +192,54 @@ export function estimateShowsLeft(input: ProgressInput): number {
     for (let pass = 0; pass < units.length; pass++) {
       let changed = false
       for (let i = 1; i < units.length; i++) {
-        if (!wantsIntro[i] || !freshNew[i] || !shows[i]) continue
+        if (!wantsIntro[i] || !freshNew[i] || !unitTotal(shows[i])) continue
         let separators = 0
         for (let j = 0; j < units.length; j++) {
           if (j === i || units[j].view.path === units[i].view.path) continue
-          separators += shows[j]
+          separators += unitTotal(shows[j])
         }
         if (units[0].view.path !== units[i].view.path) separators-- // текущий экран уже идёт
-        if (separators < SHOWS_PER_REPEAT) { shows[i] = 0; changed = true }
+        if (separators < SHOWS_PER_REPEAT) { shows[i] = { intros: 0, drills: 0 }; changed = true }
       }
       if (!changed) break
     }
   }
 
-  return shows.reduce((a, b) => a + b, 0)
+  return shows
+}
+
+/** Оценка числа показов, которые уроку осталось выдать (текущий экран включён). */
+export function estimateShowsLeft(input: ProgressInput): number {
+  return showsByUnit(input).reduce((sum, u) => sum + unitTotal(u), 0)
+}
+
+/**
+ * Потолок знаменателя в ЭКРАНАХ, который ставит цель дня, или null, если цель урок не
+ * ограничивает. Остаток до цели `goal - doneToday` - в УПРАЖНЕНИЯХ, поэтому единицы урока
+ * проходятся по порядку (`showsByUnit`) и складываются их экраны, пока накопленные
+ * отработки не покроют остаток; последняя единица идёт частично - её окно плюс ровно те
+ * отработки, которых не хватало.
+ *
+ * Цель уже достигнута (`remaining <= 0`) - потолок равен числителю: полоска показывает
+ * 100%, ровно то же, что счётчик рядом, который в этот момент рисует ✓.
+ *
+ * Единиц не хватило покрыть остаток (урок короче цели) - потолка нет: цель ничего не
+ * подменяет, знаменатель остаётся точной оценкой урока (смысл WS5b не изменился).
+ */
+function goalCapShows(input: ProgressInput, numerator: number): number | null {
+  const remaining = input.goal - input.doneToday
+  if (remaining <= 0) return numerator
+
+  let screens = 0
+  let drills = 0
+  for (const unit of showsByUnit(input)) {
+    if (!unitTotal(unit)) continue          // единица, которую урок не покажет вовсе
+    const take = Math.min(unit.drills, remaining - drills)
+    screens += unit.intros + take
+    drills += take
+    if (drills >= remaining) return input.shown + screens
+  }
+  return null
 }
 
 /**
@@ -201,8 +275,10 @@ export function lessonProgress(input: ProgressInput): number {
      берёт пачку `MAX_EARLY_FILLERS`, когда иначе показывать нечего), но не меньше одного. */
   if (input.fillerAvailable) total = Math.max(total, numerator + SHOWS_PER_REPEAT)
 
-  // WS5b: цель захода зажимает знаменатель сверху, не подменяя точную оценку снизу
-  total = Math.min(total, input.goal)
+  /* WS5b: цель дня зажимает знаменатель сверху, не подменяя точную оценку снизу. Зажим
+     идёт в ЭКРАНАХ: цель задана в упражнениях, и переводит её `goalCapShows`. */
+  const cap = goalCapShows(input, numerator)
+  if (cap !== null) total = Math.min(total, cap)
 
   return numerator / Math.max(total, numerator)
 }

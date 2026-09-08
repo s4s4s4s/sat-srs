@@ -1,6 +1,6 @@
 import yaml from 'js-yaml'
 import { createEmptyCard, type Card as FsrsCard, State } from 'ts-fsrs'
-import type { CardRec, CardView, GlossEntry, ReadingRec, ReadingView } from './types'
+import type { CardRec, CardView, GlossEntry, ReadingRec, ReadingView, Sense } from './types'
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
 
@@ -82,6 +82,27 @@ export function slugFromPath(path: string): string {
   return base.replace(/\.md$/i, '')
 }
 
+/**
+ * fm.other_senses → список Sense. В отличие от glossary() (тексты для чтения), элемент
+ * здесь НЕ отбрасывается молча при отсутствии en/ru: пустой список - явное «сверено, других
+ * значений нет», а список с браком валидатора колоды - тоже сигнал, который приложению
+ * незачем прятать. Поля приводятся к строкам, отсутствующие остаются пустыми строками.
+ */
+function otherSenses(v: any): Sense[] {
+  if (!Array.isArray(v)) return []
+  const out: Sense[] = []
+  for (const raw of v) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const s = raw as Record<string, any>
+    out.push({
+      pos: s.pos != null ? String(s.pos) : '',
+      en: s.en != null ? String(s.en) : '',
+      ru: s.ru != null ? String(s.ru) : ''
+    })
+  }
+  return out
+}
+
 export function cardView(rec: CardRec): CardView {
   const fm = rec.fm
   const hasPrep = !!(fm.prep && fm.prep_context)
@@ -106,6 +127,7 @@ export function cardView(rec: CardRec): CardView {
     domain: String(fm.domain ?? ''),
     confusables: Array.isArray(fm.confusables) ? fm.confusables.map(String) : [],
     synonyms: Array.isArray(fm.synonyms) ? fm.synonyms.map(String) : [],
+    other_senses: otherSenses(fm.other_senses),
     from_mark: Array.isArray(fm.from_mark) ? fm.from_mark.map(String) : [],
     leech: String(fm.leech ?? ''),
     choices: Array.isArray(fm.choices) ? fm.choices.map(String) : [],

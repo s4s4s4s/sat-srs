@@ -34,7 +34,7 @@ function cardView(word: string, level: number, over: Partial<CardView> = {}): Ca
     contexts: [`The ___ moment defined ${word}.`],
     meaning_en: `meaning of ${word}`, meaning_ru: `${word} по-русски`, roots: '',
     source: 'test', added: '2026-07-20', level, kind: 'vocab',
-    domain: '', confusables: [], synonyms: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
+    domain: '', confusables: [], synonyms: [], other_senses: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
     desmos: false, explain: '', suspended: false,
     fsrs: createEmptyCard(new Date(2026, 6, 24)),
     prep: '', prepContext: '', fsrsPrep: null,

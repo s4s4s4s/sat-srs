@@ -53,7 +53,7 @@ function vocab(word: string, f: FsrsCard, over: Partial<CardView> = {}): CardVie
   return {
     path: `deck/${word}.md`, slug: `${word}-${seq}`, word, pos: 'noun', context: '', contexts: [],
     contextsRu: [], meaning_en: `en:${word}`, meaning_ru: `значение ${word}`, roots: '',
-    source: 'test', added: '2026-07-01', level: 1, kind: 'vocab', domain: '', confusables: [], synonyms: [], from_mark: [],
+    source: 'test', added: '2026-07-01', level: 1, kind: 'vocab', domain: '', confusables: [], synonyms: [], other_senses: [], from_mark: [],
     leech: '', choices: [], answerText: '', answerNum: '', desmos: false, explain: '',
     suspended: false, fsrs: f, prep: '', prepContext: '', fsrsPrep: null, ...over
   } as CardView
@@ -562,6 +562,23 @@ function logicScreenChecks(): void {
   group('Логика на экранах: Review не зовёт rateItem, очередь и счётчики считаются по журналу, плашка «Разбирать»')
 }
 
+/**
+ * other_senses (09.09.2026): остальные значения слова помимо основного (meaning_en/meaning_ru).
+ * Показ обязан стоять в ОБЕИХ ветках карточки - окно-знакомство (intro) и раскрытие после
+ * ответа (reveal) - иначе половина показов слова молчит об остальных значениях. Проверка
+ * читает исходник текстом (screenSource), как и остальные структурные проверки этого файла.
+ */
+function otherSensesScreenChecks(): void {
+  const src = screenSource('Review.tsx')
+
+  assert(src.includes('card.other_senses'), 'Review.tsx обязан читать card.other_senses')
+
+  const sensesBlocks = (src.match(/className="rev-senses"/g) ?? []).length
+  assert(sensesBlocks === 2, `Review.tsx обязан показывать блок .rev-senses ровно в двух ветках (intro и reveal), найдено ${sensesBlocks}`)
+
+  group('other_senses: показ «Ещё значения» стоит в обеих ветках карточки Review.tsx (intro и reveal)')
+}
+
 function main(): void {
   console.log('SRS wordstatus - единый источник правды о состоянии слова')
   agreementWithHomeChecks()
@@ -584,6 +601,7 @@ function main(): void {
   sessionGoalScreenChecks()
   reviewIntroBudgetChecks()
   logicScreenChecks()
+  otherSensesScreenChecks()
   console.log(`\nВсе проверки статуса слова пройдены (${passed} групп).`)
 }
 

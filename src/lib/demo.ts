@@ -197,7 +197,13 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
       card('tenuous', 'слабый, шаткий', 'very weak or slight', 'The link remains ______ at best.', 2, 4, 3),
       card('prudent', 'благоразумный', 'acting with care', 'Saving is a ______ habit.', 2, 4, 3),
       card('ubiquitous', 'вездесущий', 'present everywhere', 'Smartphones are ______ now.', 2, 4, 3),
-      card('bolster', 'укреплять', 'to support', 'Results ______ confidence.', 0, 0, 0, { pos: 'verb' }),
+      card('bolster', 'укреплять', 'to support', 'Results ______ confidence.', 0, 0, 0, {
+        pos: 'verb',
+        other_senses: [
+          { pos: 'noun', en: 'a long cushion or pillow', ru: 'валик, подушка-опора' },
+          { pos: 'verb', en: 'to add extra support to a physical structure', ru: 'подпирать, укреплять физически' }
+        ]
+      }),
       card('lament', 'сожалеть', 'to mourn', 'Historians ______ the loss.', 0, 0, 0, { pos: 'verb' })
     ]
 

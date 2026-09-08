@@ -31,7 +31,7 @@ function makeCard(slug: string, kind: string, domain = '', o: Partial<CardView> 
     context: `___ ${slug}`, contexts: [`___ ${slug}`], contextsRu: [],
     meaning_en: `meaning ${slug}`, meaning_ru: `${slug} по-русски`, roots: '',
     source: 'test', added: '2026-01-01', level: 1, kind, domain,
-    confusables: [], synonyms: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
+    confusables: [], synonyms: [], other_senses: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
     desmos: false, explain: '', suspended: false,
     fsrs: createEmptyCard(BASE),
     prep: '', prepContext: '', fsrsPrep: null,

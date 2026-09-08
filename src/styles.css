@@ -656,6 +656,7 @@ body::before {
 .intro .rev-meaning-en { font-size: 18px; margin-top: 2px; animation: fadein .4s ease-out .12s backwards; }
 .intro .rev-meaning-ru { font-size: 19px; margin-top: 2px; animation: fadein .4s ease-out .18s backwards; }
 .intro .rev-roots { animation: fadein .4s ease-out .24s backwards; }
+.intro .rev-senses { animation: fadein .4s ease-out .24s backwards; }
 .intro-label {
   margin-top: 16px; font-size: 12px; font-weight: 800;
   text-transform: uppercase; letter-spacing: .8px; color: var(--text2);
@@ -678,6 +679,15 @@ body::before {
 .rev-meaning-en { font-size: 17px; color: var(--text); margin-top: 6px; }
 .rev-meaning-ru { font-size: 17px; font-weight: 800; color: var(--text-strong); margin-top: 4px; }
 .rev-roots { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text2); margin-top: 10px; font-weight: 700; }
+
+.rev-senses { margin-top: 8px; }
+.rev-senses-label {
+  font-size: 11px; font-weight: 800; text-transform: uppercase; font-variant-caps: small-caps;
+  letter-spacing: .5px; color: var(--text2);
+}
+.rev-sense { font-size: 15px; margin-top: 2px; display: flex; flex-wrap: wrap; gap: 0 6px; }
+.rev-sense-pos { font-style: italic; color: var(--text2); margin-right: 2px; }
+.rev-sense-ru { font-weight: 700; color: var(--text-strong); }
 
 .verdict { font-size: 17px; font-weight: 800; margin-bottom: 8px; }
 .verdict-row { display: flex; align-items: center; gap: 10px; }

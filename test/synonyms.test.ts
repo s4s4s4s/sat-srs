@@ -67,7 +67,7 @@ function card(word: string, meaning_ru: string, pos = 'verb', over: Partial<Card
     context: '', contexts: [], contextsRu: [],
     meaning_en: '', meaning_ru, roots: '',
     source: 'test', added: '2026-07-20', level: 1, kind: 'vocab',
-    domain: '', confusables: [], synonyms: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
+    domain: '', confusables: [], synonyms: [], other_senses: [], from_mark: [], leech: '', choices: [], answerText: '', answerNum: '',
     desmos: false, explain: '', suspended: false,
     fsrs: createEmptyCard(new Date(2026, 7, 22)),
     prep: '', prepContext: '', fsrsPrep: null,
@@ -177,6 +177,26 @@ function meaningTwinChecks(): void {
   assert(!meaningTwin(noMeaning)(hasMeaning) && !meaningTwin(hasMeaning)(noMeaning),
     'карточка без meaning_ru не должна иметь двойников — ни как источник, ни как цель сравнения')
   group('meaningTwin: карточка без meaning_ru двойников не имеет вовсе')
+
+  // C10 (other_senses): двойник по значению, спрятанному в other_senses другой карточки, а не
+  // в её основном значении. A - noun «проверка, оценка» (assay-подобное). B - verb по основному
+  // значению, но её other_senses содержит noun с тем же значением: должны совпасть как noun.
+  const cardA = card('assayA', 'проверка, оценка', 'noun')
+  const cardB = card('attemptB', 'пытаться', 'verb', {
+    other_senses: [{ pos: 'noun', en: 'a test or evaluation', ru: 'проверка, оценка' }]
+  })
+  assert(sharesMeaning(cardA, cardB) && sharesMeaning(cardB, cardA),
+    'значение из other_senses другой карточки обязано участвовать в сравнении наравне с основным (в обе стороны)')
+  group('meaningTwin: двойник опознаётся через other_senses другой карточки (C10)')
+
+  // Та же пара, но other_senses с другой частью речи (adj вместо noun) - не двойники: часть
+  // речи по-прежнему должна совпадать у самой пары значений, а не у карточки целиком.
+  const cardC = card('attemptC', 'пытаться', 'verb', {
+    other_senses: [{ pos: 'adj', en: 'a test or evaluation', ru: 'проверка, оценка' }]
+  })
+  assert(!sharesMeaning(cardA, cardC) && !sharesMeaning(cardC, cardA),
+    'общий ru-ключ при несовпадающей части речи (adj против noun) не должен давать двойника')
+  group('meaningTwin: значение из other_senses с другой частью речи двойника не даёт')
 }
 
 // ---- 4. blankSentence: целое предложение с пропуском -------------------------

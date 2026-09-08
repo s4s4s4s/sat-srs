@@ -434,7 +434,10 @@ export default function Review() {
       drilled: drilled.current,
       fillerAvailable: ctx.hasFiller,
       bonusNew: bonusNew(queue, MAX_INTRO_BONUS),
-      goal
+      goal,
+      // тот же счётчик упражнений дня, что рисуется рядом как «N из цели» (doneToday ниже):
+      // без него зажим целью сравнивал экраны урока с целью ДНЯ и врал на утренний заход
+      doneToday: baseUnits + res.current.reviews
     })
     pctFloor.current = Math.max(pctFloor.current, raw)
     return pctFloor.current
@@ -1224,6 +1227,12 @@ export default function Review() {
               )}
               {card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
               {card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
+              {card.other_senses.length > 0 && (
+                <div className="rev-senses">
+                  <div className="rev-senses-label">Ещё значения</div>
+                  {card.other_senses.map((s, i) => <div key={i} className="rev-sense"><span className="rev-sense-pos">{s.pos}</span><span className="rev-sense-en">{s.en}</span><span className="rev-sense-ru">{s.ru}</span></div>)}
+                </div>
+              )}
               {card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
               <div className="intro-label">Пример использования</div>
               <Sentence context={task.ctx} word={card.word} revealed marked={marked} onWord={markWord} />
@@ -1340,6 +1349,12 @@ export default function Review() {
             {!isPrep && isNumeric && verdict === 'correct' && <div className="rev-meaning-ru">Ответ: <Tex text={task.answer} /></div>}
             {!isPrep && card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
             {!isPrep && card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
+            {!isPrep && card.other_senses.length > 0 && (
+              <div className="rev-senses">
+                <div className="rev-senses-label">Ещё значения</div>
+                {card.other_senses.map((s, i) => <div key={i} className="rev-sense"><span className="rev-sense-pos">{s.pos}</span><span className="rev-sense-en">{s.en}</span><span className="rev-sense-ru">{s.ru}</span></div>)}
+              </div>
+            )}
             {!isPrep && card.explain && <div className="rev-explain"><Tex text={card.explain} /></div>}
             {card.leech && <div className="leech-note">Пиявка — слово сопротивляется: тьютор переформулирует карточку</div>}
             {!isPrep && card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
