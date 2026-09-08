@@ -426,6 +426,14 @@ body::before {
 @media (hover: hover) { .section-review:hover { color: var(--text); } }
 .card.hero-slim { padding: 14px 16px; margin-bottom: 14px; }
 .card.hero-slim::after { content: none; }
+/* Подпись полосы дня (WS6b) выросла до четырёх счётчиков через точку и с
+   white-space: nowrap не влезает рядом с полосой ни на телефоне, ни в трети
+   ширины ноутбука: полоса сжималась в чёрточку, хвост подписи резался краем.
+   В узких карточках-метриках полоса занимает всю ширину, подпись идёт под
+   ней и складывается по словам. */
+.hero-slim .minbar-row { flex-wrap: wrap; row-gap: 6px; }
+.hero-slim .minbar { flex-basis: 100%; }
+.hero-slim .minbar-label { white-space: normal; }
 /* огонёк СТОИТ на нижней кромке карточки, а не левитирует */
 .hero-row { display: flex; align-items: flex-end; gap: 12px; }
 .hero-main { flex: 1; min-width: 0; }
@@ -1129,11 +1137,22 @@ h2.sec { font-size: 18px; font-weight: 800; color: var(--text-strong); margin: 4
     max-width: 1140px;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    /* Ряды по содержимому, а не по остатку высоты окна. У .screen высота
+       задана (flex: 1 внутри #root на 100dvh), и при auto-рядах сетка,
+       не влезая в окно, ужимала ряды карточек до доли содержимого: карточка
+       с overflow: hidden не имеет минимальной высоты, и её кнопка «Учить»
+       уходила под нижний край (ноутбук 1238 px, шесть разделов + путь слов). */
+    grid-auto-rows: max-content;
     align-content: start;
     gap: 16px 18px;
   }
-  .s-home > .appbar { grid-column: 1 / -1; order: -3; padding-bottom: 0; }
-  .s-home > .fjord-gap { grid-column: 1 / -1; order: -2; height: 104px; }
+  .s-home > .appbar { grid-column: 1 / -1; order: -5; padding-bottom: 0; }
+  .s-home > .fjord-gap { grid-column: 1 / -1; order: -4; height: 104px; }
+  /* Приоритет дня (WS6b) стоит над рядом разделов на всю ширину: кнопка не
+     шире ряда действий внизу (.home-actions .row), подпись сразу под ней.
+     Без явной колонки они занимали по одной ячейке сетки среди карточек. */
+  .s-home > .today-btn { grid-column: 1 / -1; order: -3; margin: 0; width: 100%; max-width: 440px; }
+  .s-home > .today-reason { grid-column: 1 / -1; order: -2; margin: -8px 0 0; }
   .s-home > .section-card { order: -1; margin-bottom: 0; display: flex; flex-direction: column; }
   /* карточки разделов стоят в ряд — кнопки выравниваются по нижней кромке */
   .s-home > .section-card .section-btn { margin-top: auto; }
