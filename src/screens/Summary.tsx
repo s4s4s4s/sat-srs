@@ -31,7 +31,9 @@ export default function Summary() {
      закрытая практикой, вела бы в пустой экран урока «Очередь пуста» вместо честного
      «раздел на сегодня закрыт». */
   const sectionCards = views().filter(v => sectionOf(v) === app.sessionSection)
-  const counts = homeCounts(sectionCards, newBudgetFor(sectionCards, newPerDay(app.sessionSection, 'norm'), app.journal, dayKey()))
+  // журнал обязателен: у раздела «Логика» состояние живёт в нём, а не в FSRS (lib/logic.ts),
+  // и без него «Ещё заход» обещал бы вопросы, которые сегодня уже разобраны
+  const counts = homeCounts(sectionCards, newBudgetFor(sectionCards, newPerDay(app.sessionSection, 'norm'), app.journal, dayKey()), new Date(), app.journal)
   const moreAvail = counts.learnDue + counts.revDue + counts.newAvail > 0
 
   return (

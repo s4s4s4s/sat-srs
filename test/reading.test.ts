@@ -484,9 +484,15 @@ function structureChecks(): void {
   const store = source('store.ts')
   const toggle = funcBody(store, 'export async function toggleWordMark')
   const logRead = funcBody(store, 'export async function logTextRead')
+  /* Запись строки журнала с 09.09.2026 идёт через общую `pushJournal` (хранилище, состояние,
+     перерисовка одним местом), поэтому «пишет строку» проверяется по любому из двух способов -
+     прямому `db.putJournal` или общему helper'у. Проверка от этого не ослабла: сам helper
+     обязан звать `db.putJournal`, и это условие стоит здесь же, строкой ниже. */
+  const push = funcBody(store, 'async function pushJournal')
+  assert(push.includes('db.putJournal'), 'pushJournal - общая запись строки журнала - обязана звать db.putJournal')
   for (const [name, body] of [['toggleWordMark', toggle], ['logTextRead', logRead]] as const) {
     assert(!/fsrs/i.test(body), `${name} не имеет права трогать FSRS: чтение не оценивают`)
-    assert(body.includes('db.putJournal'), `${name} обязана писать строку журнала`)
+    assert(body.includes('db.putJournal') || body.includes('pushJournal('), `${name} обязана писать строку журнала`)
     assert(!/\bdb\.delete|store\.delete|putCard\b/.test(body), `${name} ничего не удаляет и не пишет карточек`)
   }
   assert(toggle.includes("type: 'mark'") && logRead.includes("type: 'reading'"), 'типы строк проставлены явно')

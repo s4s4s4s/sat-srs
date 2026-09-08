@@ -5,7 +5,8 @@ import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm, readingView, slugFromPath } from './yamlfm'
 import { questionView, PACE_SEC } from './practice'
-import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, dueCap, type Section, type TypeVerdict } from './scheduler'
+import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, isLogicCard, newBudgetTotal, dueCap, type Section, type TypeVerdict } from './scheduler'
+import { logicReviewLine } from './logic'
 import { buildCorpusIndex, corpusHits as corpusHitsOf } from './corpus'
 import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay, startOfStudyDay, calendarKey, addDaysKey } from './daytime'
@@ -553,6 +554,31 @@ export async function markIntroduced(item: StudyItem): Promise<void> {
     v: 1, type: 'review', ts: isoLocal(now), ms: now.getMilliseconds(), day: dayKey(now),
     slug: item.view.slug, skill: item.skill, format: 'intro', synced: 0
   }
+  await pushJournal(line)
+}
+
+/**
+ * Ответ на вопрос раздела «Логика» - единственная запись, которую делает этот раздел.
+ *
+ * FSRS не трогается вовсе (см. шапку logic.ts): у вопроса к тексту нет интервала, состояние
+ * живёт в журнале и читается `logicStatus`. Поэтому здесь нет ни `putCardAndJournal`, ни
+ * `dirty`, ни `first_seen` - только строка журнала, которую строит чистая `logicReviewLine`.
+ *
+ * Проверка `isLogicCard` стоит именно здесь, а не только на экране: запись раздела обязана
+ * отказать чужой карточке, иначе первый же ошибочный вызов из UI тихо занёс бы словарной
+ * карточке review-строку без FSRS-полей, и её расписание разошлось бы с журналом.
+ */
+export async function logLogicAnswer(item: StudyItem, correct: boolean, elapsedMs: number, answerMs?: number): Promise<void> {
+  const rec = state.cards.find(c => c.path === item.view.path)
+  if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${item.view.path}`)
+  if (!isLogicCard(item.view)) throw new Error(`Не карточка логики: ${item.view.path}`)
+  await pushJournal({ ...logicReviewLine(item.view, correct, elapsedMs, answerMs), synced: 0 })
+}
+
+/** Дописать строку в журнал: хранилище, состояние, перерисовка - одним местом.
+ *  Тройку `putJournal` + `state.journal` + `emit()` повторяли все писатели журнала, и
+ *  расходились они молча (забытый `emit` = записанная строка, которой не видит экран). */
+async function pushJournal(line: JournalRec): Promise<void> {
   await db.putJournal([line])
   state.journal = [...state.journal, line]
   emit()
@@ -599,9 +625,7 @@ export async function logReading(minutes: number, what = '', src = ''): Promise<
     // кнопкой «+» на главной. Соглашение то же, что у отметок слов (`toggleWordMark`).
     ...(src ? { src } : {})
   }
-  await db.putJournal([line])
-  state.journal = [...state.journal, line]
-  emit()
+  await pushJournal(line)
   updateBadge()
   void startSync()
 }
@@ -661,9 +685,7 @@ export async function toggleWordMark(src: string, w: { word: string; lemma?: str
     in_deck: deckHasWord(deckWords(), lemma, word),
     on, synced: 0
   }
-  await db.putJournal([line])
-  state.journal = [...state.journal, line]
-  emit()
+  await pushJournal(line)
   return on
 }
 
@@ -692,9 +714,7 @@ export async function logTextRead(text: ReadingView, seconds = 0): Promise<void>
        добавлено, а не подменено (D3): старые строки без него читаются как прежде. */
     ...(seconds > 0 ? { read_s: Math.round(seconds) } : {})
   }
-  await db.putJournal([line])
-  state.journal = [...state.journal, line]
-  emit()
+  await pushJournal(line)
   void startSync()
 }
 
@@ -718,9 +738,7 @@ export async function logPractice(view: QuestionView, chose: string, seconds = 0
     // мягкий таймер (PACE_SEC, D5): флаг темпа, а не запрет - ответ пишется как есть
     ...(seconds > PACE_SEC ? { slow: true } : {})
   }
-  await db.putJournal([line])
-  state.journal = [...state.journal, line]
-  emit()
+  await pushJournal(line)
   void startSync()
 }
 

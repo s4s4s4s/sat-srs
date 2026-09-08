@@ -67,7 +67,9 @@ async function maybeGoStraightToLesson(): Promise<void> {
      чинили 21.08 на главном экране — здесь он остался незамеченным, потому что счёт
      шёл мимо `newBudgetFor`. С четвёртым разделом («Логика») цена ошибки выросла. */
   const budget = newBudgetFor(rw, NEW_PER_DAY.norm, currentJournal(), dayKey())
-  const c = homeCounts(rw, budget)
+  // журнал - четвёртым аргументом везде, где зовётся homeCounts (lib/logic.ts): здесь раздел
+  // только rw и логики в нём нет, но расходящийся вызов - это будущая ошибка при копировании
+  const c = homeCounts(rw, budget, new Date(), currentJournal())
   if (c.learnDue + c.revDue + c.newAvail > 0) startLesson('rw', p.get('review') === '1')
 }
 

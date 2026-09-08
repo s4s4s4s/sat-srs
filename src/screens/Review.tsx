@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Rating, State, type Grade } from 'ts-fsrs'
-import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause, markIntroduced, deferItemToNextDay, toggleWordMark, corpusHitsBySlug } from '../lib/store'
+import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause, markIntroduced, deferItemToNextDay, toggleWordMark, corpusHitsBySlug, logLogicAnswer } from '../lib/store'
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
-  pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, typedTwin, suggestedGrade, skeletonHint, medianForKind, sectionOf, itemKey, effectiveRetention, NEW_GAP, leechReturned,
+  pickTask, mcDistractors, meaningDistractors, prepOptions, checkTyped, checkNumeric, typedTwin, suggestedGrade, skeletonHint, medianForKind, sectionOf, isLogicCard, itemKey, effectiveRetention, NEW_GAP, leechReturned,
   blankPhrase, blankSentence, markGlosses,
   type TypeVerdict,
   newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue,
   closingShow
 } from '../lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, objectiveOutcome, REINTRO_PER_LESSON, type OrderCtx } from '../lib/session'
+import { logicAttempts, logicStatus, LOGIC_MAX_SHOWS } from '../lib/logic'
+import { PRACTICE_RETRY_WRONG_DAYS } from '../lib/practice'
+import { множ } from '../lib/plural'
 import { lessonProgress, DRILL_PER_SESSION } from '../lib/progress'
 import Tex from '../components/Tex'
 import Markable from '../components/Markable'
@@ -238,7 +241,10 @@ export default function Review() {
     // point 3: слова, введённые сегодня в прошлых уроках и ещё не отработанные дважды,
     // принудительно добираются в этот урок (buildQueue дотягивает их из Learning с due на завтра)
     const forced = forcedTodaySlugs(currentJournal(), dayKey())
-    setQueue(buildQueue(карточкиРаздела, budget, new Date(), forced, liveMarkedLemmas(currentJournal()), corpusHitsBySlug))
+    /* Журнал - седьмой аргумент, и он обязателен: раздел «Логика» живёт не в FSRS, а в
+       журнале (`buildLogicQueue`, хвост buildQueue). Без него все вопросы раздела выглядят
+       свежими, и решённые сегодня возвращались бы в очередь при повторном входе. */
+    setQueue(buildQueue(карточкиРаздела, budget, new Date(), forced, liveMarkedLemmas(currentJournal()), corpusHitsBySlug, currentJournal()))
     if (app.settings.pat && navigator.onLine) void startSync()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -774,8 +780,59 @@ export default function Review() {
     return lapsed.current.has(itemKey(item)) || item.fsrs.state === State.Relearning
   }
 
+  /**
+   * Закрыть показ вопроса раздела «Логика» - одноразовая модель вместо FSRS (см. шапку
+   * `lib/logic.ts`). Оценки Again/Hard/Good/Easy здесь нет и быть не может: у вопроса к тексту
+   * нет интервала, второй показ проверял бы память о букве варианта. Поэтому вместо `rateItem`
+   * пишется одна строка журнала (`logicReviewLine` внутри `logLogicAnswer`), FSRS-блок карточки
+   * и `first_seen` не трогаются вовсе.
+   *
+   * Счётчики захода те же, что у обычного показа mc: верный ответ - зачтённое упражнение,
+   * неверный - ошибка (`again`). Разница ровно в двух местах, и обе намеренные:
+   * - `newSeen` растёт только на ПЕРВОЙ попытке по вопросу (`logicStatus === 'fresh'`), а не по
+   *   `fsrs.state === New`: у логики состояние заморожено на New навсегда, и счёт по нему
+   *   объявлял бы новым каждый возврат;
+   * - `lastGrade` не выставляется - закрывающий показ B7 разделу не положен: «лёгкое на
+   *   прощание» это ещё один вопрос к тексту, а лёгких вопросов к тексту не бывает.
+   */
+  async function gradeLogic() {
+    if (!task || busy.current || finished.current) return
+    busy.current = true
+    try {
+      const elapsed = Date.now() - shownAt.current
+      // «не помню» (gaveUp) вердикта не даёт - это тот же неверный ответ, что и мимо
+      const correct = verdict === 'correct'
+      // первой попытку считаем ДО записи: своя же строка сделала бы вопрос не-свежим
+      const первая = logicStatus(task.item.view.slug, currentJournal()) === 'fresh'
+      try {
+        await logLogicAnswer(task.item, correct, elapsed, answeredMs.current ?? undefined)
+      } catch (e) {
+        // тот же путь отказа, что у rateItem: ответ не проглатываем, карточка остаётся на экране
+        setSaveError(e instanceof Error ? e.message : String(e))
+        return
+      }
+      setSaveError('')
+      creditedSec.current += Math.min(elapsed, cardTimeCap(task.item.view.kind)) / 1000
+      setCombo(c => (correct ? c + 1 : 0))
+      const r = res.current
+      r.reviews++
+      if (первая) r.newSeen++
+      if (!correct) r.again++
+      /* `passRev`/`totalRev` - ретеншн ЗРЕЛЫХ карточек (prev_state = Review). У логики
+         зрелости нет: вопрос либо разобран, либо ждёт возврата, - и подмешивать его в
+         ретеншн значило бы мерить память там, где её не проверяют. */
+      await advance(null)
+    } finally {
+      busy.current = false
+    }
+  }
+
   async function grade(g: Grade) {
     if (!task || busy.current || finished.current) return
+    /* Раздел «Логика» не проходит через FSRS ни одной веткой: единственная запись раздела -
+       `gradeLogic`. Перехват стоит здесь, а не только в разметке, чтобы ни один путь к оценке
+       (кнопка, клавиатура, будущая правка) не увёл вопрос к тексту в `rateItem`. */
+    if (isLogicCard(task.item.view)) { await gradeLogic(); return }
     // мягкое подтверждение: Good/Easy поверх объективно неверного ответа — второй тап тем же
     if (verdict === 'wrong' && g >= Rating.Good && needConfirm !== g) {
       setNeedConfirm(g)
@@ -938,6 +995,8 @@ export default function Review() {
       } else if ((e.code === 'Space' && !typing) || (e.code === 'Enter' && !typing)) {
         e.preventDefault()
         if (!revealed && task.format === 'reveal') revealAnswer()
+        // логика: Enter/пробел - та же одна кнопка «Дальше», что и в листе (оценки у раздела нет)
+        else if (revealed && isLogicCard(task.item.view)) void gradeLogic()
         else if (revealed && suggested) void grade(suggested)
       } else if (!revealed && !typing && task.format !== 'reveal' && task.format !== 'type'
                  && ['1', '2', '3', '4'].includes(e.key)) {
@@ -1029,6 +1088,17 @@ export default function Review() {
   const card = task.item.view
   const isPrep = task.format === 'prep'
   const isIntro = task.format === 'intro'
+  /* Раздел «Логика»: разбор вместо оценки. Показ закрывается одной кнопкой «Дальше»
+     (`gradeLogic`), ряда Again/Hard/Good/Easy нет - оценивать нечего, интервала у вопроса
+     к тексту не существует (см. шапку lib/logic.ts). */
+  const isLogic = isLogicCard(card)
+  /* Что станет с вопросом после этого ответа - ученик обязан видеть, вернётся вопрос или нет.
+     Считается по журналу ДО записи: своя же строка сделала бы показ лишним. */
+  const logicShows = isLogic ? logicAttempts(currentJournal(), card.slug).length + 1 : 0
+  const logicFate = !isLogic ? ''
+    : verdict === 'correct' ? 'Разобрано - вопрос закрыт'
+    : logicShows >= LOGIC_MAX_SHOWS ? 'Показы кончились - вопрос уйдёт тьютору как пробел'
+    : `Вернётся через ${PRACTICE_RETRY_WRONG_DAYS} ${множ(PRACTICE_RETRY_WRONG_DAYS, 'день', 'дня', 'дней')}`
   /* WS3 (05.09.2026): первый показ вернувшейся из карантина пиявки идёт форматом
      reveal (pickTask), и только здесь, экран поднимает корень и разводку
      по confusables вместо десятого прохода тем же путём, которым слово уже
@@ -1393,7 +1463,15 @@ export default function Review() {
             <button className="why-btn" onClick={() => void toggleWhy()}>
               {why?.open ? 'Свернуть разбор' : 'Почему?'}
             </button>
-            {suggested ? (
+            {isLogic ? (
+              /* Логика: вердикт и разбор уже на экране, оценивать нечего - один выход «Дальше».
+                 Ряд Again/Hard/Good/Easy и «Оценить самому» здесь не рисуются намеренно: они
+                 обещали бы интервал, которого у вопроса к тексту нет. */
+              <>
+                <button className="btn btn-green btn-lg" onClick={() => void gradeLogic()}>Дальше</button>
+                <div className="hint-keys">{logicFate}<span className="kb-only"> · Enter - дальше</span></div>
+              </>
+            ) : suggested ? (
               /* Объективный результат — оценка предложена автоматически, и обычный проход
                  остаётся в один тап: «Дальше». Но предложение — не факт: угаданный из четырёх
                  вариантов ответ приложение видит как «верно», а ученик знает, что слова не

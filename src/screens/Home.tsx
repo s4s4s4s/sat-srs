@@ -12,15 +12,17 @@ import { dayKey } from '../lib/daytime'
 import { Flame, Gear, Chart, Plus, Check, Bolt, Book } from '../components/Icon'
 import { readingLevel } from '../lib/reading'
 import { practiceStats, practiceDue, practiceSummaryLabel, type PracticeStats } from '../lib/practice'
+import { logicCounts } from '../lib/logic'
 import FlameBuddy from '../components/FlameBuddy'
 import FjordScene from '../components/FjordScene'
 import { множ } from '../lib/plural'
-import type { CardView, ReadingView } from '../lib/types'
+import type { CardView, JournalLine, ReadingView } from '../lib/types'
 
 /** «1 упражнение · 3 упражнения · 12 упражнений» — подпись читается вслух, а не как счётчик. */
 const упражнений = (n: number) => множ(n, 'упражнение', 'упражнения', 'упражнений')
 
-function SectionBlock({ title, icon, badge, glyph, cards, budget, extraBudget, onStart, onReview, onExtra, levelLine, onPath }: {
+function SectionBlock({ section, title, icon, badge, glyph, cards, budget, extraBudget, journal, onStart, onReview, onExtra, levelLine, onPath }: {
+  section: Section
   title: string
   icon: React.ReactNode
   badge: string
@@ -29,19 +31,58 @@ function SectionBlock({ title, icon, badge, glyph, cards, budget, extraBudget, o
   budget: number
   /** Остаток новых до МАКСИМУМА дня — запас сверх оптимума (norms.ts::NEW_PER_DAY). */
   extraBudget: number
+  /** Журнал обязателен: раздел «Логика» считается по нему, а не по FSRS (см. lib/logic.ts).
+   *  Без него `homeCounts` и `logicCounts` объявят все вопросы раздела свежими. */
+  journal: JournalLine[]
   onStart: () => void
   onReview: () => void
   onExtra: () => void
   levelLine?: string
   onPath?: () => void
 }) {
-  const c = homeCounts(cards, budget)
+  const c = homeCounts(cards, budget, new Date(), journal)
   const reviewDue = c.learnDue + c.revDue
   const due = reviewDue + c.newAvail
   /* Стена «Всё повторено» при выбранном оптимуме — простой, а не отдых: до экзамена
      недели. Пока до максимума дня есть запас и есть что вводить, раздел предлагает
      урок сверх нормы. Честная стена остаётся ровно одна — взятый максимум. */
-  const extraAvail = due === 0 ? homeCounts(cards, extraBudget).newAvail : 0
+  const extraAvail = due === 0 ? homeCounts(cards, extraBudget, new Date(), journal).newAvail : 0
+  /* Логика: у раздела нет ни «учу», ни «повторить», ни «новых» - вопрос показывается один
+     раз, и состояние у него своё (`logicCounts`: осталось / разобрано / ошибок; `avail` -
+     сколько урок выдаст прямо сейчас). Числа берутся из того же среза, что и очередь урока
+     (`pickLogic`), иначе плашка обещала бы не то, что откроется по кнопке. */
+  const lg = section === 'logic' ? logicCounts(cards, journal, budget) : null
+  const lgExtra = lg && lg.avail === 0 ? logicCounts(cards, journal, extraBudget).avail : 0
+  if (lg) return (
+    <div className="card section-card">
+      <span className="sec-glyph" style={{ ['--rune-shape' as string]: glyph } as React.CSSProperties} />
+      <div className="hero-head">
+        <span className="hero-title section-title">
+          <span className={`sec-badge ${badge}`}>{icon}</span> {title}
+        </span>
+        <span className="hero-sub">{c.total ? `${c.total} карт.` : 'пока пусто'}</span>
+      </div>
+      <div className="stats3">
+        <div className={`stat stat-new${lg.left ? '' : ' is-zero'}`}><div className="n">{lg.left}</div><div className="t">осталось</div></div>
+        <div className={`stat stat-due${lg.solved ? '' : ' is-zero'}`}><div className="n">{lg.solved}</div><div className="t">разобрано</div></div>
+        <div className={`stat stat-learn${lg.wrong ? '' : ' is-zero'}`}><div className="n">{lg.wrong}</div><div className="t">ошибок</div></div>
+      </div>
+      {c.total > 0 && (
+        <div className="mastery" title="доля разобранных вопросов">
+          <div style={{ width: `${Math.round((lg.solved / c.total) * 100)}%` }} />
+        </div>
+      )}
+      {lgExtra > 0 ? (
+        <button className="btn btn-green section-btn" onClick={onExtra}>Ещё · {lgExtra}</button>
+      ) : (
+        <button className="btn btn-green section-btn" onClick={onStart} disabled={lg.avail === 0}>
+          {lg.avail === 0
+            ? <><Check size={18} /> {c.total === 0 ? 'Нет карточек' : lg.left === 0 ? 'Всё разобрано' : 'На сегодня всё'}</>
+            : `Разбирать · ${lg.avail}`}
+        </button>
+      )}
+    </div>
+  )
   return (
     <div className="card section-card">
       <span className="sec-glyph" style={{ ['--rune-shape' as string]: glyph } as React.CSSProperties} />
@@ -255,7 +296,7 @@ export default function Home() {
      открытии приложения, а не на занятии. Добитая очередь по-прежнему
      засчитывает день, но только через строку session с reviews > 0
      (см. `journal.emptyDays`). */
-  const cAll = homeCounts(all, budgetRw + budgetLogic + budgetGrammar + budgetMath)
+  const cAll = homeCounts(all, budgetRw + budgetLogic + budgetGrammar + budgetMath, new Date(), app.journal)
 
   const syncText =
     app.syncStatus === 'syncing' ? 'Синхронизация…'
@@ -450,6 +491,7 @@ export default function Home() {
       {order.map(s => (
         <SectionBlock
           key={s}
+          section={s}
           title={sectionMeta[s].title}
           icon={sectionMeta[s].icon}
           badge={sectionMeta[s].badge}
@@ -457,6 +499,7 @@ export default function Home() {
           cards={sectionMeta[s].cards}
           budget={sectionMeta[s].budget}
           extraBudget={sectionMeta[s].extraBudget}
+          journal={app.journal}
           onStart={go(s)}
           onReview={go(s, true)}
           onExtra={goExtra(s)}
