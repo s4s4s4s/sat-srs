@@ -5,12 +5,13 @@ import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm, readingView, slugFromPath } from './yamlfm'
 import { questionView, PACE_SEC } from './practice'
-import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, newBudgetTotal, dueCap, type Section, type TypeVerdict } from './scheduler'
+import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, isLogicCard, newBudgetTotal, dueCap, type Section, type TypeVerdict } from './scheduler'
+import { logicReviewLine } from './logic'
 import { buildCorpusIndex, corpusHits as corpusHitsOf } from './corpus'
 import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay, startOfStudyDay, calendarKey, addDaysKey } from './daytime'
 import {
-  newId, matureRetention, sessionAccuracy, cardTimeCap, READ_CAP_MINUTES,
+  newId, matureRetention, sessionAccuracy, journalElapsedMs, READ_CAP_MINUTES,
   readingSrc, isMarked, markCount, readingPassed, deckHasWord, normWord, MARK_SENTENCE_MAX,
   RUN_MIN_REVIEWS
 } from './journal'
@@ -411,20 +412,9 @@ function maxKey(a: string, b: string): string {
   return a > b ? a : b
 }
 
-/**
- * Замер времени, который уедет в журнал.
- *
- * Потолок cardTimeCap (journal.ts, «AFK-защита») применялся к зачётным минутам и к таймеру
- * на экране, но не к полю `elapsed_ms` самой строки — и в журнал попадали замеры вида «ответ
- * за 25 минут» (ученик отошёл, карточка осталась открытой): в живом журнале таких строк 28 из
- * 537. Это не медленный ответ, а отсутствие замера, и медиану времени ответа — от которой
- * считается порог «медленно» — они тянут на себя. Чиним на записи, а не на каждом чтении:
- * журнал уходит тьютору и в метрики как есть, и починку на чтении однажды забудут сделать.
- */
-export function journalElapsedMs(elapsedMs: number, kind?: string): number {
-  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return 0
-  return Math.min(elapsedMs, cardTimeCap(kind))
-}
+/** Потолок замера времени в строке журнала живёт в journal.ts рядом с самим полем
+ *  (`journalElapsedMs`); здесь остаётся реэкспорт для прежних импортов из store. */
+export { journalElapsedMs } from './journal'
 
 /* Во сколько раз стабильность должна превысить порог пиявки, чтобы флаг сняли.
    Снимать по простому !isLeech нельзя: у порога стабильность гуляет, флаг дёргался бы
@@ -452,6 +442,11 @@ export function leechTransition(leech: unknown, next: FsrsCard): 'set' | 'clear'
 export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, verdict?: TypeVerdict, gaveUp?: boolean, answerMs?: number): Promise<{ card: FsrsCard; lineId: string }> {
   const rec = state.cards.find(c => c.path === item.view.path)
   if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${item.view.path}`)
+  /* Замок с обеих сторон: `logLogicAnswer` отвергает не-логику, здесь отвергается логика.
+     Иначе любой новый путь к оценке (экран, скрипт, регрессия порядка проверок в Review.tsx)
+     оживил бы FSRS-блок вопроса и подложил в журнал строку с `correct`, которую `logicStatus`
+     (lib/logic.ts) примет за попытку - состояние вопроса стало бы непредсказуемым. */
+  if (isLogicCard(item.view)) throw new Error(`Карточка логики не оценивается по FSRS: ${item.view.path}`)
   const fsrsKey = item.skill === 'prep' ? 'fsrs_prep' : 'fsrs'
   const f = makeScheduler(effectiveRetention(state.settings.requestRetention))
   const now = new Date()
@@ -564,6 +559,31 @@ export async function markIntroduced(item: StudyItem): Promise<void> {
     v: 1, type: 'review', ts: isoLocal(now), ms: now.getMilliseconds(), day: dayKey(now),
     slug: item.view.slug, skill: item.skill, format: 'intro', synced: 0
   }
+  await pushJournal(line)
+}
+
+/**
+ * Ответ на вопрос раздела «Логика» - единственная запись, которую делает этот раздел.
+ *
+ * FSRS не трогается вовсе (см. шапку logic.ts): у вопроса к тексту нет интервала, состояние
+ * живёт в журнале и читается `logicStatus`. Поэтому здесь нет ни `putCardAndJournal`, ни
+ * `dirty`, ни `first_seen` - только строка журнала, которую строит чистая `logicReviewLine`.
+ *
+ * Проверка `isLogicCard` стоит именно здесь, а не только на экране: запись раздела обязана
+ * отказать чужой карточке, иначе первый же ошибочный вызов из UI тихо занёс бы словарной
+ * карточке review-строку без FSRS-полей, и её расписание разошлось бы с журналом.
+ */
+export async function logLogicAnswer(item: StudyItem, correct: boolean, elapsedMs: number, answerMs?: number): Promise<void> {
+  const rec = state.cards.find(c => c.path === item.view.path)
+  if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${item.view.path}`)
+  if (!isLogicCard(item.view)) throw new Error(`Не карточка логики: ${item.view.path}`)
+  await pushJournal({ ...logicReviewLine(item.view, correct, elapsedMs, answerMs), synced: 0 })
+}
+
+/** Дописать строку в журнал: хранилище, состояние, перерисовка - одним местом.
+ *  Тройку `putJournal` + `state.journal` + `emit()` повторяли все писатели журнала, и
+ *  расходились они молча (забытый `emit` = записанная строка, которой не видит экран). */
+async function pushJournal(line: JournalRec): Promise<void> {
   await db.putJournal([line])
   state.journal = [...state.journal, line]
   emit()
@@ -610,9 +630,7 @@ export async function logReading(minutes: number, what = '', src = ''): Promise<
     // кнопкой «+» на главной. Соглашение то же, что у отметок слов (`toggleWordMark`).
     ...(src ? { src } : {})
   }
-  await db.putJournal([line])
-  state.journal = [...state.journal, line]
-  emit()
+  await pushJournal(line)
   updateBadge()
   void startSync()
 }
@@ -672,9 +690,7 @@ export async function toggleWordMark(src: string, w: { word: string; lemma?: str
     in_deck: deckHasWord(deckWords(), lemma, word),
     on, synced: 0
   }
-  await db.putJournal([line])
-  state.journal = [...state.journal, line]
-  emit()
+  await pushJournal(line)
   return on
 }
 
@@ -703,9 +719,7 @@ export async function logTextRead(text: ReadingView, seconds = 0): Promise<void>
        добавлено, а не подменено (D3): старые строки без него читаются как прежде. */
     ...(seconds > 0 ? { read_s: Math.round(seconds) } : {})
   }
-  await db.putJournal([line])
-  state.journal = [...state.journal, line]
-  emit()
+  await pushJournal(line)
   void startSync()
 }
 
@@ -729,9 +743,7 @@ export async function logPractice(view: QuestionView, chose: string, seconds = 0
     // мягкий таймер (PACE_SEC, D5): флаг темпа, а не запрет - ответ пишется как есть
     ...(seconds > PACE_SEC ? { slow: true } : {})
   }
-  await db.putJournal([line])
-  state.journal = [...state.journal, line]
-  emit()
+  await pushJournal(line)
   void startSync()
 }
 
@@ -759,7 +771,8 @@ function updateBadge() {
   try {
     const все = state.cards.map(cardView)
     const budget = newBudgetTotal(все, s => newPerDay(s, 'norm'), state.journal, dayKey())
-    const c = homeCounts(все, budget)
+    // журнал обязателен: без него раздел логики считается по замороженному fsrs.state (logic.ts)
+    const c = homeCounts(все, budget, new Date(), state.journal)
     void nav.setAppBadge(c.learnDue + c.revDue).catch(() => {})
   } catch { /* ignore */ }
 }

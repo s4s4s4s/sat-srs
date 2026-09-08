@@ -143,7 +143,9 @@ export default function Stats() {
   const today = dayKey()
   const all = views()
   const budget = newBudgetTotal(all, NEW_PER_DAY.norm, app.journal, today)
-  const c = homeCounts(all, budget)
+  // журнал: раздел «Логика» считается по нему (lib/logic.ts), иначе сводка объявит
+  // все разобранные вопросы новыми
+  const c = homeCounts(all, budget, new Date(), app.journal)
   const pause = app.settings.pauseFrom && app.settings.pauseTo ? { from: app.settings.pauseFrom, to: app.settings.pauseTo } : null
   const st = streak(app.journal, undefined, pause)
   const ret = trueRetention30(app.journal)
@@ -177,7 +179,7 @@ export default function Stats() {
   const rd = retentionByDomain(app.journal)
   const rs = retentionBySection(all, app.journal)
   const orph = orphanedLines(all, app.journal)
-  const ms = maturityBySection(all)
+  const ms = maturityBySection(all, app.journal)
   const sp = speedStats(app.journal)
   const ts = typoSplit(app.journal)
   const gu = gaveUpShare(app.journal)   // за всю историю; на графике трендов — дневной срез

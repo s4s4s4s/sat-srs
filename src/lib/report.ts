@@ -209,7 +209,9 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   out.push((orph.n
     ? `- Осиротевшие строки журнала (slug карточки пропал из колоды - переработка/переименование): **${orph.n} из ${orph.total} (${Math.round(orph.share * 100)}%)** · ${orph.slugs.map(s => `${s.slug} ×${s.n}`).join(', ')}`
     : `- Осиротевшие строки журнала: нет - все ${orph.total} строк со slug привязаны к карточкам колоды`) + reworkedSuffix)
-  const ms = maturityBySection(active)
+  // журнал: у раздела «Логика» зрелость меряется им, а не fsrs (lib/logic.ts) - без него
+  // тьютор читал бы честные нули там, где вопросы разобраны
+  const ms = maturityBySection(active, lines)
   const msParts = SECTIONS.map(s => `${SECTION_LABELS[s]} review ${ms[s].reviewCount}/${ms[s].total} · зрелых ${ms[s].matureCount}/${ms[s].total}`)
   out.push(`- В review / зрелых по разделам: ${msParts.join(' · ')}`)
   out.push('')

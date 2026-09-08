@@ -480,6 +480,88 @@ function reviewIntroBudgetChecks(): void {
   group('L1/L2: списание бюджета окон только внутри commitIntroBudget после записи, cued растёт по verdict')
 }
 
+/**
+ * Раздел «Логика» на экранах (09.09.2026). Ядро одноразовой модели проверяет набор `logic`,
+ * здесь - её подключение к UI, тем же чтением исходника текстом, что и проверки выше.
+ *
+ * Стеречь надо ровно две вещи, и обе ломаются молча.
+ * 1. Ни один путь Review.tsx не ведёт вопрос логики в `rateItem`: FSRS-блок такой карточки
+ *    заморожен навсегда, и одна оценка вернула бы вопрос «по графику», которого нет.
+ * 2. Журнал доходит до каждого счётчика раздела (`buildQueue`, `homeCounts`, `logicCounts`,
+ *    `maturityBySection`): без него состояние логики невидимо, все вопросы выглядят свежими,
+ *    и разобранное сегодня возвращается и в очередь, и в плашку главной.
+ */
+function logicScreenChecks(): void {
+  const reviewSrc = screenSource('Review.tsx')
+
+  // ветка раздела: своя запись вместо оценки, и она стоит ДО общей ветки rateItem
+  assert(reviewSrc.includes('logLogicAnswer('), 'Review.tsx обязан писать ответ логики через logLogicAnswer (store.ts), а не через rateItem')
+  const guard = reviewSrc.indexOf('if (isLogicCard(task.item.view))')
+  const rateItemPos = reviewSrc.indexOf('await rateItem(')
+  assert(guard >= 0, 'Review.tsx обязан перехватывать карточку логики проверкой isLogicCard в grade()')
+  assert(rateItemPos >= 0 && guard < rateItemPos, 'перехват isLogicCard обязан стоять до общей ветки rateItem, иначе вопрос логики уйдёт в FSRS')
+
+  // тело gradeLogic не зовёт ни rateItem, ни markIntroduced, ни deferItemToNextDay
+  const start = reviewSrc.indexOf('async function gradeLogic()')
+  assert(start >= 0, 'Review.tsx обязан содержать gradeLogic - единственную запись раздела «Логика»')
+  const body = reviewSrc.slice(start, reviewSrc.indexOf('async function grade(', start))
+  for (const запрещено of ['rateItem(', 'markIntroduced(', 'deferItemToNextDay(']) {
+    assert(!body.includes(запрещено), `gradeLogic не имеет права звать ${запрещено}: FSRS раздела «Логика» не двигается вовсе`)
+  }
+  assert(body.includes('logLogicAnswer('), 'gradeLogic обязан писать строку журнала через logLogicAnswer')
+  // B7: закрывающий показ разделу не положен - lastGrade из gradeLogic не выставляется
+  assert(!body.includes('lastGrade.current ='), 'gradeLogic не выставляет lastGrade: закрывающий показ B7 к логике не применяется')
+
+  // store.ts строит строку чистой logicReviewLine, а не собирает поля заново
+  const storeSrc = readFileSync(path.join(process.cwd(), 'src', 'lib', 'store.ts'), 'utf8').replace(/\r\n/g, '\n')
+  const storeStart = storeSrc.indexOf('export async function logLogicAnswer(')
+  assert(storeStart >= 0, 'store.ts обязан экспортировать logLogicAnswer')
+  const rateStart = storeSrc.indexOf('export async function rateItem(')
+  const rateHead = storeSrc.slice(rateStart, storeSrc.indexOf('makeScheduler(', rateStart))
+  assert(rateStart >= 0 && /if \(isLogicCard\(item\.view\)\) throw/.test(rateHead),
+    'rateItem обязан отвергать карточку логики до вызова планировщика: замок должен стоять в слое данных, а не только в Review.tsx')
+  const storeBody = storeSrc.slice(storeStart, storeStart + 700)
+  assert(storeBody.includes('logicReviewLine('), 'logLogicAnswer обязан строить строку журнала через logicReviewLine (lib/logic.ts)')
+  assert(!storeBody.includes('putCardAndJournal'), 'logLogicAnswer не имеет права писать карточку: fsrs-блока у логики больше нет')
+
+  // одна кнопка выхода вместо ряда оценок, и та же кнопка на Enter/пробел
+  assert(reviewSrc.includes('const isLogic = isLogicCard(card)'), 'Review.tsx обязан вычислять isLogic для разметки листа')
+  assert(reviewSrc.includes('{isLogic ?'), 'лист ответа обязан ветвиться по isLogic - у логики нет ряда Again/Hard/Good/Easy')
+  assert(/onClick=\{\(\) => void gradeLogic\(\)\}>Дальше</.test(reviewSrc), 'ветка логики обязана давать одну кнопку «Дальше», зовущую gradeLogic')
+  assert(/revealed && isLogicCard\(task\.item\.view\)\) void gradeLogic\(\)/.test(reviewSrc),
+    'Enter/пробел на разобранном вопросе логики обязаны работать как «Дальше»')
+
+  // очередь урока строится по журналу (седьмой аргумент buildQueue)
+  assert(/buildQueue\([^\n]*corpusHitsBySlug, currentJournal\(\)\)/.test(reviewSrc),
+    'Review.tsx обязан звать buildQueue с журналом (седьмой аргумент) - иначе решённые вопросы логики вернутся в очередь')
+
+  // журнал доходит до всех счётчиков главной, итогов и статистики
+  const homeSrc = screenSource('Home.tsx')
+  const summarySrc = screenSource('Summary.tsx')
+  const statsSrc = screenSource('Stats.tsx')
+  const mainSrc = readFileSync(path.join(process.cwd(), 'src', 'main.tsx'), 'utf8').replace(/\r\n/g, '\n')
+  for (const [name, src] of [['Home.tsx', homeSrc], ['Summary.tsx', summarySrc], ['Stats.tsx', statsSrc], ['main.tsx', mainSrc]] as const) {
+    // вызов без единой вложенной скобки - это вызов из двух простых аргументов, то есть без журнала
+    const bare = src.match(/homeCounts\([^()]*\)/g) ?? []
+    assert(bare.length === 0, `${name}: homeCounts обязан зваться с журналом (четвёртый аргумент), найдено «${bare[0]}»`)
+    // journal / app.journal / currentJournal() - три живых способа передать один и тот же журнал
+    assert(/homeCounts\([^\n]*[Jj]ournal(\(\))?\)/.test(src), `${name}: в вызове homeCounts обязан стоять журнал`)
+  }
+  assert(/maturityBySection\(all, app\.journal\)/.test(statsSrc),
+    'Stats.tsx: maturityBySection обязан получать журнал - зрелость логики меряется им, а не fsrs')
+
+  // плашка раздела: три своих числа и своя кнопка
+  assert(/logicCounts\(cards, journal/.test(homeSrc), 'Home.tsx обязан считать плашку логики через logicCounts (lib/logic.ts)')
+  assert(homeSrc.includes('journal={app.journal}') && homeSrc.includes('section={s}'),
+    'SectionBlock обязан получать раздел и журнал: без них плашка логики считалась бы по FSRS')
+  for (const подпись of ['осталось', 'разобрано', 'ошибок', 'Разбирать']) {
+    assert(homeSrc.includes(подпись), `Home.tsx: плашка логики обязана показывать «${подпись}»`)
+  }
+  assert(/disabled=\{lg\.avail === 0\}/.test(homeSrc), 'кнопка «Разбирать» обязана запираться при avail === 0')
+
+  group('Логика на экранах: Review не зовёт rateItem, очередь и счётчики считаются по журналу, плашка «Разбирать»')
+}
+
 function main(): void {
   console.log('SRS wordstatus - единый источник правды о состоянии слова')
   agreementWithHomeChecks()
@@ -501,6 +583,7 @@ function main(): void {
   reportKnowledgePredicateChecks()
   sessionGoalScreenChecks()
   reviewIntroBudgetChecks()
+  logicScreenChecks()
   console.log(`\nВсе проверки статуса слова пройдены (${passed} групп).`)
 }
 

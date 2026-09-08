@@ -32,9 +32,11 @@ export const RW_WEIGHTS: Record<Section, number> = {
 
 /** Есть ли в разделе что делать прямо сейчас - новое слово или просроченный повтор.
  *  Бюджет намеренно не ограничивает счёт (Infinity): здесь важно, есть ли работа
- *  вообще, а не сколько её разрешает сегодняшняя норма ввода. */
-function hasWork(cards: CardView[]): boolean {
-  const c = homeCounts(cards, Infinity)
+ *  вообще, а не сколько её разрешает сегодняшняя норма ввода.
+ *  Журнал передаётся обязательно: у раздела «Логика» работа считается по нему, а не по
+ *  fsrs-срокам (logic.ts), и без журнала долг раздела состоял бы из уже разобранных вопросов. */
+function hasWork(cards: CardView[], journal: JournalLine[]): boolean {
+  const c = homeCounts(cards, Infinity, new Date(), journal)
   return c.learnDue > 0 || c.revDue > 0 || c.newAvail > 0
 }
 
@@ -73,7 +75,7 @@ export function sectionDebt(
   for (const s of SECTIONS) {
     const actualShare = gradedTotal > 0 ? gradedBySection[s] / gradedTotal : 0
     const raw = Math.max(0, RW_WEIGHTS[s] - actualShare)
-    debt[s] = hasWork(bySection[s]) ? raw : 0
+    debt[s] = hasWork(bySection[s], journal) ? raw : 0
   }
   return debt
 }

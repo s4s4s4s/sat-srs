@@ -33,6 +33,7 @@ import { endOfStudyDay, dayKey, addDaysKey } from '../src/lib/daytime'
 import { sessionAccuracy, matureRetention, forcedTodaySlugs, CARD_TIME_CAP_MS, liveMarkedLemmas } from '../src/lib/journal'
 import { isLeech, LEECH_REPS, LEECH_STABILITY_DAYS, SECTION_LABELS, speedStats } from '../src/lib/metrics'
 import { newPerDay } from '../src/lib/norms'
+import { logicReviewLine, logicStatus, pickLogic } from '../src/lib/logic'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
 const RETENTION = 0.9
@@ -1123,8 +1124,14 @@ function dontKnowChecks(): void {
      и потому доказана отдельно от неё (снятие правила роняло поштучную группу раньше,
      чем очередь успевала дойти до второго показа). */
   {
-    const упражнения = ['log-cs-cel-teksta', 'log-cs-dva-teksta', 'log-ii-most-cifry', 'log-ii-minimum']
-      .map(s => baseView(s, 1, 'error'))
+    /* Разборы чтения (kind error, раздел «Логика») в этом прогоне больше не участвуют: с
+       09.09.2026 они изъяты из FSRS-потока целиком и живут по журналу (logic.ts), где второй
+       показ того же вопроса невозможен по построению - это проверяет блок сразу за этим и
+       набор `logic`. Здесь остаются упражнения, у которых FSRS-график есть: грамматика и
+       математика, - именно их держит holdExerciseToNextDay, и именно на них правило могло бы
+       снова разъехаться с очередью. */
+    const упражнения = ['comma-rule', 'semicolon-rule'].map(s => baseView(s, 1, 'grammar'))
+      .concat(['quad-setup', 'slope-basics'].map(s => baseView(s, 1, 'math')))
     const словарь = ['candid', 'lucid', 'opaque', 'terse'].map(w => reviewCard(w))
     const { lessons } = runDay([...упражнения, ...словарь], { budget: 4, introLimit: 3, lessons: 3 })
 
@@ -1141,6 +1148,34 @@ function dontKnowChecks(): void {
       `${повторы.map(v => `${v.slug}×${счёт.get(v.path)}`).join(', ')}`)
   }
   console.log('  ✓ за три урока одного дня ни одно упражнение не показано дважды')
+  passed++
+
+  /* То же правило для раздела «Логика», где оно теперь держится не сроком FSRS, а журналом.
+     Живые числа жалобы 22.08.2026 были именно отсюда: log-cs-cel-teksta-ne-tema - три показа
+     за восемь минут, log-ii-most-trebuet-cifry - семь показов за семнадцать часов. */
+  {
+    const now = new Date(BASE)
+    const вопросы = ['log-cs-cel-teksta', 'log-ii-most-cifry'].map(s => ({ ...baseView(s, 1, 'error'), domain: 'II' }))
+    assert(вопросы.every(v => sectionOf(v) === 'logic'), 'предпосылка: это карточки раздела «Логика»')
+
+    const свежая = buildQueue(вопросы, 2, now, undefined, new Set(), undefined, [])
+    assert(свежая.length === 2 && свежая.every(i => i.skill === 'recall'),
+      `пустой журнал: оба вопроса свежие и оба в очереди, получено ${свежая.length}`)
+
+    // ответ пишется строкой журнала (logicReviewLine), FSRS-блок карточки не двигается вовсе
+    const журнал: JournalLine[] = [logicReviewLine(вопросы[0], false, SCREEN_MS, SCREEN_MS, now)]
+    const после = buildQueue(вопросы, 2, now, undefined, new Set(), undefined, журнал)
+    assert(!после.some(i => i.view.slug === вопросы[0].slug),
+      'репро: отвеченный вопрос логики в тот же учебный день не возвращается ни одним путём')
+    assert(после.some(i => i.view.slug === вопросы[1].slug), 'нетронутый вопрос из очереди не пропадает')
+    assert(logicStatus(вопросы[0].slug, журнал) === 'retry', 'неверный ответ переводит вопрос в возврат, а не закрывает его')
+
+    const верно: JournalLine[] = [logicReviewLine(вопросы[1], true, SCREEN_MS, SCREEN_MS, now)]
+    assert(logicStatus(вопросы[1].slug, верно) === 'solved', 'верный ответ закрывает вопрос')
+    assert(pickLogic(вопросы, верно, 2, now).every(v => v.slug !== вопросы[1].slug),
+      'решённый вопрос не возвращается никогда, ни сегодня, ни через месяц')
+  }
+  console.log('  ✓ вопрос логики не показывается дважды за день: очередь раздела считается по журналу, не по FSRS')
   passed++
 
   /* То же правило поштучно: срок, добор и возврат в очередь.
@@ -1489,13 +1524,20 @@ function ptPriorityChecks(): void {
   const ptWords = ['paucity', 'surmise', 'buttress'].map(w => ({ ...newCard(w, 6), source: 'pt4' }))
 
   assert(kindRank(errorCard) < kindRank(grammarCard), 'kindRank: error по-прежнему раньше grammar')
+  assert(sectionOf(errorCard) === 'logic', 'предпосылка: карточка kind error - это раздел «Логика»')
   assert(kindRank(grammarCard) < kindRank(ptWords[0]), 'kindRank: pt-слово идёт ПОСЛЕ grammar')
   assert(kindRank(ptWords[0]) < kindRank(mathCard), 'kindRank: pt-слово идёт ДО math')
   assert(kindRank(ptWords[0]) < kindRank(routineWord), 'kindRank: pt-слово опережает рутинный словарь независимо от уровня')
 
   const deck = [errorCard, grammarCard, mathCard, routineWord, ...ptWords]
   const order = freshItems(expandItems(deck)).map(i => i.view.slug)
-  assert(order.indexOf('rule-dash-vs-colon') < order.indexOf('comma-rule'), 'freshItems: error раньше grammar')
+  /* Раздел «Логика» в FSRS-очередь не входит вовсе (09.09.2026): его карточки не разворачивает
+     `expandItems`, и порядок ввода им задаёт `pickLogic` (logic.ts), а не `freshItems`.
+     Проверять здесь «error раньше grammar» больше нечего - зато обязано держаться отсутствие:
+     сравнение по indexOf молча проходило бы на -1, если карточка из очереди просто исчезла. */
+  assert(!order.includes('rule-dash-vs-colon'),
+    'freshItems: карточка логики в общий поток новых не попадает - её ведёт pickLogic')
+  assert(order[0] === 'comma-rule', `freshItems: голова очереди новых - грамматика, получено ${order[0]}`)
   for (const w of ['paucity', 'surmise', 'buttress']) {
     assert(order.indexOf('comma-rule') < order.indexOf(w), `freshItems: ${w} (pt4) обязан идти после grammar`)
     assert(order.indexOf(w) < order.indexOf('quad-setup'), `freshItems: ${w} (pt4) обязан идти до math`)

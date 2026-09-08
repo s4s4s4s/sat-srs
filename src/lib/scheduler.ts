@@ -3,6 +3,13 @@ import type { CardView, Format, StudyItem, JournalLine } from './types'
 import { endOfStudyDay, dayKey, addDaysKey, calendarKey } from './daytime'
 import { splitSentences, segmentText, type Segment } from './reading'
 import { TYPO_MIN_LEN, TYPO_MAX_EDITS, newIntroducedOn, cardTimeCap, normWord } from './journal'
+/* Раздел «Логика» живёт по своей, не-FSRS механике (см. logic.ts). Импорт двусторонний:
+   logic.ts спрашивает у планировщика раздел карточки (`isLogicCard`) и стоп ввода
+   (`newIntroAllowed`), планировщик у logic.ts - очередь и счётчики раздела. Обе стороны
+   зовут только функции и только во время вызова (ни одной ссылки на верхнем уровне модуля),
+   поэтому цикл безопасен и при бандлинге, и в браузере. Альтернатива - второе определение
+   того, что такое карточка логики, а это ровно та ошибка, от которой бережёт `sectionOf`. */
+import { buildLogicQueue, logicFreshCount, logicFreshShownOn, logicSliceCounts } from './logic'
 
 export function makeScheduler(requestRetention: number): FSRS {
   // fuzz разводит одновременно выученные карточки по разным дням — меньше комков и MC-соседей
@@ -221,6 +228,13 @@ export function sectionOf(v: CardView): Section {
 
 export const SECTIONS: readonly Section[] = ['rw', 'logic', 'grammar', 'math']
 
+/** Карточка раздела «Логика» - один признак на всё приложение, вместо повторения условия
+ *  `kind === 'error' || домен II/CS/EOI` по местам: лестница `sectionOf` решает раньше, что
+ *  карточка не математика и не грамматика, и переписанное по полям условие с ней разошлось бы. */
+export function isLogicCard(v: CardView): boolean {
+  return sectionOf(v) === 'logic'
+}
+
 /**
  * Дневной остаток новых карточек ДЛЯ РАЗДЕЛА.
  *
@@ -238,8 +252,16 @@ export const SECTIONS: readonly Section[] = ['rw', 'logic', 'grammar', 'math']
  */
 export function newBudgetFor(cards: CardView[], perDay: number, journal: JournalLine[], day: string = dayKey()): number {
   if (cards.length === 0) return 0
-  const slugs = new Set(cards.map(c => c.slug))
-  return Math.max(0, perDay - newIntroducedOn(journal, day, slugs))
+  /* Логика тратит тот же дневной бюджет, но «введено сегодня» у неё читается иначе:
+     `newIntroducedOn` опознаёт ввод по `prev_state: 0` (состояние FSRS до оценки), а у
+     карточки логики FSRS не пишется вовсе и такого поля в строке нет. Признак ввода там -
+     первая попытка по вопросу (`logicFreshShownOn`, logic.ts). Набор бывает и смешанным
+     (весь Home считает бюджет разом), поэтому слаги разводятся по разделу, а не по вызову. */
+  const logicSlugs = new Set(cards.filter(isLogicCard).map(c => c.slug))
+  const restSlugs = new Set(cards.filter(c => !isLogicCard(c)).map(c => c.slug))
+  const введено = (restSlugs.size ? newIntroducedOn(journal, day, restSlugs) : 0)
+    + (logicSlugs.size ? logicFreshShownOn(journal, day, logicSlugs) : 0)
+  return Math.max(0, perDay - введено)
 }
 
 /**
@@ -262,7 +284,12 @@ export function newBudgetTotal(
 ): number {
   return SECTIONS.reduce((сумма, s) => {
     const раздел = all.filter(c => sectionOf(c) === s)
-    const новых = раздел.filter(c => !c.suspended && c.fsrs.state === State.New).length
+    /* У логики `fsrs.state` навсегда остаётся New (планировщик её не оценивает), поэтому
+       «сколько новых в разделе есть» там считается по журналу, а не по состоянию карточки:
+       иначе уже разобранные вопросы вечно обещали бы ввод, которого урок не даст. */
+    const новых = s === 'logic'
+      ? logicFreshCount(раздел, journal)
+      : раздел.filter(c => !c.suspended && c.fsrs.state === State.New).length
     const норма = typeof perDay === 'function' ? perDay(s) : perDay
     return сумма + Math.min(новых, newBudgetFor(раздел, норма, journal, day))
   }, 0)
@@ -581,7 +608,13 @@ export const MAX_LEECH_PER_LESSON = 5
 export function expandItems(cards: CardView[], now: Date = new Date()): StudyItem[] {
   const items: StudyItem[] = []
   for (const c of cards) {
-    if (c.suspended || inRework(c, now)) continue
+    /* Логика (kind error, домены II/CS/EOI) из FSRS-потока изъята целиком: у вопроса к тексту
+       нет интервального графика, его ведёт `logic.ts` по журналу. Изъятие стоит здесь, в
+       одной точке, а не в каждом потребителе: `freshItems`, `buildQueue`, `nextNewItems`,
+       `earlyFillers`, `warmupShows`, `loadForecast` и `homeCounts` считают по `expandItems`,
+       и любая забытая копия условия вернула бы вопрос в повторы. Очередь раздела приходит
+       обратно отдельным хвостом (`buildLogicQueue` в конце `buildQueue`). */
+    if (c.suspended || isLogicCard(c) || inRework(c, now)) continue
     items.push({ view: c, skill: 'recall', fsrs: c.fsrs })
     if (c.prep && c.fsrsPrep) {
       const started = c.fsrsPrep.state !== State.New
@@ -783,7 +816,8 @@ export function buildQueue(
   now: Date = new Date(),
   forced?: Set<string>,
   marked: ReadonlySet<string> = new Set(),
-  corpusHits?: (slug: string) => number
+  corpusHits?: (slug: string) => number,
+  journal: JournalLine[] = []
 ): StudyItem[] {
   const eod = endOfStudyDay(now)
   const items = expandItems(cards, now)
@@ -949,8 +983,17 @@ export function buildQueue(
     const firstNew = mixed.findIndex(i => i.fsrs.state === State.New)
     mixed.splice(firstNew < 0 ? mixed.length : firstNew, 0, ...drills)
   }
+  /* Логика идёт отдельным хвостом (09.09.2026). Внутрь лестницы её вставлять нечего: у
+     вопроса к тексту нет ни learning-ступеней, ни срока по FSRS, а перемешивать разборы со
+     словами запрещено правилом «предметы не смешивать» - урок раздела строится на срезе
+     колоды и хвост в нём и есть вся очередь. Свежие вопросы делят дневной бюджет с новыми
+     словами того же вызова (остаток после `newItems`), иначе смешанный набор ввёл бы норму
+     дважды. Журнал приходит последним аргументом и по умолчанию пуст: без него все вопросы
+     логики выглядят свежими - ровно то, что и означает пустой журнал. */
+  const logicTail = buildLogicQueue(cards, journal, Math.max(0, Math.max(0, newBudget) - newItems.length), now)
+
   // B2-bis: разгон стоит головой всей очереди, впереди даже learning - см. warmupShows.
-  return [...warmup, ...learning, ...mixed]
+  return [...warmup, ...learning, ...mixed, ...logicTail]
 }
 
 /**
@@ -2026,15 +2069,23 @@ export function loadForecast(cards: CardView[], days = 7, now: Date = new Date()
  * живёт в buildQueue: этот же счётчик вызывается и на всю колоду сразу
  * (Home.tsx, Stats.tsx), где потолок раздела ничего не значит.
  */
-export function homeCounts(cards: CardView[], newBudget: number, now: Date = new Date()) {
+export function homeCounts(cards: CardView[], newBudget: number, now: Date = new Date(), journal: JournalLine[] = []) {
   const eod = endOfStudyDay(now)
+  // единиц логики здесь нет (см. expandItems), её долю считает logicSliceCounts по журналу
   const items = expandItems(cards, now)
+  const лог = logicSliceCounts(cards, journal, now)
   const learnDue = items.filter(i => isLearning(i.fsrs.state) && i.fsrs.due.getTime() <= now.getTime() + LEARN_AHEAD_MS).length
+  /* Долг логики - созревшие возвраты (`retryDue`), а не просрочка FSRS: у вопроса нет
+     `due`. Складывается с обычным revDue, потому что потребитель у числа один - замок
+     «разделу есть что выдать» (moreAvail в Summary.tsx, hasWork в dayplan.ts) и плашка
+     «повторить» на главной. `learnDue` логика не даёт вовсе: learning-ступеней у неё нет. */
   const revDue = items.filter(i => i.fsrs.state === State.Review && i.fsrs.due.getTime() < eod.getTime()).length
+    + лог.retryDue
   // Новые считаются по разделу каждой карточки (A8): плашка «N новых» обязана обещать ровно
   // то, что выдаст buildQueue, и после стопа словаря не гасить ещё открытую грамматику.
   const newAvail = Math.min(
-    items.filter(i => i.fsrs.state === State.New && newIntroAllowed(now, sectionOf(i.view))).length,
+    items.filter(i => i.fsrs.state === State.New && newIntroAllowed(now, sectionOf(i.view))).length
+      + (newIntroAllowed(now, 'logic') ? лог.fresh : 0),
     Math.max(0, newBudget))
   /* «Завтра» — это срок внутри ЗАВТРАШНЕГО учебного дня: окно [конец сегодняшнего
      дня; +24 часа). Обе половины счёта — и повторы, и learning — считаются по
@@ -2051,12 +2102,17 @@ export function homeCounts(cards: CardView[], newBudget: number, now: Date = new
   const revTomorrow = items.filter(i => {
     const t = i.fsrs.due.getTime()
     return i.fsrs.state !== State.New && t >= eod.getTime() && t < завтра
-  }).length
+  }).length + лог.retryTomorrow
   const active = cards.filter(c => !c.suspended)
+  /* Разбивка по состояниям: у логики `fsrs.state` заморожен на New навсегда, поэтому её
+     карточки раскладываются по журналу - непоказанные в `new`, ждущие возврата в
+     `learning`, разобранные и закрытые в `review` (работа по ним кончена). Сумма трёх
+     чисел обязана сходиться с `total`, иначе сводка «Статистики» начнёт терять карточки. */
+  const activeRest = active.filter(c => !isLogicCard(c))
   const byState = {
-    new: active.filter(c => c.fsrs.state === State.New).length,
-    learning: active.filter(c => isLearning(c.fsrs.state)).length,
-    review: active.filter(c => c.fsrs.state === State.Review).length
+    new: activeRest.filter(c => c.fsrs.state === State.New).length + лог.fresh,
+    learning: activeRest.filter(c => isLearning(c.fsrs.state)).length + лог.retryDue + лог.retryLater,
+    review: activeRest.filter(c => c.fsrs.state === State.Review).length + лог.solved + лог.closed
   }
   return { learnDue, revDue, newAvail, revTomorrow, byState, total: active.length }
 }
