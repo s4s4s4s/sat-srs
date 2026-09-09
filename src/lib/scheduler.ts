@@ -168,13 +168,23 @@ export function phase(now: Date = new Date()): Phase {
 }
 
 /**
- * Последние 2 недели перед ближайшей попыткой - retention поднимается до 0.95.
+ * Целевая точность последних двух недель перед попыткой. До 09.09.2026 стояла 0.95
+ * над базой 0.9; с базой 0.8 (`DEFAULT_SETTINGS.requestRetention`) прыжок на 0.95
+ * сжимал бы интервалы в двадцать с лишним раз (76 дней → 3 после трёх Good) и
+ * обрушивал бы нагрузку ровно тогда, когда потолок `dueCap` и так возвращает всю
+ * колоду. 0.9 - уровень, на котором шла вся подготовка: нагрузка финала известна.
+ */
+export const FINAL_RETENTION = 0.9
+
+/**
+ * Последние 2 недели перед ближайшей попыткой - retention поднимается до
+ * `FINAL_RETENTION` (база выше него не опускается).
  * Считается от `nextAttempt`, а не от двух констант по отдельности: иначе окно
  * перед 07.11 включалось бы датой, а не тем, что попытка стала ближайшей.
  */
 export function effectiveRetention(base: number, now: Date = new Date()): number {
   const days = (nextAttempt(now).getTime() - now.getTime()) / 86400_000
-  return days >= 0 && days <= 14 ? Math.max(base, 0.95) : base
+  return days >= 0 && days <= 14 ? Math.max(base, FINAL_RETENTION) : base
 }
 
 export const GRADES: { rating: Grade; key: string; label: string }[] = [

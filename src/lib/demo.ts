@@ -4,7 +4,7 @@
  */
 import * as db from './db'
 import { dayKey } from './daytime'
-import { type CardRec, type JournalRec, type ReadingRec } from './types'
+import { DEFAULT_SETTINGS, type CardRec, type JournalRec, type ReadingRec } from './types'
 
 const day = (off: number) => new Date(Date.now() + off * 86400000)
 
@@ -222,7 +222,7 @@ export async function maybeDemo(): Promise<{ screen: string | null; section: 'rw
       pat: 'demo', coachToken: 'demo', owner: 's4s4s4s', repo: 'second-brain', branch: 'master',
       // норм ввода здесь нет: они больше не настройка, а константы norms.ts —
       // копия в демо разъезжалась с рабочей нормой ровно потому, что была копией
-      basePath: 'Учёба/Карточки', requestRetention: 0.9
+      basePath: 'Учёба/Карточки', requestRetention: DEFAULT_SETTINGS.requestRetention
     }))
   } else {
     localStorage.removeItem('sat-srs-settings')

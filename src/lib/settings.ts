@@ -64,7 +64,11 @@ const SETTINGS_MIGRATIONS: Record<number, (s: Settings) => Settings> = {
     void newPerDay
     void newPerLesson
     return без as Settings
-  }
+  },
+  /* → v9 (09.09.2026). Целевая точность 0.9 → 0.8 (решение Александра: при 0.9
+     урок крутит одни и те же слова). Поля в интерфейсе нет, сохранённый объект
+     держит 0.9 навсегда - ровно тот класс поля, ради которого версия и заведена. */
+  9: s => ({ ...s, requestRetention: DEFAULT_SETTINGS.requestRetention })
 }
 
 export function migrateSettings(saved: Partial<Settings>): Settings {

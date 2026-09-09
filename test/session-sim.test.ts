@@ -16,12 +16,13 @@
  */
 import { State, Rating, createEmptyCard, type Grade } from 'ts-fsrs'
 import type { CardView, StudyItem, JournalLine } from '../src/lib/types'
+import { DEFAULT_SETTINGS } from '../src/lib/types'
 import {
   buildQueue, makeScheduler, itemKey, NEW_GAP, shouldRequeue, requeuePosition,
   pickFormat, mcDistractors, suggestedGrade, slowThresholdMs, medianForKind, SLOW_FACTOR, hasMeaningHint, earlyFillers, MAX_EARLY_FILLERS, MIN_SHOW_GAP_MS, holdOnIntroDay, holdExerciseToNextDay, isExercise, LEARN_AHEAD_MS, LAST_LEARNING_STEP, sharesMeaning, typedTwin, checkTyped,
   MIN_SHOW_GAP_FLOOR_MS, INTRO_GAP_MS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, isSeenWord,
   pickTask, meaningDistractors, REVIEW_CYCLE, ROTATE_FROM_REPS, NEW_STOP_DATE, kindRank, expandItems, freshItems, markGlosses,
-  NEW_STOP_BY_SECTION, newIntroAllowed, nextAttempt, lastAttempt, dueCap, phase, effectiveRetention, PRIMARY_DATE, EXAM_DATE,
+  NEW_STOP_BY_SECTION, newIntroAllowed, nextAttempt, lastAttempt, dueCap, phase, effectiveRetention, FINAL_RETENTION, PRIMARY_DATE, EXAM_DATE,
   homeCounts, sectionOf, SECTIONS, newBudgetFor, newBudgetTotal, type Section,
   MAX_REVIEW_PER_LESSON, MAX_REVIEW_PER_DAY, LEECH_QUARANTINE_DAYS, leechReturned, MAX_LEECH_PER_LESSON,
   WARMUP_SHOWS, warmupShows, CLOSING_SHOWS, closingShow, type TypeVerdict
@@ -36,7 +37,8 @@ import { newPerDay } from '../src/lib/norms'
 import { logicReviewLine, logicStatus, pickLogic } from '../src/lib/logic'
 
 const BASE = new Date(2026, 6, 24, 10, 0, 0).getTime()
-const RETENTION = 0.9
+/** Целевая точность продукта, а не своя копия: расхождение с настройкой делало бы модель урока враньём */
+const RETENTION = DEFAULT_SETTINGS.requestRetention
 /** Секунд на экран: реальные показы 25.07 занимали 5–16 c, поэтому разрыв A2 действительно мешает */
 const SCREEN_MS = 10_000
 
@@ -1069,7 +1071,7 @@ function dontKnowChecks(): void {
      Good подряд, карточка всё ещё в Learning и приходит каждые 10 минут пять
      часов подряд — жалоба «одни и те же два примера крутятся и крутятся». */
   {
-    const f = makeScheduler(0.9)
+    const f = makeScheduler(RETENTION)
     const день = new Date('2026-08-20T21:00:00+04:00')
     const позже = new Date('2026-08-20T21:30:00+04:00')
 
@@ -1508,9 +1510,12 @@ function sectionStopChecks(): void {
   assert(phase(день(5, 10)) === 'taper', '05.10: ввод закрыт всем, до последней недели ноября далеко')
   assert(phase(день(2, 11)) === 'final', '02.11: последняя неделя перед 07.11')
   assert(phase(день(10, 11)) === 'between', 'после последней попытки впереди дат нет')
-  assert(effectiveRetention(0.9, день(20, 9)) === 0.95, '20.09: две недели до первой попытки - retention поднят')
-  assert(effectiveRetention(0.9, день(5, 10)) === 0.9, '05.10: до ближайшей попытки месяц - retention обычный')
-  assert(effectiveRetention(0.9, день(25, 10)) === 0.95, '25.10: две недели до 07.11 - retention поднят')
+  assert(RETENTION === 0.8, 'целевая точность продукта 0.8 (решение 09.09.2026: 0.9 крутит одни и те же слова)')
+  assert(FINAL_RETENTION === 0.9 && FINAL_RETENTION > RETENTION, 'финальные две недели строже базы, но не 0.95: с базой 0.8 это сжало бы интервалы в двадцать раз')
+  assert(effectiveRetention(RETENTION, день(20, 9)) === FINAL_RETENTION, '20.09: две недели до первой попытки - retention поднят до финального')
+  assert(effectiveRetention(RETENTION, день(5, 10)) === RETENTION, '05.10: до ближайшей попытки месяц - retention обычный')
+  assert(effectiveRetention(RETENTION, день(25, 10)) === FINAL_RETENTION, '25.10: две недели до 07.11 - retention поднят до финального')
+  assert(effectiveRetention(0.95, день(25, 10)) === 0.95, 'база выше финального уровня в окне не опускается')
 
   console.log('  ✓ E3: ближайшая попытка, потолок сроков, фаза и окно retention считаются от даты, а не константами')
   passed++

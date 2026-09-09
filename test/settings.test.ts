@@ -45,7 +45,7 @@ function dropsNewPerFields(): void {
   assert(s.repo === 'своя-колода', 'repo затёрт дефолтом — ступень v5 применяется только к тем, кто идёт через неё')
   assert(s.branch === 'feature', 'branch затёрт дефолтом — ступень v5 применяется только к тем, кто идёт через неё')
   assert(s.basePath === 'Своя/Папка', 'basePath потерян при миграции с v7')
-  assert(s.requestRetention === 0.85, 'requestRetention потерян при миграции с v7')
+  assert(s.requestRetention === DEFAULT_SETTINGS.requestRetention, 'requestRetention не донесён принудительно ступенью v9 (поля в интерфейсе нет, сохранённое перекрывало бы дефолт навсегда)')
   assert(s.pauseFrom === '2026-01-01', 'pauseFrom затёрт дефолтом — ступень v2 применяется только к тем, кто идёт через неё')
   assert(s.pauseTo === '2026-01-02', 'pauseTo затёрт дефолтом — ступень v2 применяется только к тем, кто идёт через неё')
   assert(s.homeOffset === '180', 'homeOffset затёрт дефолтом — ступень v2 применяется только к тем, кто идёт через неё')
@@ -107,9 +107,11 @@ function forcedFieldsWin(): void {
     branch: 'чужая-ветка',
     pauseFrom: '2000-01-01',
     pauseTo: '2000-01-02',
-    homeOffset: '999'
+    homeOffset: '999',
+    requestRetention: 0.9
   } as unknown as Partial<Settings>
   const s = migrateSettings(saved)
+  assert(s.requestRetention === DEFAULT_SETTINGS.requestRetention, 'requestRetention не донесён принудительно ступенью v9')
   assert(s.typing === DEFAULT_SETTINGS.typing, 'typing не донесён принудительно ступенью v3')
   assert(s.sound === DEFAULT_SETTINGS.sound, 'sound не донесён принудительно ступенью v6')
   assert(s.repo === DEFAULT_SETTINGS.repo, 'repo не донесён принудительно ступенью v5')
@@ -117,7 +119,7 @@ function forcedFieldsWin(): void {
   assert(s.pauseFrom === DEFAULT_SETTINGS.pauseFrom, 'pauseFrom не донесён принудительно ступенью v2')
   assert(s.pauseTo === DEFAULT_SETTINGS.pauseTo, 'pauseTo не донесён принудительно ступенью v2')
   assert(s.homeOffset === DEFAULT_SETTINGS.homeOffset, 'homeOffset не донесён принудительно ступенью v2')
-  group('T5: typing/sound/repo/branch/часовой пояс/границы паузы принудительно донесены дефолтом')
+  group('T5: typing/sound/repo/branch/часовой пояс/границы паузы/целевая точность принудительно донесены дефолтом')
 }
 
 // ── T6: anthropicKey удалён ступенью v7 и не возвращается --------------------
