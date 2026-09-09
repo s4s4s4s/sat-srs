@@ -3178,12 +3178,13 @@ function sectionBudgetChecks() {
  *
  * Числа фикстуры подобраны так, чтобы результат с функцией и с числом РАЗЛИЧАЛСЯ:
  * при общей норме 3 «Грамматика» (6 новых) срезается той же тройкой, что и «Слова», а со
- * своей нормой (`newPerDay('grammar','norm')` = 8) забирает все 6: норма выше просто
- * потому, что раздел меньше нагружен, а не потому, что где-то в тесте задублировано число.
+ * своей нормой (`newPerDay('grammar','norm')` = 8) забирает все 6; «Слова» (12 новых) со
+ * своей нормой 10 берут десять, а не три. Числа берутся из norms.ts, а не дублируются в тесте.
  */
 function perSectionNormBudgetChecks(): void {
   const день = '2026-08-25'
-  const слова = [newCard('kappa'), newCard('lambda'), newCard('mu'), newCard('nu'), newCard('xi')] // 5 новых
+  const слова = ['kappa', 'lambda', 'mu', 'nu', 'xi', 'omicron', 'pi', 'rho', 'sigma', 'tau', 'upsilon', 'phi']
+    .map(w => newCard(w)) // 12 новых - больше нормы словаря, чтобы норма резала, а не размер раздела
   const грамматика = [
     baseView('comma-splice', 1, 'grammar'), baseView('dangling-mod', 1, 'grammar'),
     baseView('subj-verb', 1, 'grammar'), baseView('parallelism', 1, 'grammar'),
@@ -3193,13 +3194,13 @@ function perSectionNormBudgetChecks(): void {
   const логика: CardView[] = [] // 0 новых
   const все = [...слова, ...грамматика, ...математика, ...логика]
 
-  assert(newPerDay('rw', 'norm') === 3 && newPerDay('grammar', 'norm') === 8 && newPerDay('math', 'norm') === 8,
+  assert(newPerDay('rw', 'norm') === 10 && newPerDay('grammar', 'norm') === 8 && newPerDay('math', 'norm') === 8,
     'предпосылка: нормы взяты из norms.ts::NEW_PER_DAY_BY_SECTION, а не задублированы числом в тесте')
 
   const perDayFn = (s: Section) => newPerDay(s, 'norm')
 
   // с функцией: слагаемое раздела - min(новых в разделе, newBudgetFor(раздел, newPerDay(раздел, 'norm'), ...))
-  assert(newBudgetTotal(все, perDayFn, [], день) === 3 + 6 + 1 + 0,
+  assert(newBudgetTotal(все, perDayFn, [], день) === 10 + 6 + 1 + 0,
     'функция perDay: у каждого раздела своя норма, слагаемое - min(норма раздела, новых в разделе)')
 
   // журнал уже забрал часть нормы словаря сегодня - остаток словаря падает, у остальных разделов норма своя и не трогается
@@ -3207,7 +3208,7 @@ function perSectionNormBudgetChecks(): void {
     id: v.slug, type: 'review', ts: `${день}T09:00:00+04:00`, day: день,
     slug: v.slug, skill: 'recall', prev_state: State.New
   }))
-  assert(newBudgetTotal(все, perDayFn, журналСлов, день) === 1 + 6 + 1 + 0,
+  assert(newBudgetTotal(все, perDayFn, журналСлов, день) === 8 + 6 + 1 + 0,
     'функция perDay: журнал списывает норму только у своего раздела, у остальных норма не меняется')
 
   // с числом остаётся прежнее поведение - одна норма на все разделы без учёта таблицы norms.ts
