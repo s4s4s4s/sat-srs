@@ -6,7 +6,7 @@
  *
  * Запуск: `npm run test:corpus` (esbuild бандлит файл и node его исполняет).
  */
-import { createEmptyCard, State } from 'ts-fsrs'
+import { createEmptyCard, fsrs, Rating, State } from 'ts-fsrs'
 import { buildCorpusIndex, corpusHits, inCorpus } from '../src/lib/corpus'
 import { freshItems } from '../src/lib/scheduler'
 import type { CardView, QuestionRec, ReadingRec, StudyItem } from '../src/lib/types'
@@ -91,7 +91,40 @@ function freshItemsTiebreakChecks(): void {
   group('K1: freshItems - inCorpus встаёт между kindRank и level, живую отметку не перебивает')
 }
 
+/**
+ * K2 (A11, 10.09.2026): форма уже виденного слова новым словом не вводится.
+ *
+ * Живой случай: cited введено 05.09 и дозрело до Review, отдельная карточка cite лежала
+ * New - урок показал cite окном «новое слово». Дубль по word валит валидатор колоды, но
+ * cite/cited по word не совпадают, и очередь обязана держать правило сама: New-карточка
+ * словаря с той же основой (lightStem), что у оценивавшегося слова, в fresh не попадает.
+ * Две New-формы одного слова (nuance/nuanced) друг друга не блокируют - виденного нет.
+ * Единица подготовки виденного слова законно New и остаётся.
+ */
+function formOfSeenChecks(): void {
+  const seen = cardView('cited', 2)
+  let c = createEmptyCard(new Date(2026, 8, 5))
+  for (let i = 0; i < 5; i++) c = fsrs().next(c, new Date(2026, 8, 5 + i), Rating.Good).card
+  seen.fsrs = c
+  assert(seen.fsrs.state === State.Review && seen.fsrs.reps === 5, 'фикстура: cited дозрело до Review')
+  seen.prep = 'from'
+  seen.fsrsPrep = createEmptyCard(new Date(2026, 8, 5))
+  const prepOfSeen: StudyItem = { view: seen, skill: 'prep', fsrs: seen.fsrsPrep }
+
+  const items = [newItem(seen), prepOfSeen, newItem(cardView('cite', 2)),
+    newItem(cardView('nuance', 1)), newItem(cardView('nuanced', 1))]
+  const fresh = freshItems(items).map(i => `${i.skill}:${i.view.slug}`)
+  assert(!fresh.includes('recall:cite'),
+    `cite - форма виденного cited и новым словом не вводится, получили ${fresh.join(',')}`)
+  assert(fresh.includes('recall:nuance') && fresh.includes('recall:nuanced'),
+    `две New-формы одного слова друг друга не блокируют, получили ${fresh.join(',')}`)
+  assert(fresh.includes('prep:cited'),
+    `единица подготовки виденного слова остаётся новой, получили ${fresh.join(',')}`)
+  group('K2: freshItems - форма уже виденного слова (cite при виденном cited) новым не вводится')
+}
+
 corpusIndexChecks()
 freshItemsTiebreakChecks()
+formOfSeenChecks()
 
 console.log(`corpus: ${passed} groups passed`)

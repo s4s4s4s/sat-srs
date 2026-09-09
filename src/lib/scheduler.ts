@@ -2,6 +2,7 @@ import { fsrs, generatorParameters, Rating, State, type Grade, type Card as Fsrs
 import type { CardView, Format, StudyItem, JournalLine } from './types'
 import { endOfStudyDay, dayKey, addDaysKey, calendarKey } from './daytime'
 import { splitSentences, segmentText, type Segment } from './reading'
+import { lightStem } from './stem'
 import { TYPO_MIN_LEN, TYPO_MAX_EDITS, newIntroducedOn, cardTimeCap, normWord } from './journal'
 /* Раздел «Логика» живёт по своей, не-FSRS механике (см. logic.ts). Импорт двусторонний:
    logic.ts спрашивает у планировщика раздел карточки (`isLogicCard`) и стоп ввода
@@ -695,6 +696,19 @@ export function markGlosses(
 }
 
 /**
+ * Основа слова для сравнения форм в `freshItems` (A11), либо null, если сравнивать нечего.
+ * `lightStem` снимает всё, кроме латинских букв, по краям и суффиксы -ed/-ing: у слова
+ * короче трёх букв в основе это уже не английское слово, а обозначение (в симуляции урока
+ * слова зовутся l1, k2: основа каждого - одна буква, и все они «формы» друг друга).
+ * Основа короче `WORD_STEM_MIN` в сравнении не участвует: ни блокирует, ни блокируется.
+ */
+const WORD_STEM_MIN = 3
+function wordStem(word: string): string | null {
+  const stem = lightStem(word)
+  return stem.length >= WORD_STEM_MIN ? stem : null
+}
+
+/**
  * Новые единицы в порядке ввода. Живая отметка владельца — абсолютный приоритет:
  * карточка, отвечающая ей, идёт первой независимо от вида (kindRank) и ступени —
  * иначе отмеченное слово с высокой ступенью не введётся месяцами (живой пример:
@@ -713,14 +727,34 @@ export function markGlosses(
  *
  * Вынесено из buildQueue, потому что тем же порядком урок добирает лишнее новое слово,
  * когда иначе ему нечего показать (см. Review.tsx::proceed).
+ *
+ * Форма уже виденного слова (A11): New-карточка словаря, чья основа (`lightStem`) совпадает
+ * с основой слова, которое ученик уже оценивал (`isSeenWord`), новым словом не вводится.
+ * Живой случай 10.09.2026: в колоде лежали cited (введено 05.09, Review) и отдельная
+ * cite - урок показал cite окном «новое слово». Дубль в колоде - беда колоды (валидатор
+ * `tools/validate-deck.mjs` теперь валит одинаковые word у неусыплённых карточек), но
+ * cite/cited валидатор по word не различит, и урок обязан держать это правило сам.
+ * Основы считаются по переданному набору: оба живых вызова (`buildQueue`, `nextNewItems`)
+ * передают полную развёртку колоды `expandItems`; на срезе из одних New правило слепо.
+ * Единица подготовки (`skill: prep`) того же слова под правило не попадает: у неё своё
+ * состояние, и она законно New у давно виденного слова.
  */
 export function freshItems(
   items: StudyItem[],
   marked: ReadonlySet<string> = new Set(),
   inCorpus?: (slug: string) => boolean
 ): StudyItem[] {
+  const seenStems = new Set(items
+    .filter(i => i.skill === 'recall' && isLevelled(i.view) && isSeenWord(i.view))
+    .map(i => wordStem(i.view.word))
+    .filter((s): s is string => s !== null))
+  const formOfSeen = (i: StudyItem) => {
+    if (i.skill !== 'recall' || !isLevelled(i.view)) return false
+    const stem = wordStem(i.view.word)
+    return stem !== null && seenStems.has(stem)
+  }
   return items
-    .filter(i => i.fsrs.state === State.New)
+    .filter(i => i.fsrs.state === State.New && !formOfSeen(i))
     .sort((a, b) => {
       const ma = matchesLiveMark(a.view, marked) ? 0 : 1
       const mb = matchesLiveMark(b.view, marked) ? 0 : 1

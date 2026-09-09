@@ -1,4 +1,4 @@
-import { State } from 'ts-fsrs'
+import { Rating, State } from 'ts-fsrs'
 import type { JournalLine, JournalRec } from './types'
 import { addDaysKey, dayKey } from './daytime'
 import { lightStem } from './stem'
@@ -504,6 +504,14 @@ export function minutesToday(lines: JournalLine[], today: string = dayKey()): nu
  *
  * Сколько раз за день показывать упражнение, решает не это правило, а срок:
  * `holdExerciseToNextDay` (scheduler.ts) не даёт упражнению вернуться в тот же день.
+ *
+ * «Уже знаю это слово» (Rating.Easy на окне знакомства) знакомством не считается: это
+ * оценка, слово уходит в Learning со сроком на конец учебного дня (`holdOnIntroDay`), и
+ * отработок в тот же день правило от него не требует (A7-ter). Живой случай 10.09.2026:
+ * capacity получило Easy на знакомстве, строка intro/prev_state:0 попадала сюда как
+ * знакомство без отработок, и `topUp()` в Review.tsx возвращал слово через несколько
+ * экранов - снова окном знакомства, потому что срез колоды в замыкании урока ещё держал
+ * его New. Второе Easy на том же слове (cable 09.09: intro/prev_state:1) - тот же путь.
  */
 export function forcedTodaySlugs(lines: JournalLine[], today: string = dayKey()): Set<string> {
   const todays = lines
@@ -517,6 +525,8 @@ export function forcedTodaySlugs(lines: JournalLine[], today: string = dayKey())
     if ((l.skill ?? 'recall') !== 'recall' || !l.slug) continue
     // вид карточки пишется в строку, только если он не vocab (см. rateItem в store.ts)
     if ((l.kind ?? 'vocab') !== 'vocab') continue
+    // «Уже знаю это слово»: окно закрыто оценкой, знакомства не было и отработка не нужна
+    if (l.format === 'intro' && l.rating === Rating.Easy) continue
     const isIntro = l.format === 'intro' || l.prev_state === State.New
     if (isIntro && !introBlock.has(l.slug)) introBlock.set(l.slug, block)
     const intro = introBlock.get(l.slug)

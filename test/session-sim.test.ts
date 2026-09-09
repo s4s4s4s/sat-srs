@@ -167,6 +167,8 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
   // эмуляция forcedTodaySlugs: slug → { первый урок со знакомством, уроки с отработкой после него }
   const introAt = new Map<string, number>()
   const practiceAt = new Map<string, Set<number>>()
+  // зеркалит forcedTodaySlugs: «Уже знаю» (Easy на знакомстве) знакомством не считается (A7-ter)
+  const easyAtIntro = new Set<string>()
   const kindOf = new Map(deck.map(v => [v.slug, v.kind]))
 
   for (let lesson = 0; lesson < lessonsN; lesson++) {
@@ -202,6 +204,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
         // зеркалит forcedTodaySlugs: обязательная отработка — правило про словарное
         // знакомство. У упражнения окна-знакомства нет, первый показ уже даёт оценку
         if ((kindOf.get(slug) ?? 'vocab') !== 'vocab') continue
+        if (easyAtIntro.has(slug)) continue
         const later = [...(practiceAt.get(slug) ?? [])].filter(l => l > at).length
         if (later < 2) out.add(slug)
       }
@@ -363,6 +366,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
         else reintroShown++
         lapsed.delete(itemKey(head))
         if (!introAt.has(head.view.slug)) introAt.set(head.view.slug, lesson)
+        if (known) easyAtIntro.add(head.view.slug)
         if (!known) {
           introduced.add(itemKey(head))
           sinceIntro = 0
@@ -509,6 +513,9 @@ function checkA6(shows: Show[], tag: string): void {
     // только знакомства НОВЫХ слов: именно они «сгорали». Окно «Подзабылось» у зрелого слова
     // данных не портит (у него уже есть fsrs и оценки) — это ещё один показ значения.
     if (s.format !== 'intro' || !s.wasNew) return
+    // «Уже знаю это слово» (A7-ter): окно закрыто оценкой Easy, оно само и есть оценённый показ;
+    // слово ушло в Learning на завтра, и отработки в этом уроке ему не положено
+    if (s.graded !== null) return
     if (!shows.slice(i + 1).some(x => x.path === s.path && x.graded !== null)) orphans.push(i)
   })
   for (const i of orphans) {
@@ -1252,6 +1259,28 @@ function dontKnowChecks(): void {
       'репро: упражнение больше не требует обязательной отработки в тот же день')
     assert(forced.has('buttress'),
       'словарное знакомство по-прежнему обязано быть отработано сегодня — правило A7 не тронуто')
+
+    /* A7-ter (10.09.2026): «Уже знаю это слово» - оценка Easy на окне знакомства. Репро из
+       журнала: capacity (intro, prev_state 0, rating 4) и cable 09.09 (Easy дважды: второе
+       окно уже из Learning, prev_state 1). Ни то ни другое не требует отработки сегодня;
+       знакомство без оценки (buttress) требует по-прежнему. */
+    const сУжеЗнаю: JournalLine[] = [
+      ...журнал,
+      { id: '4', type: 'review', ts: '2026-08-21T22:31:05+04:00', day: '2026-08-21',
+        slug: 'capacity', skill: 'recall', format: 'intro', prev_state: State.New, rating: Rating.Easy },
+      { id: '5', type: 'review', ts: '2026-08-21T22:31:30+04:00', day: '2026-08-21',
+        slug: 'cable', skill: 'recall', format: 'intro', prev_state: State.New, rating: Rating.Easy },
+      { id: '6', type: 'session', ts: '2026-08-21T22:40:00+04:00', day: '2026-08-21' },
+      { id: '7', type: 'review', ts: '2026-08-21T22:41:00+04:00', day: '2026-08-21',
+        slug: 'cable', skill: 'recall', format: 'intro', prev_state: State.Learning, rating: Rating.Easy }
+    ]
+    const forced2 = forcedTodaySlugs(сУжеЗнаю, '2026-08-21')
+    assert(!forced2.has('capacity'),
+      'репро 10.09.2026: «Уже знаю» на знакомстве - оценка, а не знакомство; отработки в тот же день правило не требует')
+    assert(!forced2.has('cable'),
+      'репро 09.09.2026: повторное Easy из Learning тоже не делает слово обязательным к отработке')
+    assert(forced2.has('buttress'),
+      'знакомство без оценки рядом с «Уже знаю» по-прежнему обязательно к отработке')
   }
   console.log('  ✓ упражнение не возвращается в тот же учебный день: ни добором, ни learning-шагом')
   passed++
@@ -2669,6 +2698,13 @@ function knownWordChecks(): void {
     const { lessons } = runDay(deck, { budget: 3, introLimit: 3, dayNew, lessons: 2, knownWords })
     lessons.forEach((shows, i) => checkAll(shows, `S2/прогон${run + 1}/урок${i + 1}`))
     if (lessons.flat().some(s => s.path === 'deck/k1.md' && s.graded === Rating.Easy)) сEasy++
+    /* A7-ter (10.09.2026, capacity): «Уже знаю» закрывает знакомство оценкой. Второе окно
+       знакомства тому же слову в тот же день - это и есть жалоба «отметил как уже знаю, а
+       оно снова вылезло как новое»: forcedTodaySlugs требовал отработки, topUp добирал
+       слово из снимка колоды, где оно ещё New, и baseFormat давал intro. */
+    const оконК1 = lessons.flat().filter(s => s.path === 'deck/k1.md' && s.format === 'intro').length
+    assert(оконК1 <= 1,
+      `S2: слово с «Уже знаю» получило ${оконК1} окна знакомства за день - после Easy оно обязано не возвращаться новым`)
 
     const введено = new Set<string>()
     for (const shows of lessons) for (const s of shows) if (s.wasNew && s.graded !== null) введено.add(s.path)

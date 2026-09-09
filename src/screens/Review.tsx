@@ -216,6 +216,12 @@ export default function Review() {
   const scheduler = useMemo(() => makeScheduler(effectiveRetention(app.settings.requestRetention)), [app.settings.requestRetention])
   const section = app.sessionSection
   const deck = views().filter(v => sectionOf(v) === section)
+  /* Тот же срез, но прочитанный в момент вызова, а не при рендере. Ступени добора (topUp,
+     bonusNew) зовутся из grade() сразу после rateItem, до перерисовки: снимок `deck` в этом
+     замыкании ещё держит только что оценённую карточку в старом состоянии. Живой случай
+     10.09.2026: capacity получило «Уже знаю» (Easy на знакомстве), стало Learning, а topUp
+     нашёл его в снимке как New и вернул через несколько экранов окном знакомства. */
+  const liveDeck = () => views().filter(v => sectionOf(v) === section)
 
   /* Очередь строится СРАЗУ из локальной колоды, синк уходит в фон.
      Раньше здесь стоял `await Promise.race([startSync(), 3500])`: урок не
@@ -563,7 +569,7 @@ export default function Review() {
       dayNewLeft.current - freshIntros.current - pending, n)
     if (slots <= 0) return []
     const used = new Set(exclude.map(itemKey))
-    return nextNewItems(deck, used, slots, new Date(), liveMarkedLemmas(currentJournal())).filter(i => !deferredToday.current.has(i.view.path))
+    return nextNewItems(liveDeck(), used, slots, new Date(), liveMarkedLemmas(currentJournal())).filter(i => !deferredToday.current.has(i.view.path))
   }
 
   /**
@@ -575,7 +581,7 @@ export default function Review() {
   function topUp(): StudyItem[] {
     const forced = forcedTodaySlugs(currentJournal(), dayKey())
     if (!forced.size) return []
-    return deck
+    return liveDeck()
       // B4: сюда же попадает слово в состоянии New — знакомство рейтинга не даёт, и слово,
       // которому урок показал знакомство, остаётся New до первой оценки. Прежний фильтр
       // (только Learning/Relearning) такое слово не видел, и добирать было «нечего»
@@ -914,6 +920,11 @@ export default function Review() {
       // task.format === 'intro' здесь означает g === Rating.Easy («Уже знаю это слово»,
       // единственная оценка знакомства, идущая этим путём, а не веткой markIntroduced выше)
       commitIntroBudget?.()
+      /* Знакомство закрыто оценкой - урок его показал, и ключ обязан лежать в introduced, как
+         после обычного знакомства: baseFormat даёт окно знакомства любой New-карточке вне
+         introduced, и любой снимок колоды с ещё не обновлённым состоянием вернул бы слово
+         вторым окном «новое слово» (10.09.2026, capacity; 09.09, cable дважды за 20 с). */
+      if (task.format === 'intro') introduced.current.add(itemKey(task.item))
 
       creditedSec.current += Math.min(elapsed, cardTimeCap(task.item.view.kind)) / 1000
       sinceIntro.current++
