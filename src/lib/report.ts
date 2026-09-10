@@ -12,7 +12,7 @@ import { activeLevel, levelStats, isLevelled, EXAM_DATE, SECTIONS, nextAttempt, 
 import {
   examReady, maturity, pace, retentionByInterval, retentionByLateness, retentionBySection, maturityBySection,
   speedStats, typoSplit, gaveUpShare, cuedStats, planVsFact, isLeechCard, orphanedLines, ddmm, practiceUnitRatio,
-  capacityEstimate,
+  capacityEstimate, senseShare,
   NEW_STOP_DATE, TARGET_REVIEW, TARGET_MATURE, MATURE_STABILITY_DAYS, READY_R,
   INTERVAL_LABELS, SECTION_LABELS, type IntervalBucket
 } from './metrics'
@@ -79,6 +79,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   const ts = typoSplit(lines)
   const gu = gaveUpShare(lines)   // за всю историю; дневной срез уже копится в _метрики.ndjson
   const cs = cuedStats(lines, now)   // C12: доля показов type, взятых со ступенчатой подсказки
+  const ss = senseShare(lines)   // T6: доля показов по значению помимо главного (senses.ts)
 
   // прогноз нагрузки: due по учебным дням на 7 дней вперёд (просроченное — в «сегодня»)
   const load = new Map<string, number>()
@@ -249,6 +250,7 @@ export function buildReport(cards: CardRec[], journal: JournalRec[], readings: R
   const typoTotal = ts.typos + ts.realMisses
   out.push(`- Ошибки ввода слова: опечаток ${ts.typos} · настоящих незнаний ${ts.realMisses}${typoTotal ? ` (доля опечаток ${Math.round((ts.typos / typoTotal) * 100)}%, n=${typoTotal})` : ''}`)
   out.push(`- Ввод с подсказкой: ${cs.d7.cued} из ${cs.d7.shown} показов type за 7 дней (за 30 дней: ${cs.d30.cued} из ${cs.d30.shown})`)
+  if (ss.total) out.push(`- Значения помимо главного: ${ss.withSense} из ${ss.total} ответов словаря (провалов: главное ${ss.failedMain}, другие ${ss.failedOther})`)
   out.push('')
 
   /* Чтение и отметки незнакомых слов появились в приложении 22.08.2026, а в отчёте

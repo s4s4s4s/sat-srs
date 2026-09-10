@@ -11,6 +11,18 @@ import { TYPO_MIN_LEN, TYPO_MAX_EDITS, newIntroducedOn, cardTimeCap, normWord } 
    поэтому цикл безопасен и при бандлинге, и в браузере. Альтернатива - второе определение
    того, что такое карточка логики, а это ровно та ошибка, от которой бережёт `sectionOf`. */
 import { buildLogicQueue, logicFreshCount, logicFreshShownOn, logicSliceCounts } from './logic'
+/* A12 (10.09.2026): drill.ts спрашивает у планировщика форматы/дистракторы (mcDistractors,
+   meaningDistractors, hasMeaningHint, degrade, isLevelled), планировщик у drill.ts - только
+   функцию drillTask и константу DRILL_GAP. Тот же безопасный цикл, что с logic.ts выше: обе
+   стороны зовут друг друга исключительно во время вызова, ни одной ссылки на верхнем уровне
+   модуля. DRILL_GAP в drill.ts НЕ вычисляется из NEW_GAP импортом (хоть по смыслу и равен
+   NEW_GAP + 1) - именно это единственное отличие от `isLogicCard`/`newIntroAllowed` выше: то
+   были функции, а верхнеуровневая константа `const DRILL_GAP = NEW_GAP + 1` в drill.ts читала
+   бы NEW_GAP модуля scheduler.ts ДО того, как scheduler.ts успевает его определить, если
+   бандл esbuild входит в граф со стороны scheduler.ts - живой замер (entry = scheduler.ts)
+   отдавал `DRILL_GAP = NaN` молча, без единой ошибки. DRILL_GAP держится литералом в
+   drill.ts, синхронность с NEW_GAP + 1 стережёт test/drill.test.ts. */
+import { DRILL_GAP, drillTask } from './drill'
 
 export function makeScheduler(requestRetention: number): FSRS {
   // fuzz разводит одновременно выученные карточки по разным дням — меньше комков и MC-соседей
@@ -1010,8 +1022,17 @@ export function buildQueue(
   const mixed: StudyItem[] = [...review]
   if (newItems.length) {
     const stride = Math.max(NEW_GAP + 1, Math.round((review.length + newItems.length) / newItems.length))
+    /* A12: резерв хвоста. Знакомство не занимает последние DRILL_GAP позиций среди повторов -
+       иначе после знакомства первой отработке (правило A12, DRILL_GAP чужих экранов) не
+       находится места в остатке очереди, слово уходит на 10-минутную ступень FSRS и
+       выпадает из урока (жалоба «новое слово показывается один раз и пропадает»). Резерв
+       считается от НЕИЗМЕНЯЕМОГО review.length, а не от растущей mixed.length: формула
+       разводит новые слова по хвосту повторов так же, как stride разводит их по голове.
+       При review.length <= DRILL_GAP резерва нет - разводить между DRILL_GAP чужими
+       экранами всё равно нечем, прежнее поведение (только stride) сохраняется буквально. */
     newItems.forEach((it, i) => {
-      const pos = Math.min(mixed.length, (review.length ? 1 : 0) + i * stride)
+      let pos = Math.min(mixed.length, (review.length ? 1 : 0) + i * stride)
+      if (review.length > DRILL_GAP) pos = Math.min(pos, (review.length - DRILL_GAP) + i)
       mixed.splice(pos, 0, it)
     })
   }
@@ -1526,9 +1547,18 @@ export function meaningDistractors(card: CardView, deck: CardView[], n = 3): str
 /** Формат и цель показа вместе: Review.tsx рисует по паре, тесты проверяют пару. */
 export function pickTask(item: StudyItem, deck: CardView[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false, now: Date = new Date()): { format: Format; cue: Cue } {
   const format = baseFormat(item, deck, introduced, lapsed, reintroAllowed, typing)
-  if (format !== 'mc' && format !== 'type') return { format, cue: 'sentence' }
+  /* Провал важнее плана дриллов (A12): слово, лапнутое НА дрилле (Again), обязано вернуться
+     окном «Подзабылось», а не следующим шагом ладдера drillTask - baseFormat уже решил это
+     веткой `failed && reintroAllowed` выше по стеку, здесь только пропускаем её раньше
+     общего отсева не-mc/type форматов, чтобы дрилл не перехватил случай `intro`. */
+  if (format === 'intro') return { format, cue: 'sentence' }
   // авторские варианты (error/grammar) и числовой ответ (math): своя механика, ротации нет
   if (item.view.choices.length >= 2 || item.view.answerNum) return { format, cue: 'sentence' }
+  /* A12: план дриллов знакомства перехватывает выбор формата ПОСЛЕ провала/авторских веток,
+     но до обычной ротации - единица с `item.drill` не идёт ни в REVIEW_CYCLE, ни в ветку
+     пиявок, у неё свой ладдер (drillTask), независимый от того, что вернул baseFormat. */
+  if (item.drill) return drillTask(item, deck, typing)
+  if (format !== 'mc' && format !== 'type') return { format, cue: 'sentence' }
   /* Ротацию открывает второй повтор, а не переход в Review.
      Раньше здесь стояло только `state !== Review`, и на выросшей колоде это
      молча выключило производство. В learning `baseFormat` отдаёт mc, пока в
@@ -1580,7 +1610,7 @@ export function pickTask(item: StudyItem, deck: CardView[], introduced?: Set<str
  * Ближайший исполнимый режим, если выпавший шаг карточке недоступен.
  * Порядок отката: word → meaning → sentence; type → mc с тем же cue.
  */
-function degrade(step: { format: Format; cue: Cue }, item: StudyItem, deck: CardView[], typing: boolean): { format: Format; cue: Cue } {
+export function degrade(step: { format: Format; cue: Cue }, item: StudyItem, deck: CardView[], typing: boolean): { format: Format; cue: Cue } {
   const view = item.view
   const hasMeaning = !!(view.meaning_ru || '').trim()
   const canProduce = !view.word.includes(' ') && hasMeaningHint(view)

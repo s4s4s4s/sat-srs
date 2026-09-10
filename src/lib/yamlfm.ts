@@ -97,7 +97,11 @@ function otherSenses(v: any): Sense[] {
     out.push({
       pos: s.pos != null ? String(s.pos) : '',
       en: s.en != null ? String(s.en) : '',
-      ru: s.ru != null ? String(s.ru) : ''
+      ru: s.ru != null ? String(s.ru) : '',
+      // T5: примеры-предложения этого значения, читаются так же, как fm.contexts/contexts_ru
+      // карточки в cardView - массив дальше, не массив или отсутствие поля дальше пустой список.
+      contexts: Array.isArray(s.contexts) ? s.contexts.map(String) : [],
+      contextsRu: Array.isArray(s.contexts_ru) ? s.contexts_ru.map(String) : []
     })
   }
   return out

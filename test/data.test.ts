@@ -179,6 +179,57 @@ function cardViewOtherSensesChecks(): void {
   group('cardView: other_senses с браком валидатора (элемент без en/ru) не роняет карточку и не отбрасывается молча')
 }
 
+/**
+ * T5: contexts/contextsRu элемента other_senses - примеры-предложения именно этого значения,
+ * читаются так же, как fm.contexts/fm.contexts_ru карточки в cardView (массив строк -> строки,
+ * не-массив или отсутствие поля -> []). Обратной сериализации Sense в fm нет: store.ts патчит
+ * только fsrs-блок (`{ ...rec.fm, ...fmPatch }`), fm целиком остаётся авторским, и
+ * serializeMd - обычный js-yaml dump, который ничего не достраивает и не вычищает сам.
+ */
+function senseContextsChecks(): void {
+  const withContexts = cardView(localCard({
+    word: 'assay',
+    other_senses: [{
+      pos: 'verb', en: 'to attempt', ru: 'пытаться',
+      contexts: ['She will ______ the climb.'], contexts_ru: ['Она попытается совершить восхождение.']
+    }]
+  }))
+  assert(withContexts.other_senses[0].contexts.length === 1 && withContexts.other_senses[0].contexts[0] === 'She will ______ the climb.',
+    'cardView обязана прочитать contexts элемента other_senses как массив строк')
+  assert(withContexts.other_senses[0].contextsRu.length === 1 && withContexts.other_senses[0].contextsRu[0] === 'Она попытается совершить восхождение.',
+    'cardView обязана прочитать contexts_ru элемента other_senses как массив строк')
+  group('cardView: other_senses[i].contexts/contexts_ru читаются как массивы строк')
+
+  const notArray = cardView(localCard({
+    word: 'assay',
+    other_senses: [{ pos: 'verb', en: 'to attempt', ru: 'пытаться', contexts: 'не массив', contexts_ru: 42 }]
+  }))
+  assert(Array.isArray(notArray.other_senses[0].contexts) && notArray.other_senses[0].contexts.length === 0,
+    'не-массив в contexts элемента обязан дать пустой список, а не строку и не упасть')
+  assert(Array.isArray(notArray.other_senses[0].contextsRu) && notArray.other_senses[0].contextsRu.length === 0,
+    'не-массив в contexts_ru элемента обязан дать пустой список')
+  group('cardView: other_senses[i].contexts/contexts_ru не-массив -> []')
+
+  const missing = cardView(localCard({
+    word: 'assay',
+    other_senses: [{ pos: 'verb', en: 'to attempt', ru: 'пытаться' }]
+  }))
+  assert(Array.isArray(missing.other_senses[0].contexts) && missing.other_senses[0].contexts.length === 0
+    && Array.isArray(missing.other_senses[0].contextsRu) && missing.other_senses[0].contextsRu.length === 0,
+    'отсутствие contexts/contexts_ru у элемента обязано дать пустые списки, а не undefined')
+  group('cardView: other_senses[i] без contexts/contexts_ru -> []')
+
+  // Круг сериализации: fm без contexts у элемента other_senses не должен ПРИОБРЕСТИ пустые
+  // массивы после записи - store.ts не переписывает other_senses вовсе (патчит только fsrs),
+  // поэтому serializeMd(fm без contexts, ...) обязан остаться таким же, без добавленных полей.
+  const fmNoContexts = { word: 'assay', other_senses: [{ pos: 'verb', en: 'to attempt', ru: 'пытаться' }] }
+  const s = serializeMd(fmNoContexts, 'тело\n')
+  const { fm: fmBack } = parseMd(s)
+  assert(!('contexts' in fmBack.other_senses[0]) && !('contexts_ru' in fmBack.other_senses[0]),
+    'serializeMd не должен дописывать contexts/contexts_ru в шапку, если их там не было (иначе первая же оценка переписала бы шапки всех карточек)')
+  group('serializeMd: не дописывает пустые contexts/contexts_ru в other_senses, если их не было')
+}
+
 function fmUnicodeChecks(): void {
   const fm = {
     word: 'тест', meaning_ru: 'значение с эмодзи 🎉 и «кавычками»',
@@ -476,6 +527,7 @@ function main(): void {
   otherSensesRoundtripChecks()
   cardViewSynonymsChecks()
   cardViewOtherSensesChecks()
+  senseContextsChecks()
   fmUnicodeChecks()
   fmLongLineChecks()
   fmNbspChecks()

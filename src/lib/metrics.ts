@@ -4,8 +4,9 @@ import { isLevelled, isLogicCard, sectionOf, nextAttempt, NEW_STOP_DATE } from '
 import { logicSliceCounts } from './logic'
 import type { Section } from './scheduler'
 import { addDaysKey, dayKey } from './daytime'
-import { byTime, minutesByDay, readMinutesByDay, PRACTICE_UNIT_RATIO_FLOOR, reviewsByDay, isGraded } from './journal'
+import { byTime, minutesByDay, readMinutesByDay, PRACTICE_UNIT_RATIO_FLOOR, reviewsByDay, isGraded, isDrill } from './journal'
 import { MIN_KIND_SAMPLES } from './scheduler'
+import { isSenseReviewLine } from './senses'
 
 /**
  * Чистые метрики прогресса над (cards, journal, now) - без побочных эффектов.
@@ -215,7 +216,7 @@ export interface CapacityEstimate {
  */
 export function capacityEstimate(journal: JournalLine[], now: Date, until: Date, window = CAPACITY_WINDOW_DAYS): CapacityEstimate {
   const today = dayKey(now)
-  const byDay = reviewsByDay(journal)
+  const byDay = reviewsByDay(journal.filter(l => !isDrill(l))) // A12: дрилл не про темп/ёмкость
   const studyDayCounts: number[] = []
   for (let i = 0; i < window; i++) {
     const n = byDay.get(addDaysKey(today, -i)) ?? 0
@@ -384,7 +385,7 @@ export function retentionByInterval(journal: JournalLine[]): Record<IntervalBuck
     if (typeof l.elapsed_days === 'number') interval = l.elapsed_days
     else if (prev !== undefined && Number.isFinite(t)) interval = (t - prev) / 86400_000
     if (Number.isFinite(t)) prevTs.set(key, t)
-    if (!isMatureShow(l) || interval === null) continue
+    if (!isMatureShow(l) || isDrill(l) || interval === null) continue // A12: дрилл не про память
     const cell = out[intervalBucketOf(interval)]
     cell.n++
     if ((l.rating ?? 0) > 1) cell.pass++
@@ -573,7 +574,7 @@ function answerTimeOf(l: JournalLine): number | undefined {
 /** Скорость ответа: медиана, p90 и доля «медленных» (> 10 c). На SAT узнавание должно быть за 2-3 c. */
 export function speedStats(journal: JournalLine[]): SpeedStats {
   const rev = journal.filter(l =>
-    l.type === 'review' && l.format && l.format !== 'intro' && answerTimeOf(l) !== undefined)
+    l.type === 'review' && l.format && l.format !== 'intro' && !isDrill(l) && answerTimeOf(l) !== undefined) // A12: дрилл не про скорость
   const all = rev.map(l => answerTimeOf(l) as number).sort((a, b) => a - b)
   const clean = rev.filter(l => typeof l.answer_ms === 'number' && l.answer_ms > 0).length
   const byFmt = new Map<string, number[]>()
@@ -650,7 +651,7 @@ export function practiceUnitRatio(journal: JournalLine[]): number {
  * ответить сам. Retention этой ловушки не знал: isMatureShow исключает `cued` наравне с `typo`.
  */
 export function isAccuracyShow(l: JournalLine): boolean {
-  return l.type === 'review' && typeof l.correct === 'boolean' && !l.cued
+  return l.type === 'review' && typeof l.correct === 'boolean' && !l.cued && !isDrill(l) // A12: дрилл не про память
 }
 
 /**
@@ -702,6 +703,36 @@ export function gaveUpShare(journal: JournalLine[], day?: string): GaveUp {
   const rev = journal.filter(l => l.type === 'review' && l.format !== 'intro' && (day === undefined || l.day === day))
   const g = rev.filter(l => l.gave_up === true).length
   return { share: rev.length ? Math.round((g / rev.length) * 100) / 100 : 0, gaveUp: g, n: rev.length }
+}
+
+export interface SenseShare { withSense: number; total: number; failedMain: number; failedOther: number }
+
+/**
+ * T6: доля review-строк словаря, спрошенных по значению помимо главного (`sense > 0`), среди
+ * всех строк, которые вообще могли спросить значение (isSenseReviewLine, senses.ts - тот же
+ * предикат, что двигает ротацию показа, переиспользован, а не продублирован). Только словарь
+ * (`kind` не заполнен - см. поле kind в types.ts, отсутствие значит vocab): у других разделов
+ * значений слова нет. Заодно считает провалы по главному значению (`sense` отсутствует или 0)
+ * и по неглавным (`sense > 0`) - тем же проходом, дважды журнал не гонять.
+ */
+export function senseShare(journal: JournalLine[]): SenseShare {
+  let withSense = 0
+  let total = 0
+  let failedMain = 0
+  let failedOther = 0
+  for (const l of journal) {
+    if (l.kind) continue
+    if (!isSenseReviewLine(l)) continue
+    total++
+    const other = (l.sense ?? 0) > 0
+    if (other) withSense++
+    const failed = l.rating === 1 || l.gave_up === true
+    if (failed) {
+      if (other) failedOther++
+      else failedMain++
+    }
+  }
+  return { withSense, total, failedMain, failedOther }
 }
 
 export interface CuedWindow { cued: number; shown: number }

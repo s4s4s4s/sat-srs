@@ -1,5 +1,6 @@
 import { State } from 'ts-fsrs'
 import { itemKey } from './scheduler'
+import { DRILL_REPS, isDrillable } from './drill'
 import type { StudyItem } from './types'
 
 /**
@@ -102,11 +103,26 @@ export interface ProgressInput {
  * и требовать будет, пока не наберётся DRILL_PER_SESSION отработок. Это уже не прогноз,
  * а обязательство урока, и оно считается целиком.
  *
+ * A12 добавляет третий случай, ещё более обязательный, чем два первых: слово, введённое
+ * в ЭТОМ уроке (`fsrs.state === New`, `isDrillable`), обязано получить DRILL_REPS оценённых
+ * отработок - первую настоящую (`rateItem`) и `DRILL_REPS - 1` дриллов (`drill.ts`), и это
+ * обязательство урок несёт независимо от того, показано ли уже окно-знакомство: `intros`
+ * считается отдельным полем `UnitShows`, а сюда попадает именно счёт отработок. Единица
+ * уже ВНУТРИ плана (`item.drill` задан, план открыт первой отработкой) должна ещё
+ * `DRILL_REPS - item.drill` показов, включая тот, что стоит в очереди сейчас - это ровно то
+ * число, которое возвращает `afterDrill`, прежде чем отдать `null`.
+ *
+ * DRILL_PER_SESSION (см. константу выше) - другой счётчик и с A12 не путать: он про
+ * добор forced-слов, растянутый на НЕСКОЛЬКО уроков одного дня, а не про план дриллов
+ * внутри одного урока введения.
+ *
  * Замер на 721 смоделированном уроке: горизонт «одна отработка на очередную единицу»
  * доводит до ровных 100% 390 уроков против 250 у варианта «считать все обязательные
  * отработки заранее», а суммарный недобор падает со 154 до 88 пунктов.
  */
 function drillsLeftFor(item: StudyItem, input: ProgressInput, pending: boolean): number {
+  if (item.drill !== undefined) return DRILL_REPS - item.drill
+  if (item.fsrs.state === State.New && isDrillable(item)) return DRILL_REPS
   return pending && input.forced.has(item.view.slug)
     ? Math.max(SHOWS_PER_REPEAT, DRILL_PER_SESSION - (input.drilled.get(itemKey(item)) ?? 0))
     : SHOWS_PER_REPEAT

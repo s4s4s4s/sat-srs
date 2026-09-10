@@ -12,10 +12,10 @@
 import { State } from 'ts-fsrs'
 import type { JournalLine } from '../src/lib/types'
 import {
-  isGraded, reviewsByDay, isDayDone, minutesByDay, emptyDays, floorDays, RUN_MIN_REVIEWS,
+  isGraded, isDrill, reviewsByDay, isDayDone, minutesByDay, emptyDays, floorDays, RUN_MIN_REVIEWS,
   dayUnitsByDay, practiceUnitsByDay, practiceMinutesByDay, PRACTICE_UNIT_RATIO_FLOOR,
   readTextsToday, READ_MIN_TEXTS, deckHasWord, markDigest, readingSrc,
-  retentionByFormat, isKnowledgeMiss, isKnowledgePass
+  retentionByFormat, isKnowledgeMiss, isKnowledgePass, parseNdjson, toNdjson, forcedTodaySlugs
 } from '../src/lib/journal'
 import { accuracyShare } from '../src/lib/metrics'
 import { lightStem } from '../src/lib/stem'
@@ -322,6 +322,103 @@ function knowledgeMissPassChecks(): void {
   group('K2/K3: isKnowledgeMiss/isKnowledgePass различают опечатку, синоним и подсказку от настоящего провала знания')
 }
 
+// ---- A12: дрилл (строка отработки плана знакомства) отличена от настоящего повтора ----------
+
+/* A12: дрилл считается там, где меряется РАБОТА (isGraded, reviewsByDay), и исключается
+ * там, где меряется ПАМЯТЬ (retentionByFormat, isKnowledgePass) или служит поводом снять
+ * обязательную отработку следующего урока (forcedTodaySlugs). */
+function drillChecks(): void {
+  const drill = (o: Partial<JournalLine>): JournalLine => ({
+    id: Math.random().toString(36).slice(2), type: 'review', ts: `${DAY}T10:00:00+03:00`,
+    day: DAY, format: 'mc', rating: 3, drill: 1, ...o
+  })
+
+  assert(isDrill(drill({})), 'строка с числовым полем drill обязана опознаваться как дрилл')
+  assert(!isDrill(gradedLine()), 'обычная оценённая строка без поля drill дриллом не является')
+  group('isDrill: type review + числовое поле drill')
+
+  // дрилл - это РАБОТА: он обязан считаться в reviewsByDay и isGraded наравне с обычной оценкой
+  assert(isGraded(drill({})), 'дрилл несёт rating и обязан быть оценкой (isGraded)')
+  const withDrills = [gradedLine(), gradedLine(), drill({}), drill({})]
+  const byDay = reviewsByDay(withDrills)
+  assert(byDay.get(DAY) === 4, `дрилл обязан попадать в reviewsByDay наравне с обычной оценкой: ожидалось 4, получено ${byDay.get(DAY)}`)
+  group('дрилл считается работой: reviewsByDay и isGraded видят дрилл как обычную оценку')
+
+  // дрилл - это НЕ ПАМЯТЬ: retentionByFormat и isKnowledgePass его не видят
+  const revLine = (o: Partial<JournalLine>): JournalLine => ({
+    id: Math.random().toString(36).slice(2), type: 'review', ts: `${DAY}T10:00:00+03:00`,
+    day: DAY, format: 'type', prev_state: State.Review, ...o
+  })
+  const rfLines: JournalLine[] = [
+    revLine({ slug: 'a', correct: true }),
+    revLine({ slug: 'b', correct: true, drill: 1 }) // дрилл с объективным попаданием
+  ]
+  const rf = retentionByFormat(rfLines, DAY)
+  assert(rf.type?.pass === 1 && rf.type?.total === 1,
+    `retentionByFormat обязан исключить дрилл целиком (A12): ожидалось 1/1, получено ${rf.type?.pass}/${rf.type?.total}`)
+  group('retentionByFormat: дрилл не считается показом памяти (A12)')
+
+  assert(!isKnowledgePass(revLine({ correct: true, drill: 1 })),
+    'дрилл не должен закрывать пробел знания (A12) - карточка этой строкой не двигалась')
+  assert(isKnowledgePass(revLine({ correct: true })), 'обычное попадание без drill по-прежнему закрывает пробел')
+  group('isKnowledgePass: дрилл исключён (A12)')
+}
+
+function forcedTodaySlugsDrillChecks(): void {
+  const rev = (o: Partial<JournalLine>): JournalLine => ({
+    id: Math.random().toString(36).slice(2), type: 'review', ts: `${DAY}T10:00:00+03:00`,
+    day: DAY, skill: 'recall', ...o
+  })
+  const session = (ts: string): JournalLine => ({
+    id: Math.random().toString(36).slice(2), type: 'session', ts, day: DAY
+  })
+
+  /* A12: слово знакомится в первом уроке, следом три дрилла ЭТОГО ЖЕ дня. Дрилл - не
+   * следующий урок слова, поэтому не должен засчитываться как «отработка после
+   * знакомства» - иначе счёт «две отдельные сессии отработки» набирался бы дриллами
+   * того же дня, а не настоящим следующим уроком, и слово ушло бы из forced раньше времени. */
+  const lines: JournalLine[] = [
+    rev({ ts: `${DAY}T09:00:00+03:00`, slug: 'w', format: 'intro', prev_state: State.New }),
+    rev({ ts: `${DAY}T09:01:00+03:00`, slug: 'w', format: 'mc', rating: 3, drill: 1 }),
+    rev({ ts: `${DAY}T09:02:00+03:00`, slug: 'w', format: 'type', rating: 3, drill: 2 }),
+    rev({ ts: `${DAY}T09:03:00+03:00`, slug: 'w', format: 'reveal', rating: 3, drill: 3 })
+  ]
+  const forced1 = forcedTodaySlugs(lines, DAY)
+  assert(forced1.has('w'), 'слово с интро и тремя дриллами в том же уроке всё ещё обязано быть forced')
+  group('forcedTodaySlugs: дрилл в том же уроке, что и знакомство, не закрывает обязательную отработку')
+
+  // Второй и третий урок дня несут ещё по одному дриллу того же слова в РАЗНЫХ уроках -
+  // без исключения дриллов это выглядело бы как «отработано дважды в двух сессиях»,
+  // и слово вышло бы из forced, хотя настоящей отработки (не дрилла) так и не было.
+  const lines2: JournalLine[] = [
+    ...lines,
+    session(`${DAY}T09:10:00+03:00`),
+    rev({ ts: `${DAY}T09:11:00+03:00`, slug: 'w', format: 'mc', rating: 3, drill: 4 }),
+    session(`${DAY}T09:20:00+03:00`),
+    rev({ ts: `${DAY}T09:21:00+03:00`, slug: 'w', format: 'reveal', rating: 3, drill: 5 })
+  ]
+  const forced2 = forcedTodaySlugs(lines2, DAY)
+  assert(forced2.has('w'),
+    'слово обязано остаться forced и во втором, и в третьем уроке - одни дриллы настоящую отработку не заменяют')
+  group('forcedTodaySlugs: дриллы в следующих уроках не засчитываются как отработка - слово остаётся forced')
+}
+
+// T6: поле sense (индекс значения слова, lib/senses.ts) обязано пережить запись/чтение ndjson,
+// а строка без sense не должна обрастать полем на пустом месте.
+function senseRoundtripChecks(): void {
+  const withSense = gradedLine(3, { slug: 'a', sense: 2 })
+  const { lines: rt1 } = parseNdjson(toNdjson([withSense]))
+  assert(rt1.length === 1 && rt1[0].sense === 2, `sense=2 должен пережить ndjson roundtrip, получено ${JSON.stringify(rt1[0])}`)
+
+  const withoutSense = gradedLine(3, { slug: 'b' })
+  const raw = toNdjson([withoutSense])
+  assert(!JSON.parse(raw.trim()).hasOwnProperty('sense'), 'строка без sense не должна получать поле sense при записи')
+  const { lines: rt2 } = parseNdjson(raw)
+  assert(rt2.length === 1 && rt2[0].sense === undefined, `строка без sense обязана читаться без поля, получено ${JSON.stringify(rt2[0])}`)
+
+  group('sense: индекс значения переживает ndjson roundtrip, строка без sense поля не получает')
+}
+
 function main(): void {
   console.log('SRS journal: reviewsByDay/isGraded/isDayDone/floorDays (A7: показ знакомства не упражнение)')
   reviewsByDayChecks()
@@ -334,6 +431,9 @@ function main(): void {
   markDigestChecks()
   retentionByFormatChecks()
   knowledgeMissPassChecks()
+  drillChecks()
+  forcedTodaySlugsDrillChecks()
+  senseRoundtripChecks()
   console.log(`\nВсе проверки журнала пройдены (${passed} групп).`)
 }
 

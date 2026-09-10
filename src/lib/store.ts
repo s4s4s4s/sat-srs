@@ -7,6 +7,7 @@ import { cardView, fsrsFromKey, fsrsToFm, readingView, slugFromPath } from './ya
 import { questionView, PACE_SEC } from './practice'
 import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, isLogicCard, newBudgetTotal, dueCap, type Section, type TypeVerdict } from './scheduler'
 import { logicReviewLine } from './logic'
+import { drillLine } from './drill'
 import { buildCorpusIndex, corpusHits as corpusHitsOf } from './corpus'
 import { parseMetrics, isLeech, LEECH_STABILITY_DAYS, type MetricSnapshot } from './metrics'
 import { dayKey, isoLocal, setHomeOffset, endOfStudyDay, startOfStudyDay, calendarKey, addDaysKey } from './daytime'
@@ -439,7 +440,7 @@ export function leechTransition(leech: unknown, next: FsrsCard): 'set' | 'clear'
 }
 
 /** Оценка учебной единицы (карточка × навык): FSRS → запись в свой fsrs-блок файла (dirty) → строка журнала. */
-export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, verdict?: TypeVerdict, gaveUp?: boolean, answerMs?: number): Promise<{ card: FsrsCard; lineId: string }> {
+export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, verdict?: TypeVerdict, gaveUp?: boolean, answerMs?: number, sense?: number): Promise<{ card: FsrsCard; lineId: string }> {
   const rec = state.cards.find(c => c.path === item.view.path)
   if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${item.view.path}`)
   /* Замок с обеих сторон: `logLogicAnswer` отвергает не-логику, здесь отвергается логика.
@@ -507,6 +508,9 @@ export async function rateItem(item: StudyItem, grade: Grade, elapsedMs: number,
     // F20: чистое время ответа, без чтения вердикта/разбора - есть, только когда у показа
     // был свой момент ответа (submitObjective/giveUp/revealAnswer); знакомство его не даёт.
     ...(answerMs !== undefined ? { answer_ms: journalElapsedMs(answerMs, item.view.kind) } : {}),
+    // T6: значение слова, по которому спрашивали (lib/senses.ts) - 0 или отсутствие не пишется,
+    // главное значение и так подразумевается отсутствием поля
+    ...(sense !== undefined && sense > 0 ? { sense } : {}),
     synced: 0
   }
 
@@ -560,6 +564,27 @@ export async function markIntroduced(item: StudyItem): Promise<void> {
     slug: item.view.slug, skill: item.skill, format: 'intro', synced: 0
   }
   await pushJournal(line)
+}
+
+/**
+ * Отработка из плана дриллов (A12, drill.ts) - оценка, которая НЕ двигает FSRS-блок карточки.
+ *
+ * Внутри учебного дня знакомства слово получает не больше одной настоящей оценки (её ставит
+ * `rateItem` при первой отработке из New) - дальше план дриллов лишь проверяет, что слово
+ * закрепилось, тем же набором форматов, но без права переносить due/stability. Провал дрилла
+ * (Again) уже отработан раньше - окном «Подзабылого» в `pickTask` (scheduler.ts), которое
+ * возвращает слово через `rateItem`, а не сюда. Поэтому здесь нет ни `fsrsToFm`, ни `dirty`,
+ * ни `first_seen`, ни `putCardAndJournal` - только строка журнала, которую строит чистая
+ * `drillLine` (drill.ts), по образцу `logLogicAnswer` ниже.
+ */
+export async function rateDrill(item: StudyItem, grade: Grade, elapsedMs: number, format: Format, verdict?: TypeVerdict, gaveUp?: boolean, answerMs?: number, sense?: number): Promise<{ lineId: string }> {
+  const rec = state.cards.find(c => c.path === item.view.path)
+  if (!rec || rec.broken) throw new Error(`Карточка не найдена: ${item.view.path}`)
+  if (isLogicCard(item.view)) throw new Error(`Карточка логики не оценивается по FSRS: ${item.view.path}`)
+  const now = new Date()
+  const line = drillLine(item, grade, elapsedMs, format, now, verdict, gaveUp, answerMs, sense)
+  await pushJournal(line)
+  return { lineId: line.id }
 }
 
 /**

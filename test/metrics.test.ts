@@ -12,12 +12,12 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fsrs, generatorParameters, State, type Card as FsrsCard } from 'ts-fsrs'
-import type { CardView, JournalLine } from '../src/lib/types'
+import type { CardView, JournalLine, JournalRec } from '../src/lib/types'
 import {
   examReady, maturity, pace, reviewCount, retentionByInterval, retentionByLateness, retentionByLevel, retentionByDomain,
   planVsFact,
   speedStats, typoSplit, gaveUpShare, cuedStats, accuracyShare, isAccuracyShow, appendDailySnapshot, parseMetrics, buildMetricsSnapshot,
-  intervalBucketOf, enoughForPct, isLeechCard, orphanedLines,
+  intervalBucketOf, enoughForPct, isLeechCard, orphanedLines, senseShare,
   PRIMARY_DATE, EXAM_DATE, NEW_STOP_DATE, NEW_STOP_BY_SECTION, nextAttempt, TARGET_REVIEW, TARGET_MATURE, MIN_N_FOR_PCT,
   MATURE_STABILITY_DAYS, READY_R,
   capacityEstimate, gradesPerCard, CAPACITY_WINDOW_DAYS, RULE_GRADES
@@ -25,6 +25,9 @@ import {
 import { dayKey, addDaysKey } from '../src/lib/daytime'
 import { parseMd, cardView } from '../src/lib/yamlfm'
 import { parseNdjson, toNdjson } from '../src/lib/journal'
+// T6: у report.ts нет отдельного набора test:* (npm test закреплён на 19 наборах) - проверка
+// сводной строки по значениям живёт здесь, рядом с senseShare, которую эта строка использует.
+import { buildReport } from '../src/lib/report'
 
 let passed = 0
 function assert(cond: boolean, msg: string): void {
@@ -584,6 +587,74 @@ function m9CapacityChecks(): void {
   group('M9: capacityEstimate/gradesPerCard - ёмкость от измеренного темпа, pace несёт capacity/wordsAffordable/rulesAffordable')
 }
 
+// ---- A12: дрилл (строка отработки плана знакомства) не считается ни памятью, ни скоростью ---
+
+/**
+ * A12 (lib/drill.ts): строка дрилла несёт format/rating, но FSRS-карточку не двигала -
+ * она не «показ», по которому меряют память (retentionByInterval), скорость (speedStats)
+ * или точность (isAccuracyShow/accuracyShare), и не входит в темп занятий, которым меряют
+ * ёмкость (capacityEstimate.gradesPerStudyDay). Каждая проверка ниже - результат с дриллом
+ * в точности равен результату без него: дрилл добавлен, а агрегат не шелохнулся.
+ */
+function drillExclusionChecks(): void {
+  // retentionByInterval: дрилл со всеми признаками зрелого показа (prev_state Review,
+  // без typo/twin/cued) не должен попасть ни в один бакет
+  const baseInterval: JournalLine[] = [
+    rev({ slug: 'a', prev_state: State.Review, elapsed_days: 2, rating: 3 }),
+    rev({ slug: 'b', prev_state: State.Review, elapsed_days: 20, rating: 1 }),
+  ]
+  const withDrillInterval: JournalLine[] = [
+    ...baseInterval,
+    rev({ slug: 'd', prev_state: State.Review, elapsed_days: 5, rating: 3, drill: 1 }),
+  ]
+  assert(JSON.stringify(retentionByInterval(baseInterval)) === JSON.stringify(retentionByInterval(withDrillInterval)),
+    'retentionByInterval обязан игнорировать дрилл целиком (A12)')
+
+  // speedStats: дрилл несёт format и elapsed_ms, как обычный показ, но скорости не меряет
+  const baseSpeed: JournalLine[] = [
+    rev({ slug: 'a', format: 'type', elapsed_ms: 2000 }),
+    rev({ slug: 'b', format: 'mc', elapsed_ms: 5000 }),
+  ]
+  const withDrillSpeed: JournalLine[] = [
+    ...baseSpeed,
+    rev({ slug: 'c', format: 'type', elapsed_ms: 9000, rating: 3, drill: 1 }),
+  ]
+  assert(JSON.stringify(speedStats(baseSpeed)) === JSON.stringify(speedStats(withDrillSpeed)),
+    'speedStats обязан игнорировать дрилл целиком (A12)')
+
+  // isAccuracyShow/accuracyShare: дрилл с объективным correct не считается точностью
+  const baseAcc: JournalLine[] = [
+    rev({ slug: 'a', format: 'type', correct: true }),
+    rev({ slug: 'b', format: 'type', correct: false }),
+  ]
+  const withDrillAcc: JournalLine[] = [
+    ...baseAcc,
+    rev({ slug: 'c', format: 'type', correct: true, rating: 3, drill: 1 }),
+  ]
+  assert(!isAccuracyShow(rev({ format: 'type', correct: true, drill: 1 })), 'isAccuracyShow обязан отвергать дрилл (A12)')
+  assert(JSON.stringify(accuracyShare(baseAcc)) === JSON.stringify(accuracyShare(withDrillAcc)),
+    'accuracyShare обязан игнорировать дрилл целиком (A12)')
+
+  // capacityEstimate.gradesPerStudyDay: дрилл - не темп занятий, ёмкость не растёт от дриллов
+  const now = new Date(2026, 8, 15, 12, 0, 0)
+  const today = dayKey(now)
+  const baseCap: JournalLine[] = []
+  for (let i = 0; i < 10; i += 2) {
+    const day = addDaysKey(today, -i)
+    for (let k = 0; k < 10; k++) baseCap.push(rev({ day, rating: 3 }))
+  }
+  const until = new Date(now.getTime() + 14 * 86400_000)
+  const withDrillCap: JournalLine[] = [
+    ...baseCap,
+    rev({ day: today, rating: 3, drill: 1 }),
+    rev({ day: today, rating: 3, drill: 2 }),
+  ]
+  assert(JSON.stringify(capacityEstimate(baseCap, now, until, 14)) === JSON.stringify(capacityEstimate(withDrillCap, now, until, 14)),
+    'capacityEstimate обязан игнорировать дриллы при подсчёте gradesPerStudyDay (A12)')
+
+  group('A12: дрилл не считается ни памятью (retentionByInterval), ни скоростью (speedStats), ни точностью (isAccuracyShow/accuracyShare), ни темпом (capacityEstimate)')
+}
+
 // ---- цель: Review + зрелые ------------------------------------------------
 
 function goalChecks(): void {
@@ -709,6 +780,53 @@ function orphanedLinesChecks(): void {
   group('orphanedLines: только review-строки в счёте, переработанные пиявки уходят в reworked, а не в slugs, чистый журнал даёт ноль')
 }
 
+// ---- senseShare (T6) --------------------------------------------------------
+
+function senseShareChecks(): void {
+  const j: JournalLine[] = [
+    rev({ slug: 'a', rating: 3 }),                               // без sense - главное
+    rev({ slug: 'a', sense: 0, rating: 3 }),                     // sense 0 - тоже главное (не отличается от отсутствия)
+    rev({ slug: 'a', sense: 1, rating: 3 }),                     // неглавное, успех
+    rev({ slug: 'a', sense: 2, rating: 1 }),                     // неглавное, провал
+    rev({ slug: 'a', rating: 1 }),                                // главное, провал
+    rev({ slug: 'a', sense: 1, format: 'intro' }),                // intro - вне счёта, даже с sense
+    rev({ slug: 'a', sense: 1, format: 'prep' }),                 // prep - вне счёта
+    rev({ slug: 'a', sense: 1, kind: 'grammar', rating: 3 }),     // не словарь - вне счёта
+    rev({ slug: 'a', sense: 1, type: 'session', dur_ms: 60000 })  // не review - вне счёта
+  ]
+  const ss = senseShare(j)
+  assert(ss.total === 5, `total (строк, которые могли спросить значение) ожидалось 5, получено ${ss.total}`)
+  assert(ss.withSense === 2, `withSense (sense > 0) ожидалось 2, получено ${ss.withSense}`)
+  assert(ss.failedMain === 1, `failedMain (провал по главному) ожидалось 1, получено ${ss.failedMain}`)
+  assert(ss.failedOther === 1, `failedOther (провал по неглавному) ожидалось 1, получено ${ss.failedOther}`)
+
+  const empty = senseShare([])
+  assert(empty.total === 0 && empty.withSense === 0 && empty.failedMain === 0 && empty.failedOther === 0,
+    `пустой журнал должен дать все нули, получено ${JSON.stringify(empty)}`)
+
+  group('senseShare: строки без sense и с sense=0 - главное значение, intro/prep/не-словарь/не-review вне счёта, провалы по главному и по другим считаются раздельно')
+}
+
+// ---- сводная строка о значениях в отчёте (T6, report.ts) --------------------
+
+function reportSenseShareChecks(): void {
+  const journalLine = (o: Partial<JournalRec> = {}): JournalRec => ({
+    id: Math.random().toString(36).slice(2), v: 1, type: 'review', ts: '2026-09-01T10:00:00+03:00',
+    ms: 0, day: '2026-09-01', slug: 'a', format: 'mc', skill: 'recall', rating: 3, synced: 1, ...o
+  })
+
+  const withVocabReviews: JournalRec[] = [journalLine(), journalLine({ id: 'b', sense: 1 })]
+  const withReport = buildReport([], withVocabReviews, [], new Date('2026-09-02T12:00:00+03:00'))
+  assert(withReport.includes('Значения помимо главного'),
+    'при review-строках словаря в журнале сводная строка о значениях обязана присутствовать')
+
+  const emptyReport = buildReport([], [], [], new Date('2026-09-02T12:00:00+03:00'))
+  assert(!emptyReport.includes('Значения помимо главного'),
+    'при пустом журнале сводной строки о значениях быть не должно (total = 0)')
+
+  group('buildReport: сводная строка о значениях появляется при review-строках словаря и пропадает при пустом журнале')
+}
+
 // ---- живая колода (необязательно) ------------------------------------------
 
 const DECK_DIR = 'C:/Users/sasha/dev/sat-deck/Учёба/Карточки'
@@ -768,8 +886,11 @@ function main(): void {
   paceChecks()
   nextAttemptMetricChecks()
   m9CapacityChecks()
+  drillExclusionChecks()
   snapshotChecks()
   orphanedLinesChecks()
+  senseShareChecks()
+  reportSenseShareChecks()
   liveDeckOrphanCheck()
   console.log(`\nВсе проверки метрик пройдены (${passed} групп).`)
 }

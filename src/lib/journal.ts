@@ -201,6 +201,15 @@ export function isGraded(l: JournalLine): boolean {
   return l.type === 'review' && typeof l.rating === 'number'
 }
 
+/** Строка дрилла (A12, lib/drill.ts): отработка плана знакомства, format mc/type/reveal,
+ *  rating есть, но FSRS-карточка этой строкой не двигалась (drillLine, не rateItem).
+ *  Дрилл считается там, где меряется РАБОТА (isGraded, reviewsByDay остаются как есть),
+ *  и исключается там, где меряется ПАМЯТЬ или СКОРОСТЬ (retentionByFormat, isKnowledgePass
+ *  здесь; retentionByInterval/speedStats/isAccuracyShow/capacityEstimate в metrics.ts). */
+export function isDrill(l: JournalLine): boolean {
+  return l.type === 'review' && typeof l.drill === 'number'
+}
+
 /** Оценок (упражнений) по дням, основа нижнего порога дня.
  *  Считаем оценки, не показы: окно знакомства рейтинга не даёт (A7) и день не закрывает. */
 export function reviewsByDay(lines: JournalLine[]): Map<string, number> {
@@ -405,7 +414,7 @@ export function retentionByFormat(lines: JournalLine[], today: string = dayKey()
   const acc: Record<string, { pass: number; total: number }> = {}
   for (const l of lines) {
     if (l.type !== 'review' || !l.day || l.day < from) continue
-    if (l.prev_state !== State.Review || l.typo || l.twin || l.cued) continue
+    if (l.prev_state !== State.Review || l.typo || l.twin || l.cued || isDrill(l)) continue // A12: дрилл не про память
     const f = l.format ?? 'reveal'
     if (f === 'intro') continue
     acc[f] ??= { pass: 0, total: 0 }
@@ -438,7 +447,7 @@ export function isKnowledgeMiss(l: JournalLine): boolean {
  * и в «Закрытии пробелов» (`report.ts`) до этой правки.
  */
 export function isKnowledgePass(l: JournalLine): boolean {
-  if (l.type !== 'review' || l.cued) return false
+  if (l.type !== 'review' || l.cued || isDrill(l)) return false // A12: дрилл не про память
   if (typeof l.correct === 'boolean') return l.correct || !!l.typo || !!l.twin
   return (l.rating ?? 0) > 1
 }
@@ -525,6 +534,9 @@ export function forcedTodaySlugs(lines: JournalLine[], today: string = dayKey())
     if ((l.skill ?? 'recall') !== 'recall' || !l.slug) continue
     // вид карточки пишется в строку, только если он не vocab (см. rateItem в store.ts)
     if ((l.kind ?? 'vocab') !== 'vocab') continue
+    // A12: дрилл - отработка плана знакомства В ТОТ ЖЕ день, не следующий урок слова;
+    // слово всё равно обязано вернуться forced-ом, поэтому дрилл не считается laterPractice.
+    if (l.drill) continue
     // «Уже знаю это слово»: окно закрыто оценкой, знакомства не было и отработка не нужна
     if (l.format === 'intro' && l.rating === Rating.Easy) continue
     const isIntro = l.format === 'intro' || l.prev_state === State.New

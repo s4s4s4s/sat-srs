@@ -568,15 +568,32 @@ function logicScreenChecks(): void {
  * ответа (reveal) - иначе половина показов слова молчит об остальных значениях. Проверка
  * читает исходник текстом (screenSource), как и остальные структурные проверки этого файла.
  */
+/**
+ * T6: ротация значений слова. Показ «Ещё значения» в обеих ветках карточки (intro и reveal)
+ * обязан идти через senseDisplay (src/lib/senses.ts) - единый источник asked/rest, а не через
+ * прямой перебор card.other_senses: иначе после ответа список показывал бы ВСЕ значения
+ * подряд, не отличая спрошенное (asked) от остальных (rest), и рассинхронизировался бы с
+ * реально проверенным значением при ротации.
+ */
 function otherSensesScreenChecks(): void {
   const src = screenSource('Review.tsx')
 
-  assert(src.includes('card.other_senses'), 'Review.tsx обязан читать card.other_senses')
+  assert(src.includes('senseDisplay('), 'Review.tsx обязан строить «Ещё значения» через senseDisplay')
+  assert(!src.includes('card.other_senses'),
+    'Review.tsx не обязан больше перебирать card.other_senses напрямую - senseDisplay уже отдаёт полный список (T6)')
 
   const sensesBlocks = (src.match(/className="rev-senses"/g) ?? []).length
   assert(sensesBlocks === 2, `Review.tsx обязан показывать блок .rev-senses ровно в двух ветках (intro и reveal), найдено ${sensesBlocks}`)
 
-  group('other_senses: показ «Ещё значения» стоит в обеих ветках карточки Review.tsx (intro и reveal)')
+  const restBlocks = (src.match(/display\.rest\.map/g) ?? []).length
+  assert(restBlocks === 2, `оба блока .rev-senses обязаны рендерить display.rest, найдено ${restBlocks}`)
+
+  assert(src.includes('rev-sense-asked'),
+    'спрошенное значение (не главное) обязано быть помечено отдельным классом rev-sense-asked')
+  assert(src.includes("task.sense > 0 ? ' rev-sense-asked' : ''"),
+    'класс rev-sense-asked обязан ставиться по task.sense, а не безусловно (иначе главное значение тоже красилось бы)')
+
+  group('other_senses: показ «Ещё значения» в обеих ветках (intro и reveal) идёт через senseDisplay, спрошенное значение помечено rev-sense-asked')
 }
 
 function main(): void {

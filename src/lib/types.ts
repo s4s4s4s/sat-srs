@@ -10,11 +10,19 @@ export interface CardRec {
   broken?: number       // 1 = frontmatter не разобрался; карточку не трогаем и не пишем
 }
 
-/** Одно из значений слова, помимо основного (meaning_en/meaning_ru) - fm.other_senses. */
+/**
+ * Одно из значений слова, помимо основного (meaning_en/meaning_ru) - fm.other_senses.
+ * `contexts`/`contextsRu` - предложения-примеры именно ЭТОГО значения (T5): на экзамене
+ * слово спрашивается в любом значении, и у каждого появляются свои примеры, по которым
+ * его можно проверить отдельно от главного. Пусто, если тьютор их ещё не завёл - тогда
+ * значение не участвует в ротации показа (см. senseSlots в lib/senses.ts).
+ */
 export interface Sense {
   pos: string
   en: string
   ru: string
+  contexts: string[]
+  contextsRu: string[]
 }
 
 /** Типизированное представление карточки для UI/планировщика. */
@@ -148,6 +156,12 @@ export interface StudyItem {
   view: CardView
   skill: Skill
   fsrs: FsrsCard
+  /* A12 (10.09.2026): номер дрилла плана знакомства (lib/drill.ts), 1..DRILL_REPS-1 - единица
+     стоит в очереди как ОТРАБОТКА, не как обычный повтор: rateItem её FSRS не двигает, пишется
+     только строка журнала (drillLine). Нет поля - обычная единица очереди, план дриллов живёт
+     в самой единице (не во внешнем ref экрана), потому что очередь пересобирается между
+     показами и внешний счётчик потерял бы место в плане. */
+  drill?: number
 }
 
 /** Строка журнала ревью (ndjson в vault). */
@@ -172,6 +186,10 @@ export interface JournalLine {
   day: string  // локальный день с rollover 04:00, YYYY-MM-DD — фиксируется при записи
   // review:
   slug?: string
+  /* T5: индекс значения, по которому спрашивали (см. lib/senses.ts). 1.. = other_senses[i-1],
+     нет поля = главное значение карточки (0 не пишется - это дефолт старых строк и новых
+     показов без ротации значений). */
+  sense?: number
   skill?: string       // recall | prep (отсутствует в старых строках = recall); у practice — навык вопроса (fm.skill)
   format?: string      // intro | reveal | mc | type | prep
   correct?: boolean    // объективный результат (mc/type/prep, а также practice); у reveal отсутствует
@@ -254,6 +272,13 @@ export interface JournalLine {
      темпа для разреза practiceBreakdown, добавлено поле, старые строки без него читаются
      как "в темпе" (правило D3: только добавление полей). */
   slow?: boolean
+  /* A12: строка отработки плана знакомства (lib/drill.ts) - format mc/type/reveal, rating
+     есть, но FSRS-блок карточки этой строкой НЕ двигался (drillLine, не rateItem). Полей
+     new_state/due/stability/scheduled_days/elapsed_days у такой строки нет намеренно: они
+     подразумевали бы движение расписания, которого не было - счётчики, читающие их напрямую
+     (а не через isGraded/isMatureShow), обязаны сначала увидеть это поле. Номер дрилла
+     1..DRILL_REPS-1, первая отработка слова (не дрилл) поля не несёт. */
+  drill?: number
 }
 
 export interface JournalRec extends JournalLine {

@@ -183,7 +183,7 @@ function meaningTwinChecks(): void {
   // значению, но её other_senses содержит noun с тем же значением: должны совпасть как noun.
   const cardA = card('assayA', 'проверка, оценка', 'noun')
   const cardB = card('attemptB', 'пытаться', 'verb', {
-    other_senses: [{ pos: 'noun', en: 'a test or evaluation', ru: 'проверка, оценка' }]
+    other_senses: [{ pos: 'noun', en: 'a test or evaluation', ru: 'проверка, оценка', contexts: [], contextsRu: [] }]
   })
   assert(sharesMeaning(cardA, cardB) && sharesMeaning(cardB, cardA),
     'значение из other_senses другой карточки обязано участвовать в сравнении наравне с основным (в обе стороны)')
@@ -192,7 +192,7 @@ function meaningTwinChecks(): void {
   // Та же пара, но other_senses с другой частью речи (adj вместо noun) - не двойники: часть
   // речи по-прежнему должна совпадать у самой пары значений, а не у карточки целиком.
   const cardC = card('attemptC', 'пытаться', 'verb', {
-    other_senses: [{ pos: 'adj', en: 'a test or evaluation', ru: 'проверка, оценка' }]
+    other_senses: [{ pos: 'adj', en: 'a test or evaluation', ru: 'проверка, оценка', contexts: [], contextsRu: [] }]
   })
   assert(!sharesMeaning(cardA, cardC) && !sharesMeaning(cardC, cardA),
     'общий ru-ключ при несовпадающей части речи (adj против noun) не должен давать двойника')

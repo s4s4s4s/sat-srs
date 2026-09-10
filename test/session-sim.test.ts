@@ -28,8 +28,9 @@ import {
   WARMUP_SHOWS, warmupShows, CLOSING_SHOWS, closingShow, type TypeVerdict
 } from '../src/lib/scheduler'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, objectiveOutcome, INTRO_BATCH_MAX, INTRO_GAP_FLOOR_MS, REINTRO_PER_LESSON, type OrderCtx } from '../src/lib/session'
-import { screenSource } from './screen-source'
+import { callArgs, screenSource } from './screen-source'
 import { lessonProgress, estimateShowsLeft, DRILL_PER_SESSION, type ProgressInput } from '../src/lib/progress'
+import { DRILL_REPS, DRILL_GAP, startsDrillPlan, afterDrill, drillInsertAt } from '../src/lib/drill'
 import { endOfStudyDay, dayKey, addDaysKey } from '../src/lib/daytime'
 import { sessionAccuracy, matureRetention, forcedTodaySlugs, CARD_TIME_CAP_MS, liveMarkedLemmas } from '../src/lib/journal'
 import { isLeech, LEECH_REPS, LEECH_STABILITY_DAYS, SECTION_LABELS, speedStats } from '../src/lib/metrics'
@@ -99,6 +100,8 @@ interface Show {
      срока: она мерила ВСЕ показы полом и молчала там, где урок сокращал разрыв, имея
      чем его выдержать. */
   byFloor: boolean
+  /** A12: номер дрилла плана знакомства (`item.drill` на момент показа), см. `lib/drill.ts`. */
+  drill?: number
 }
 
 interface DayOpts {
@@ -115,6 +118,10 @@ interface DayOpts {
   /** WS5b: цель захода, зажимающая знаменатель полоски (ProgressInput.goal); по умолчанию
    *  Infinity - прежнее поведение симуляции, не зависящее от цели */
   goal?: number
+  /** A12: слаги, которым Again ставится РОВНО ОДИН раз - на их первом же показе дрилла
+   *  (`item.drill` уже задан), а не на первой настоящей отработке. Дальше слово отвечает
+   *  верно, план дриллов продолжается с той же ступени (`afterDrill` держит ступень на Again). */
+  drillFailOnce?: Set<string>
 }
 
 /**
@@ -186,6 +193,8 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
     const shownTimes = new Map<string, number>()
     const drilled = new Map<string, number>()
     const sessionFails = new Map<string, number>()
+    // A12: слова из opts.drillFailOnce, которым Again уже поставлен на дрилле в этом уроке
+    const drillFailedOnce = new Set<string>()
     const deferred = new Set<string>()
     let lastPath: string | null = null
     let lastWasIntro = false
@@ -308,6 +317,15 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       return q
     }
 
+    // A12: длина остатка очереди ПОСЛЕ снятия текущей карточки и отсева deferred - ровно то,
+    // что advance() считает своим `rest` перед вставкой next. drillInsertAt(...) от него
+    // и зависит: разрыв держится в ЧУЖИХ экранах хвоста, а не в размере всей очереди.
+    function restLenAfter(q: StudyItem[]): number {
+      let rest = q.slice(1)
+      if (deferred.size) rest = rest.filter(i => !deferred.has(i.view.path))
+      return rest.length
+    }
+
     function advance(q: StudyItem[], next: StudyItem | null, insertAt?: number): StudyItem[] {
       let rest = q.slice(1)
       if (deferred.size) rest = rest.filter(i => !deferred.has(i.view.path))
@@ -350,7 +368,7 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
       bars.push(barNow(queue))
       shows.push({
         path: head.view.path, format: fmt, skill: head.skill, graded: null, at: now, key: itemKey(head),
-        reps: head.fsrs.reps, wasNew: head.fsrs.state === State.New, byFloor: lastByFloor
+        reps: head.fsrs.reps, wasNew: head.fsrs.state === State.New, byFloor: lastByFloor, drill: head.drill
       })
       const show = shows[shows.length - 1]
       now += screenMs
@@ -376,24 +394,41 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
         }
       }
 
-      const willFail = failWords.has(head.view.word)
+      /* A12: слаги из opts.drillFailOnce получают Again РОВНО ОДИН раз, и только на дрилле
+         (`head.drill` задан) - на первой настоящей отработке слово всегда отвечает как обычно,
+         дальше план должен идти своим ходом, а не падать на каждом шаге до C2. */
+      const drillFailNow = (opts.drillFailOnce?.has(head.view.word) ?? false) &&
+        head.drill !== undefined && !drillFailedOnce.has(head.view.word)
+      if (drillFailNow) drillFailedOnce.add(head.view.word)
+      const willFail = failWords.has(head.view.word) || drillFailNow
       const g: Grade = known ? Rating.Easy : willFail ? Rating.Again : Rating.Good
       show.graded = g
       // дневная норма: слово, получившее оценку из New, потрачено на весь день, а не на урок
       if (head.fsrs.state === State.New) ratedNewToday.add(head.view.slug)
 
-      let rated = f.next(head.fsrs, new Date(now), g).card
-      // A1 (зеркалит store.rateItem): слово, введённое сегодня, не выходит в Review внутри дня —
-      // держим в Learning со сроком на следующий учебный день. Без этого мок расходился с
-      // приложением: слова уезжали в Review и выпадали из обязательной отработки.
-      const introToday = introAt.has(head.view.slug)
-      const wasIntroState = head.fsrs.state !== State.Review
-      if (rated.state === State.Review && wasIntroState && introToday) {
-        rated = { ...rated, state: State.Learning, due: endOfStudyDay(new Date(now)) }
+      /* A12: единица плана дриллов (`head.drill` задан) НЕ двигает FSRS-блок карточки на
+         обычной оценке - это и есть `drillLine` вместо `rateItem` (см. drill.ts). Исключение -
+         Again: провал на дрилле остаётся НАСТОЯЩЕЙ оценкой (окно «Подзабылось» через lapsed,
+         второй такой провал решает C2), поэтому расписание он двигает как всегда. Первая
+         отработка New-слова (`head.drill` ещё не задан) - всегда настоящая оценка, план
+         дриллов лишь откроется следом. */
+      const item: StudyItem = { view: head.view, skill: head.skill, fsrs: head.fsrs, drill: head.drill }
+      const isRateDrill = head.drill !== undefined && g !== Rating.Again
+      let rated = head.view.fsrs
+      if (!isRateDrill) {
+        rated = f.next(head.fsrs, new Date(now), g).card
+        // A1 (зеркалит store.rateItem): слово, введённое сегодня, не выходит в Review внутри дня -
+        // держим в Learning со сроком на следующий учебный день. Без этого мок расходился с
+        // приложением: слова уезжали в Review и выпадали из обязательной отработки.
+        const introToday = introAt.has(head.view.slug)
+        const wasIntroState = head.fsrs.state !== State.Review
+        if (rated.state === State.Review && wasIntroState && introToday) {
+          rated = { ...rated, state: State.Learning, due: endOfStudyDay(new Date(now)) }
+        }
+        // зеркалит store.rateItem: упражнение не возвращается в тот же учебный день
+        rated = holdExerciseToNextDay(rated, new Date(now), head.view.kind)
+        head.view.fsrs = rated // зеркалит store.rateItem: обновление состояния карточки в колоде
       }
-      // зеркалит store.rateItem: упражнение не возвращается в тот же учебный день
-      rated = holdExerciseToNextDay(rated, new Date(now), head.view.kind)
-      head.view.fsrs = rated // зеркалит store.rateItem: обновление состояния карточки в колоде
       sinceIntro++
       batchIntros = 0
       drilled.set(itemKey(head), (drilled.get(itemKey(head)) ?? 0) + 1)
@@ -418,7 +453,19 @@ function runDay(deck: CardView[], opts: DayOpts): DayRun {
         lapsed.delete(itemKey(head))
       }
 
-      queue = advance(queue, { view: head.view, skill: head.skill, fsrs: head.view.fsrs })
+      /* A12: план дриллов решает, вернётся ли слово ещё раз, независимо от срока FSRS -
+         `startsDrillPlan` открывает план первой настоящей отработкой New-слова, `afterDrill`
+         держит его дальше (или закрывает `null`, когда DRILL_REPS набраны). Плана нет - слово
+         идёт обычным путём advance(), тем же, что и раньше A12. */
+      const startsPlan = startsDrillPlan(item, head.fsrs.state, fmt)
+      const next = (startsPlan || head.drill !== undefined)
+        ? afterDrill({ ...item, fsrs: head.view.fsrs }, g)
+        : null
+      if (next) {
+        queue = advance(queue, next, drillInsertAt(restLenAfter(queue)))
+      } else {
+        queue = advance(queue, { view: head.view, skill: head.skill, fsrs: head.view.fsrs })
+      }
     }
     if (guard >= 2000) throw new Error('сессия не сошлась за 2000 шагов — вероятно, зацикливание')
     lessons.push(shows)
@@ -567,10 +614,65 @@ function checkC2(shows: Show[], tag: string): void {
   })
 }
 
+/**
+ * A12 - слово, введённое в ЭТОМ уроке (интро и `wasNew`), обязано получить DRILL_REPS
+ * оценённых не-интро показов (первую настоящую отработку и дриллы `lib/drill.ts` вместе).
+ *
+ * Недобор - законен ровно в двух случаях, и оба уже разобраны выше по коду: слово выбыло
+ * по C2 (второй провал решил его судьбу раньше, чем план дриллов) или урок кончился раньше,
+ * чем план успел закрыться - материала на разделитель A2/A3 для ещё одного дрилла не осталось.
+ * Во всех остальных случаях недобор - баг: план дриллов либо не открылся, либо потерялся.
+ *
+ * Граница «урок кончился раньше» считается по тому, что дрилл держит, а не на глаз. Держат его
+ * ровно две вещи, и обе обязаны быть пройдены, иначе законного экрана у дрилла не было вовсе:
+ *   - МЕСТО В ОЧЕРЕДИ: `drillInsertAt` ставит дрилл на позицию min(остаток, DRILL_GAP), то есть
+ *     между показом слова и его дриллом проходят DRILL_GAP чужих экранов - после показа с
+ *     индексом L самый ранний возможный экран дрилла - L + DRILL_GAP + 1;
+ *   - РАЗРЫВ A2: `gapPassed` (session.ts) пропускает единицу не раньше аварийного пола
+ *     MIN_SHOW_GAP_FLOOR_MS от прошлого показа СЛОВА - это последняя ступень лестницы `proceed`,
+ *     и урок кончается ровно тогда, когда даже она никого не пропускает.
+ * Прежний допуск мерил только первое, и мерил на один экран короче (`lastIdx >= shows.length -
+ * DRILL_GAP`), а разрыв не мерил вовсе - экраны и разрыв живут в разных единицах, и на коротком
+ * экране (S11: 5 c) DRILL_GAP экранов не выбирают и половины пола. Из-за этого как баг ловились
+ * два законных случая: слово с последним показом ровно за DRILL_GAP экранов до конца урока
+ * (репро: rand#78, показ #7 из 10 при DRILL_GAP = 3) и слово, чей разрыв к концу урока ещё не
+ * истёк (репро: S11, показ #10 из 14 при экране 5 c - к концу урока прошло 25 c из 30).
+ */
+function checkDrills(shows: Show[], tag: string): void {
+  /* «Уже знаю это слово» (A7-ter): окно знакомства закрыто оценкой Easy, оно само и есть
+     оценённый показ, слово ушло в Learning на завтра - отработок ему в этом уроке не положено
+     вовсе (тот же отсев, что в checkA6), а значит и плана дриллов у него нет: `startsDrillPlan`
+     открывает план только настоящей отработкой формата не-intro. */
+  const introWords = new Set(
+    shows.filter(s => s.format === 'intro' && s.wasNew && s.graded === null).map(s => s.path))
+  const failsByPath = new Map<string, number>()
+  for (const s of shows) {
+    if (s.graded === Rating.Again) failsByPath.set(s.path, (failsByPath.get(s.path) ?? 0) + 1)
+  }
+  for (const path of introWords) {
+    const reps = shows.filter(s => s.path === path && s.format !== 'intro' && s.graded !== null).length
+    if (reps >= DRILL_REPS) continue
+    if ((failsByPath.get(path) ?? 0) >= 2) continue   // C2: слово выбыло провалом, не концом урока
+    let lastIdx = -1
+    shows.forEach((s, i) => { if (s.path === path) lastIdx = i })
+    const screensAfter = shows.length - 1 - lastIdx
+    // экран урока в симуляции всегда одной длины (`screenMs` в runDay), поэтому шаг берём из
+    // самих показов: конец урока - момент, когда вышел бы следующий экран после последнего
+    const screenMs = shows.length >= 2 ? shows[1].at - shows[0].at : 0
+    const msAfter = shows[shows.length - 1].at + screenMs - shows[lastIdx].at
+    if (screensAfter <= DRILL_GAP || msAfter < MIN_SHOW_GAP_FLOOR_MS) continue
+    assert(false,
+      `[${tag}] A12 нарушено: слово ${path} получило ${reps} отработок(-у) из DRILL_REPS=${DRILL_REPS}, ` +
+      `последний показ #${lastIdx + 1} из ${shows.length} - после него урок дал ${screensAfter} экранов ` +
+      `(> DRILL_GAP=${DRILL_GAP}) и ${msAfter / 1000} c (>= пол ${MIN_SHOW_GAP_FLOOR_MS / 1000} c), ` +
+      `дриллу было и куда встать, и когда выйти, и C2 не при чём.\n  ${fmtSeq(shows)}`)
+  }
+}
+
 function checkAll(shows: Show[], tag: string): number {
   const byFloor = checkA2(shows, tag)
   checkA3(shows, tag); checkA4(shows, tag)
-  checkA6(shows, tag); checkC1(shows, tag); checkC2(shows, tag)
+  checkA6(shows, tag); checkC1(shows, tag); checkC2(shows, tag); checkDrills(shows, tag)
   return byFloor
 }
 
@@ -725,10 +827,25 @@ function dontKnowChecks(): void {
 
   /* F20: rateItem обязан получать чистое время ответа (answeredMs.current), а не только
      сырое elapsedMs до кнопки «Дальше» - иначе поле answer_ms в журнале никогда не
-     заполнится, и порог «медленно» продолжит калиброваться по грязному времени. */
-  const rateCall = источник.slice(источник.indexOf('async function grade('), источник.indexOf('async function grade(') + 4000)
-  assert(/rateItem\([^)]*answeredMs\.current/.test(rateCall),
-    'F20: вызов rateItem в grade() обязан передавать answeredMs.current седьмым аргументом')
+     заполнится, и порог «медленно» продолжит калиброваться по грязному времени. То же и у
+     rateDrill (A12): дрилл не двигает FSRS, но строку журнала пишет по тем же полям.
+
+     Окно поиска - ВСЁ тело grade(), от заголовка до следующего метода экрана. Прежняя
+     проверка резала первые 4000 символов и после D4 (ветка дрилла) перестала доставать до
+     вызова: проверка молча смотрела в пустоту, оставаясь зелёной. */
+  const gradeStart = источник.indexOf('async function grade(')
+  assert(gradeStart > 0, 'F20: в Review.tsx не найдена grade()')
+  const gradeEnd = источник.indexOf('\n  async function ', gradeStart + 1)
+  assert(gradeEnd > gradeStart, 'F20: не найден конец тела grade() - следующий метод экрана')
+  const gradeBody = источник.slice(gradeStart, gradeEnd)
+  for (const [fn, place] of [['rateItem', 'обычная оценка'], ['rateDrill', 'дрилл A12']]) {
+    const args = callArgs(gradeBody, fn)
+    assert(args !== null, `F20: в теле grade() не найден вызов ${fn} (${place})`)
+    assert((args as string[])[6]?.includes('answeredMs.current') ?? false,
+      `F20: вызов ${fn} в grade() обязан передавать answeredMs.current седьмым аргументом, получили «${(args as string[])[6] ?? '-'}»`)
+    assert((args as string[])[7]?.includes('task.sense') ?? false,
+      `F20: вызов ${fn} в grade() обязан передавать task.sense восьмым аргументом, получили «${(args as string[])[7] ?? '-'}»`)
+  }
 
   /* C12: кнопка «подсказка» у формата type рендерится только после первой неверной
      попытки и только пока подсказка не раскрыта - иначе она либо гадание с самого
@@ -2836,6 +2953,7 @@ function main(): void {
   closingShowChecks()
   ladderOrderChecks()
   requeueDropChecks()
+  drillPlanChecks()
   introFloorChecks()
   knownWordChecks()
   logicSectionChecks()
@@ -2866,6 +2984,155 @@ function main(): void {
 }
 
 /**
+ * A12 (план дриллов знакомства) на уровне УРОКА, а не отдельной функции: `lib/drill.ts`
+ * проверяется своим набором (`npm run test:drill`), здесь - что урок целиком доводит план
+ * до конца и что дриллы не подменяют собой настоящую оценку.
+ *
+ * Инвариант A12 сам по себе стережёт `checkDrills` во всех сценариях и в рандомизированном
+ * батче; отдельными стендами берутся случаи, которые батч не покрывает по построению:
+ * плотная колода (30 повторов + 10 новых), тонкая (5 + 10), вырожденная (одно новое слово
+ * без повторов), провал на дрилле и возврат слова дриллом там, где срок FSRS его не вернул.
+ */
+function drillPlanChecks(): void {
+  /** Оценённые НЕ-интро показы слова: первая настоящая отработка плюс дриллы. */
+  const repsOf = (shows: Show[], path: string): number =>
+    shows.filter(s => s.path === path && s.format !== 'intro' && s.graded !== null).length
+
+  /** Слова, введённые этим уроком окном знакомства (не «Уже знаю»: то окно само и есть оценка). */
+  const introducedIn = (shows: Show[]): string[] =>
+    [...new Set(shows.filter(s => s.format === 'intro' && s.wasNew && s.graded === null).map(s => s.path))]
+
+  /*
+   * Слова, введённые в ПЕРВОЙ половине урока: только с них можно спрашивать закрытый план.
+   * Дальше половины начинается хвост, где план законно не успевает: между отработками одного
+   * слова обязаны пройти DRILL_GAP чужих экранов и разрыв A2, поэтому знакомству нужно
+   * (DRILL_REPS - 1) * (DRILL_GAP + 1) экранов запаса, и урок их уже не даёт. Хвост стережёт
+   * `checkDrills` (он и мерит эту границу точно), здесь - середина урока, где отговорок нет.
+   */
+  const introducedEarly = (shows: Show[]): string[] => {
+    const первыйПоказ = new Map<string, number>()
+    shows.forEach((s, i) => { if (!первыйПоказ.has(s.path)) первыйПоказ.set(s.path, i) })
+    return introducedIn(shows).filter(p => (первыйПоказ.get(p) ?? 0) * 2 < shows.length)
+  }
+
+  // 1. Плотная колода: 30 повторов и 10 новых. Материала хватает на любой разрыв, поэтому
+  //    недобор здесь не «урок кончился», а потерянный план: каждое введённое слово обязано
+  //    получить НЕ МЕНЬШЕ DRILL_REPS отработок. Больше - законно: на очереди такой длины
+  //    работает и обычный возврат сроком (`shouldRequeue`), и слово приходит сверх плана.
+  const плотная = [...Array.from({ length: 30 }, (_, i) => reviewCard(`d30_${i}`, 1 + (i % 3))),
+                   ...Array.from({ length: 10 }, (_, i) => newCard(`dn10_${i}`, 1 + (i % 3)))]
+  const плотныйПрогон = runDay(плотная, { budget: 10, introLimit: 10, dayNew: 10 })
+  const плотныйУрок = плотныйПрогон.lessons[0]
+  checkAll(плотныйУрок, 'A12/30+10')
+  checkProgress(плотныйПрогон.bars[0], 'A12/30+10')
+  const введённыеПлотно = introducedEarly(плотныйУрок)
+  assert(введённыеПлотно.length >= 5,
+    `A12/30+10: урок ввёл всего ${введённыеПлотно.length} слов - стенд перестал проверять план дриллов`)
+  for (const path of введённыеПлотно) {
+    assert(repsOf(плотныйУрок, path) >= DRILL_REPS,
+      `A12/30+10: ${path} получило ${repsOf(плотныйУрок, path)} отработок из DRILL_REPS=${DRILL_REPS}\n  ${fmtSeq(плотныйУрок)}`)
+  }
+
+  // 2. Тонкая колода: 5 повторов и 10 новых. Держит её резерв хвоста в buildQueue (drill.test.ts:
+  //    buildQueueReserve*): очередь обязана оставить место дриллам, а не забить весь урок
+  //    знакомствами, после которых отрабатывать введённое нечем.
+  const тонкая = [...Array.from({ length: 5 }, (_, i) => reviewCard(`d5_${i}`, 1 + (i % 3))),
+                  ...Array.from({ length: 10 }, (_, i) => newCard(`tn10_${i}`, 1 + (i % 3)))]
+  const тонкийПрогон = runDay(тонкая, { budget: 10, introLimit: 10, dayNew: 10 })
+  const тонкийУрок = тонкийПрогон.lessons[0]
+  checkAll(тонкийУрок, 'A12/5+10')
+  checkProgress(тонкийПрогон.bars[0], 'A12/5+10')
+  const введённыеТонко = introducedEarly(тонкийУрок)
+  assert(введённыеТонко.length >= 3,
+    `A12/5+10: урок ввёл всего ${введённыеТонко.length} слов - на такой колоде это уже не проверка резерва хвоста`)
+  const недобор = введённыеТонко.filter(p => repsOf(тонкийУрок, p) < DRILL_REPS)
+  assert(недобор.length === 0,
+    `A12/5+10: план дриллов не закрыт у ${недобор.join(', ')}\n  ${fmtSeq(тонкийУрок)}`)
+
+  // 3. Вырожденный случай: одно новое слово и ни одного повтора. Разделителя A6 нет, знакомство
+  //    не выдаётся вовсе - а значит и плана дриллов не открывается: отработок ноль, и это НЕ
+  //    нарушение A12, а его предпосылка (план живёт с первой настоящей отработки).
+  const одинокая = runSession([newCard('d_alone')], { budget: 3, introLimit: 3 })
+  checkAll(одинокая, 'A12/одно-новое')
+  assert(!одинокая.some(s => s.format === 'intro'),
+    `A12/одно-новое: знакомство выдано без разделителя (A6)\n  ${fmtSeq(одинокая)}`)
+  assert(одинокая.every(s => s.drill === undefined),
+    `A12/одно-новое: дрилл выдан слову, которое урок так и не ввёл\n  ${fmtSeq(одинокая)}`)
+
+  // 4. Провал на дрилле. Дрилл - настоящая оценка: Again поднимает окно «Подзабылось» раньше
+  //    следующего шага ладдера, ступень плана при этом НЕ съедается (afterDrill держит её),
+  //    и план всё равно доигрывается до DRILL_REPS.
+  const провалКолода = [...Array.from({ length: 24 }, (_, i) => reviewCard(`df_${i}`, 1 + (i % 3))),
+                        newCard('dfail')]
+  const провалУрок = runDay(провалКолода, { budget: 1, introLimit: 1, dayNew: 1, drillFailOnce: new Set(['dfail']) }).lessons[0]
+  checkAll(провалУрок, 'A12/провал-на-дрилле')
+  const путьПровала = провалУрок.find(s => s.path.includes('dfail'))?.path ?? ''
+  assert(путьПровала !== '', 'A12/провал-на-дрилле: слово dfail в урок не попало')
+  const показыПровала = провалУрок.filter(s => s.path === путьПровала)
+  const упавший = показыПровала.findIndex(s => s.graded === Rating.Again)
+  assert(упавший > 0 && показыПровала[упавший].drill !== undefined,
+    `A12/провал-на-дрилле: Again не пришёлся на дрилл\n  ${fmtSeq(провалУрок)}`)
+  const послеПровала = показыПровала.slice(упавший + 1)
+  assert(послеПровала.some(s => s.format === 'intro'),
+    `A12/провал-на-дрилле: после Again на дрилле окна «Подзабылось» не было\n  ${fmtSeq(провалУрок)}`)
+  const тотЖеШаг = послеПровала.find(s => s.format !== 'intro' && s.graded !== null)
+  assert(тотЖеШаг !== undefined && тотЖеШаг.drill === показыПровала[упавший].drill,
+    `A12/провал-на-дрилле: ступень плана съедена провалом - было ${показыПровала[упавший].drill}, ` +
+    `стало ${тотЖеШаг?.drill}\n  ${fmtSeq(провалУрок)}`)
+  assert(repsOf(провалУрок, путьПровала) >= DRILL_REPS,
+    `A12/провал-на-дрилле: план не доигран, ${repsOf(провалУрок, путьПровала)} отработок из ${DRILL_REPS}\n  ${fmtSeq(провалУрок)}`)
+
+  /* 5. Дрилл не двигает FSRS-блок карточки. Урок без провалов: слово получило DRILL_REPS
+        отработок, а расписание - ровно одну оценку (reps === 1), ту самую первую. С одним
+        провалом на дрилле оценок ДВЕ (reps === 2): Again - настоящая оценка, она и роняет
+        карточку на нулевую ступень Learning. Проверяется по самой карточке колоды: `runDay`
+        мутирует её так же, как store.rateItem. */
+  const чистая = [...Array.from({ length: 24 }, (_, i) => reviewCard(`dc_${i}`, 1 + (i % 3))), newCard('dclean')]
+  const чистыйУрок = runDay(чистая, { budget: 1, introLimit: 1, dayNew: 1 }).lessons[0]
+  checkAll(чистыйУрок, 'A12/без-провалов')
+  const чистаяКарта = чистая[чистая.length - 1]
+  assert(repsOf(чистыйУрок, чистаяКарта.path) >= DRILL_REPS,
+    `A12/без-провалов: слово получило ${repsOf(чистыйУрок, чистаяКарта.path)} отработок из ${DRILL_REPS}\n  ${fmtSeq(чистыйУрок)}`)
+  assert(чистаяКарта.fsrs.reps === 1,
+    `A12/без-провалов: дриллы двинули FSRS - reps=${чистаяКарта.fsrs.reps} вместо 1 при ${DRILL_REPS} отработках`)
+  const картаПровала = провалКолода[провалКолода.length - 1]
+  assert(картаПровала.fsrs.reps === 2,
+    `A12/провал-на-дрилле: расписание обязано было двинуться ровно один раз сверх первой оценки, reps=${картаПровала.fsrs.reps}`)
+  assert(картаПровала.fsrs.state === State.Learning && картаПровала.fsrs.learning_steps === 0,
+    `A12/провал-на-дрилле: после Again карточка обязана стоять на нулевой ступени Learning, ` +
+    `получили ${State[картаПровала.fsrs.state]} шаг ${картаПровала.fsrs.learning_steps}`)
+
+  /* 6. S10-bis: слово возвращается в урок ПЛАНОМ, а не сроком. Ровно тот случай, ради которого
+        A12 и написано: в остатке очереди три карточки, `requeuePosition` на такой длине отдаёт
+        null («очередь короче, чем нужно ждать», см. S10), и до A12 введённое слово выпадало из
+        урока после единственной отработки. */
+  const S10bisКолода = [...Array.from({ length: 8 }, (_, i) => reviewCard(`db_${i}`, 1 + (i % 3))), newCard('dback')]
+  const S10bisУрок = runDay(S10bisКолода, { budget: 1, introLimit: 1, dayNew: 1 }).lessons[0]
+  checkAll(S10bisУрок, 'A12/S10-bis')
+  const картаS10bis = S10bisКолода[S10bisКолода.length - 1]
+  const показыS10bis = S10bisУрок.filter(s => s.path === картаS10bis.path)
+  const перваяОтработка = показыS10bis.find(s => s.format !== 'intro' && s.graded !== null)
+  assert(перваяОтработка !== undefined, `A12/S10-bis: слово так и не отработано\n  ${fmtSeq(S10bisУрок)}`)
+  for (let остаток = 0; остаток <= 3; остаток++) {
+    assert(requeuePosition(остаток, картаS10bis.fsrs, new Date(перваяОтработка!.at)) === null,
+      `A12/S10-bis: предпосылка сломалась - на остатке в ${остаток} карточек requeuePosition обязан отдавать null, ` +
+      'иначе стенд проверяет не план дриллов, а обычный возврат сроком')
+  }
+  assert(показыS10bis.some(s => s.drill !== undefined && s.graded !== null),
+    `A12/S10-bis: слово не вернулось в урок дриллом\n  ${fmtSeq(S10bisУрок)}`)
+  /* Сколько именно отработок успел дать этот урок, стенд не спрашивает: колода тонкая
+     намеренно - короткий остаток и есть суть случая, - а хвост урока меряет checkDrills выше.
+     Здесь проверяется ровно один факт: слово вернулось ПЛАНОМ там, где сроком оно не
+     вернулось бы вовсе. */
+  assert(repsOf(S10bisУрок, картаS10bis.path) > 1,
+    `A12/S10-bis: слово осталось с единственной отработкой - именно этот случай и чинит A12\n  ${fmtSeq(S10bisУрок)}`)
+
+  console.log(`  ✓ план дриллов (A12): 30+10 и 5+10 закрывают DRILL_REPS=${DRILL_REPS}, одно новое без повторов - ноль отработок (A6), ` +
+    'провал на дрилле держит ступень и не крадёт отработку, дрилл не двигает FSRS, слово возвращается планом при null от requeuePosition')
+  passed++
+}
+
+/**
  * Полоска прогресса урока: доходит до конца и не врёт по дороге (репро 21.08.2026).
  *
  * Монотонность проверяется во всех сценариях выше (`checkProgress` в `scenario`,
@@ -2887,11 +3154,18 @@ function progressBarChecks(): void {
        не успев дать этот показ. Добавлены ещё два повтора (q13, q14): в реальной
        колоде их всегда с запасом, а сама проверка - про то, что полоска доходит до
        100%, а не про точный размер пула. */
-    { tag: 'повторы и новые', opts: { budget: 2, introLimit: 2, dayNew: 2 },
-      deck: [reviewCard('q1'), reviewCard('q2'), reviewCard('q3'), reviewCard('q4'),
-             reviewCard('q7'), reviewCard('q8'), reviewCard('q9'), reviewCard('q10'),
-             reviewCard('q13'), reviewCard('q14'),
-             newCard('q5'), newCard('q6'), newCard('q11'), newCard('q12')] },
+    /* A12: слово, введённое сегодня, обязано DRILL_REPS отработок (не одну), и её последние
+       показы держит A2 - между двумя показами ОДНОГО слова нужно не меньше двух ЧУЖИХ экранов
+       даже по аварийному полу (MIN_SHOW_GAP_FLOOR_MS = 3 экрана по screenMs). Двух слов сразу
+       на хвосте (было q11 и q12) для этого мало: на двух чередующихся словах разрыв между
+       повторами одного и того же - ровно два экрана, ниже пола, и урок обрывался на 94,4%,
+       не успев дать последний дрилл ни одному наращиванием пула это не лечится - в хвосте
+       всё равно останутся ровно два актуальных слова. dayNew=1 держит на хвосте только ОДИН
+       план дриллов, у которого соперников за разделитель нет - остаток пула ими и служит. */
+    { tag: 'повторы и новые', opts: { budget: 2, introLimit: 1, dayNew: 1 },
+      deck: [...['q1', 'q2', 'q3', 'q4', 'q7', 'q8', 'q9', 'q10', 'q13', 'q14',
+                 'q15', 'q16', 'q17', 'q18', 'q19', 'q20'].map(w => reviewCard(w)),
+             newCard('q11')] },
     { tag: 'один повтор', opts: { budget: 0, introLimit: 0 }, deck: [reviewCard('s1')] }
   ]
   for (const { tag, deck, opts } of наборы) {

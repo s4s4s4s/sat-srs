@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Rating, State, type Grade } from 'ts-fsrs'
-import { useApp, views, rateItem, finishSession, setScreen, startSync, currentJournal, setCause, markIntroduced, deferItemToNextDay, toggleWordMark, corpusHitsBySlug, logLogicAnswer } from '../lib/store'
+import { useApp, views, rateItem, rateDrill, finishSession, setScreen, startSync, currentJournal, setCause, markIntroduced, deferItemToNextDay, toggleWordMark, corpusHitsBySlug, logLogicAnswer } from '../lib/store'
 import type { CardView } from '../lib/types'
 import {
   buildQueue, makeScheduler, intervalLabel, shouldRequeue, requeuePosition, GRADES,
@@ -10,6 +10,8 @@ import {
   newBudgetFor, earlyFillers, MAX_EARLY_FILLERS, MAX_INTRO_BONUS, nextNewItems, nextCtxIndex, type Cue,
   closingShow
 } from '../lib/scheduler'
+import { afterDrill, drillInsertAt, startsDrillPlan } from '../lib/drill'
+import { pickSense, senseSlot, senseDisplay, ctxKey } from '../lib/senses'
 import { pickNext, hasSeparator, screenFormat, isGiveUp, objectiveOutcome, REINTRO_PER_LESSON, type OrderCtx } from '../lib/session'
 import { logicAttempts, logicStatus, LOGIC_MAX_SHOWS } from '../lib/logic'
 import { PRACTICE_RETRY_WRONG_DAYS } from '../lib/practice'
@@ -22,7 +24,7 @@ import { minutesToday, cardTimeCap, forcedTodaySlugs, cardSrc, liveMarkedLemmas,
 import { NEW_PER_DAY, NEW_PER_LESSON } from '../lib/norms'
 import { speedStats, practiceUnitRatio } from '../lib/metrics'
 import { dayKey } from '../lib/daytime'
-import type { Format, SessionResult, StudyItem } from '../lib/types'
+import type { Format, JournalLine, SessionResult, StudyItem } from '../lib/types'
 import { Close, Sprout, Timer, Speaker, Flame } from '../components/Icon'
 import FlameBuddy from '../components/FlameBuddy'
 import { speak, canSpeak } from '../lib/speech'
@@ -106,6 +108,7 @@ interface Task {
   answer: string    // слово, предлог или авторский вариант
   ctx: string       // выбранный контекст (ротация)
   cue: Cue          // по чему вспоминаем: пропуск в предложении, значение или само слово
+  sense: number      // T5/T6: значение слова, которое спрашивает этот показ (0 - главное), см. lib/senses.ts
 }
 
 /** Каждый пятый верный подряд звучит вехой серии вместо обычного «верно». */
@@ -144,46 +147,65 @@ function writeCtxIdx(map: Record<string, number>) {
   try { localStorage.setItem(CTX_IDX_KEY, JSON.stringify(map)) } catch { /* приватный режим/квота — ротация просто пойдёт от reps */ }
 }
 
-/** Ротация контекстов round-robin: каждый показ — следующее предложение, полный цикл до повтора */
-function pickContext(view: CardView, reps: number): string {
-  const pool = view.contexts.length ? view.contexts : [view.context]
+/** Ротация контекстов round-robin: каждый показ - следующее предложение, полный цикл до повтора.
+    `contexts`/`key` уже разрешены вызывающим (T6: у значения слова свой пул примеров и свой
+    ключ ротации - см. ctxKey в lib/senses.ts), pickContext сам решает только порядок внутри пула. */
+function pickContext(contexts: string[], key: string, reps: number): string {
+  const pool = contexts.length ? contexts : ['']
   const map = readCtxIdx()
-  const idx = nextCtxIndex(map[view.path], reps, pool.length)
-  map[view.path] = idx
+  const idx = nextCtxIndex(map[key], reps, pool.length)
+  map[key] = idx
   writeCtxIdx(map)
   return pool[idx]
 }
 
-function makeTask(item: StudyItem, deck: ReturnType<typeof views>, introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false): Task {
+function makeTask(item: StudyItem, deck: ReturnType<typeof views>, journal: JournalLine[], introduced?: Set<string>, lapsed?: Set<string>, reintroAllowed = true, typing = false): Task {
   const { format, cue: rotated } = pickTask(item, deck.map(r => r), introduced, lapsed, reintroAllowed, typing)
-  const ctx = format === 'prep' ? item.view.prepContext : pickContext(item.view, item.fsrs.reps)
-  /* Если у слова один пример и он уже показан, спрашивать по нему нельзя: это
-     проверка памяти на предложение, а не на слово. Тогда цель — значение. Это же
+  // T5/T6: значение слова этого показа - ротация по lib/senses.ts (интро/prep/cue word всегда 0)
+  const sense = pickSense(item.view, journal, format, rotated)
+  const slot = senseSlot(item.view, sense)
+  // у главного значения (sense 0) пул примеров может быть пуст только в старых карточках без
+  // разметки contexts - тогда используем одиночное поле context как раньше; у прочих значений
+  // (other_senses) senseSlots уже гарантирует непустой contexts, запасного поля у них нет
+  const slotContexts = slot.contexts.length ? slot.contexts : (sense === 0 ? [item.view.context] : slot.contexts)
+  const ctx = format === 'prep' ? item.view.prepContext : pickContext(slotContexts, ctxKey(item.view.path, sense), item.fsrs.reps)
+  /* Если у значения один пример и он уже показан, спрашивать по нему нельзя: это
+     проверка памяти на предложение, а не на слово. Тогда цель - значение. Это же
      ветка mc-meaning для 105 словарных карточек, у которых контекст один вместо
      трёх, требуемых контрактом (замер 06.08.2026: 313 карточек с тремя примерами,
-     105 с одним, ещё 32 — с авторскими вариантами, им контексты не положены).
+     105 с одним, ещё 32 - с авторскими вариантами, им контексты не положены).
 
      Пример «сгорает» не только внутри урока: у карточки с единственным контекстом
      следующие уроки показывают ДОСЛОВНО то же предложение, и заучивается связка
-     предложение→слово — вторая жалоба Александра 06.08.2026. Поэтому потраченным
+     предложение-слово - вторая жалоба Александра 06.08.2026. Поэтому потраченным
      пример считается с первой оценки (reps > 0), а не только в пределах сессии.
      Карточек с авторскими вариантами (error/grammar/math) это не касается: у них
-     «контекст» — формулировка вопроса, и значения слова нет. */
-  const exampleSpent = item.view.contexts.length < 2 && !item.view.choices.length &&
+     «контекст» - формулировка вопроса, и значения слова нет. */
+  const exampleSpent = slot.contexts.length < 2 && !item.view.choices.length &&
     (introduced?.has(itemKey(item)) || item.fsrs.reps > 0)
   /* Ротация (C8) уже увела две трети показов от предложения, но у карточки с
      единственным контекстом даже шаг `sentence` покажет ДОСЛОВНО то же, что и в
      прошлый раз. Поэтому сгоревший пример по-прежнему перебивает шаг ротации на
-     значение — правило старше ротации и остаётся за ней. */
+     значение - правило старше ротации и остаётся за ней. */
   const cue: Cue =
     rotated === 'sentence' && (format === 'reveal' || format === 'type' || format === 'mc') &&
-    exampleSpent && !item.view.answerNum && !!item.view.meaning_ru
+    exampleSpent && !item.view.answerNum && !!slot.ru
       ? 'meaning' : rotated
-  const base = { item, format, ctx, cue }
-  /* Обратный режим: спрашиваем значение, варианты — по-русски. Выбор «знакомого»
-     здесь не даёт ничего: знакомость английского слова не участвует в ответе. */
+  const base = { item, format, ctx, cue, sense }
+  /* Обратный режим: спрашиваем значение, варианты - по-русски. Выбор «знакомого»
+     здесь не даёт ничего: знакомость английского слова не участвует в ответе.
+     T6: дистракторы обязаны отличаться и от спрошенного значения, и от ДРУГИХ значений
+     этого же слова - иначе в вариантах оказалось бы два верных ответа (другой смысл
+     того же слова тоже был бы «правильным» по-русски, просто не в эту сессию). */
   if (cue === 'word') {
-    return { ...base, options: shuffleOnce([item.view.meaning_ru, ...meaningDistractors(item.view, deck)]), answer: item.view.meaning_ru }
+    const ownSenses = new Set(
+      [item.view.meaning_ru, ...item.view.other_senses.map(s => s.ru)]
+        .map(s => s.trim().toLowerCase()).filter(Boolean)
+    )
+    const distractors = meaningDistractors(item.view, deck, 6)
+      .filter(d => !ownSenses.has(d.trim().toLowerCase()))
+      .slice(0, 3)
+    return { ...base, options: shuffleOnce([slot.ru, ...distractors]), answer: slot.ru }
   }
   if (format === 'mc') {
     // авторские варианты (error/grammar) приоритетнее дистракторов из колоды
@@ -296,7 +318,9 @@ export default function Review() {
   // отдельная строка от saveError: отметка слова и оценка карточки — разные действия,
   // и провал одного не должен выглядеть провалом другого
   const [markError, setMarkError] = useState('')
-  const pendingAdvance = useRef<{ next: StudyItem; atFront: boolean } | null>(null)
+  // insertAt хранится вместе с единицей: позиция возврата выбрана в момент оценки (A12 -
+  // дрилл возвращается позицией, а не сроком), и лист причины не должен её терять
+  const pendingAdvance = useRef<{ next: StudyItem; atFront: boolean; insertAt?: number } | null>(null)
   // слова, уже показанные интро в этой сессии: их New-показы дальше — отработка, не интро
   const introduced = useRef(new Set<string>())
   // слова, только что помеченные «Заново» (не вспомнил): следующий показ — окно-переznakomство «Подзабылось»
@@ -382,7 +406,7 @@ export default function Review() {
         return
       }
     }
-    const shown = makeTask(head, deck, introduced.current, lapsed.current, reintroShown.current < REINTRO_PER_LESSON, app.settings.typing)
+    const shown = makeTask(head, deck, currentJournal(), introduced.current, lapsed.current, reintroShown.current < REINTRO_PER_LESSON, app.settings.typing)
     setTask(shown)
     if (shown.format === 'intro') play('intro')
     // point 2/A2: отметка момента показа этой единицы — pickNextIndex держит 60-секундный разрыв
@@ -663,16 +687,25 @@ export default function Review() {
     setQueue(q)
   }
 
+  /** Остаток урока после текущей карточки - тот же, что берёт `advance` (без ушедших на завтра, C2). */
+  function restQueue(): StudyItem[] {
+    const rest = (queue ?? []).slice(1)
+    return deferredToday.current.size ? rest.filter(i => !deferredToday.current.has(i.view.path)) : rest
+  }
+
   async function advance(next: StudyItem | null, atFront = false, insertAt?: number) {
-    let rest = (queue ?? []).slice(1)
-    // C2: слова, дважды проваленные за сессию, из остатка урока убираются совсем
-    if (deferredToday.current.size) rest = rest.filter(i => !deferredToday.current.has(i.view.path))
+    let rest = restQueue()
     // возврат оценённой карточки в очередь — но не той, что ушла на завтра (C2)
     if (next && !deferredToday.current.has(next.view.path)) {
       if (insertAt !== undefined) {
         rest.splice(Math.min(rest.length, insertAt), 0, next)
       } else if (atFront) {
         rest.splice(0, 0, next)
+      } else if (next.drill !== undefined) {
+        // A12: у дрилла своего срока нет, его возвращает позиция. Через shouldRequeue единица
+        // с планом уходить не должна: на короткой очереди requeuePosition отдаёт null, и
+        // введённое слово выпало бы из урока, не отработав план.
+        rest.splice(drillInsertAt(rest.length), 0, next)
       } else if (shouldRequeue(next.fsrs, new Date())) {
         // null означает «очередь короче, чем нужно ждать»: возвращать раньше
         // срока нельзя — так модель и решила, что слова забываются за часы.
@@ -688,7 +721,7 @@ export default function Review() {
     setCauseFor(null)
     const p = pendingAdvance.current
     pendingAdvance.current = null
-    if (p) await advance(p.next, p.atFront)
+    if (p) await advance(p.next, p.atFront, p.insertAt)
   }
 
   /**
@@ -903,9 +936,12 @@ export default function Review() {
       if (verdict === null && task.format !== 'intro') soundOutcome(g > Rating.Again)
 
       const prevState = task.item.fsrs.state
+      const onDrill = task.item.drill !== undefined && task.format !== 'intro' // A12, разбор у drillNext
       let rated
       try {
-        rated = await rateItem(task.item, g, elapsed, task.format, verdict ?? undefined, gaveUp, answeredMs.current ?? undefined)
+        rated = !onDrill || g === Rating.Again
+          ? await rateItem(task.item, g, elapsed, task.format, verdict ?? undefined, gaveUp, answeredMs.current ?? undefined, task.sense)
+          : { card: task.item.fsrs, lineId: (await rateDrill(task.item, g, elapsed, task.format, verdict ?? undefined, gaveUp, answeredMs.current ?? undefined, task.sense)).lineId }
       } catch (e) {
         /* Запись оценки не удалась: карточка исчезла (синк удалил, тьютор переименовал)
            либо не отдала IndexedDB. Молча ехать дальше нельзя — ответ ученика пропал бы,
@@ -975,16 +1011,32 @@ export default function Review() {
       // B7: на закрывающем показе лист причины не открывается - это последний экран перед выходом,
       // а не начало нового разбора, за которым должно следовать возвращение карточки.
       const wrong = verdict === 'wrong' || (verdict === null && g === Rating.Again && task.format !== 'intro')
+      /* A12: следующая ступень плана дриллов. Слово, введённое в этом уроке, план открывает
+         первой настоящей отработкой (`startsDrillPlan`), дальше ступени считает `afterDrill`.
+         Единица с планом возвращается позицией (`drillInsertAt`), а не сроком FSRS: срока,
+         который вернул бы её в этот же урок, у неё нет. */
+      const drillNext = onDrill
+        ? afterDrill(task.item, g)
+        : startsDrillPlan(task.item, prevState, task.format) ? { ...task.item, drill: 1 } : null
+      /* План исчерпан (или слово ушло на завтра): признак дрилла на единице оставаться не должен,
+         иначе `pickTask` выдал бы ей ещё один экран дрилла сверх DRILL_REPS. */
+      const plain: StudyItem = { ...task.item, fsrs: rated.card }
+      delete plain.drill
+      const dropped = deferredToday.current.has(task.item.view.path)
       if (wrong && prevState === State.Review && !gaveUp && !closingCard.current) {
-        pendingAdvance.current = { next: { ...task.item, fsrs: rated.card }, atFront: false }
+        pendingAdvance.current = drillNext && !dropped
+          ? { next: { ...drillNext, fsrs: rated.card }, atFront: false, insertAt: drillInsertAt(restQueue().length) }
+          : { next: plain, atFront: false }
         setCauseFor(rated.lineId)
+      } else if (drillNext && !dropped) {
+        await advance({ ...drillNext, fsrs: rated.card }, false, drillInsertAt(restQueue().length))
       } else if (verdict === 'typo' || verdict === 'twin') {
         // опечатка и синоним (C10): интервал FSRS не рушим, но слово переспрашивается в этом же
         // уроке — вернём его в очередь через несколько экранов (A2-разрыв соблюдёт pickNext).
         // Для синонима это и есть вторая попытка вспомнить загаданную форму.
-        await advance({ ...task.item, fsrs: rated.card }, false, 3)
+        await advance(plain, false, 3)
       } else {
-        await advance({ ...task.item, fsrs: rated.card })
+        await advance(plain)
       }
     } finally {
       busy.current = false
@@ -1100,6 +1152,10 @@ export default function Review() {
   }
 
   const card = task.item.view
+  // T6: спрошенное значение и остальные (см. lib/senses.ts) - единый источник для перевода
+  // предложения, подсказки cue meaning, разбора «Почему?» и списка «Ещё значения» после ответа
+  const display = senseDisplay(card, task.sense)
+  const slot = display.asked
   const isPrep = task.format === 'prep'
   const isIntro = task.format === 'intro'
   /* Раздел «Логика»: разбор вместо оценки. Показ закрывается одной кнопкой «Дальше»
@@ -1124,9 +1180,10 @@ export default function Review() {
   const isReintro = isIntro && isReintroScreen(task.item)
   const sentence = task.ctx
   /* Перевод ровно того предложения, что показано: контексты ротируются, поэтому
-     перевод берётся по индексу в contexts, а не первым из списка. Предложение
-     управления (prep) в contexts не входит — там перевода нет и строки не будет. */
-  const sentenceRu = card.contextsRu[card.contexts.indexOf(sentence)] ?? ''
+     перевод берётся по индексу в contexts спрошенного значения (T6), а не первым из
+     списка и не обязательно из главного. Предложение управления (prep) в contexts
+     не входит - там перевода нет и строки не будет. */
+  const sentenceRu = slot.contextsRu[slot.contexts.indexOf(sentence)] ?? ''
   const answerWord = isPrep ? card.prep : task.format === 'mc' && card.choices.length >= 2 ? task.answer : card.word
 
   /* Режим «слово по значению» без единого слова контекста неразрешим для целого куста
@@ -1151,8 +1208,8 @@ export default function Review() {
     kind: card.kind || 'vocab',
     word: isPrep ? `${card.word} ${card.prep}` : card.word,
     pos: card.pos,
-    meaningEn: card.meaning_en,
-    meaningRu: card.meaning_ru,
+    meaningEn: slot.en,
+    meaningRu: slot.ru,
     roots: card.roots,
     sentence,
     sentenceRu,
@@ -1193,14 +1250,20 @@ export default function Review() {
   // («показалось знакомым»). Многословные ответы вводить не просим.
   const canTypeAnswer = task.format === 'reveal' && !card.word.includes(' ')
   // у ввода слова цель задана значением: иначе «popular» вместо «ubiquitous» — честный ответ носителя, а не ошибка
+  /* T6: cue 'sentence' не подсказывает значение ни при каком sense - иначе подсказка выдала бы
+     спрошенное значение раньше ответа. Раньше здесь стоял `card.meaning_ru || card.meaning_en`
+     для format 'type' без cue 'meaning', хотя эта ветка (см. degrade в scheduler.ts) достижима
+     только когда у карточки нет значения вовсе - подсказка печатала пустые кавычки «»; с
+     ротацией значений (T6) тот же путь мог бы протечь meaning_ru другого слота, поэтому подсказка
+     здесь заменена на нейтральную, без обращения к meaning вообще. */
   const taskHint =
     task.cue === 'word' ? 'Что означает это слово?'
     : task.cue === 'meaning' ? (canTypeAnswer || task.format === 'type' ? 'Какое это слово? Впишите его' : 'Какое это слово?')
     : task.format === 'mc' ? (isAuthored ? 'Выберите правильный вариант' : 'Какое слово подходит в пропуск?')
     : task.format === 'prep' ? 'Какой предлог здесь правильный?'
-    : task.format === 'type' ? (isNumeric ? 'Решите и введите ответ' : `Впишите слово со значением «${card.meaning_ru || card.meaning_en}»`)
-    : canTypeAnswer ? 'Вспомните слово и впишите — или посмотрите ответ'
-    : 'Вспомните слово — потом проверьте себя'
+    : task.format === 'type' ? (isNumeric ? 'Решите и введите ответ' : 'Впишите слово')
+    : canTypeAnswer ? 'Вспомните слово и впишите - или посмотрите ответ'
+    : 'Вспомните слово - потом проверьте себя'
 
   // зачётное время: база дня + закрытые карточки (с капом) + текущая карточка (с капом).
   // Зачёт секунд (baseSec/creditedSec/cardTimeCap) не связан со счётчиком цели ниже - это
@@ -1238,10 +1301,12 @@ export default function Review() {
               )}
               {card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
               {card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
-              {card.other_senses.length > 0 && (
+              {/* T6: intro всегда спрашивает главное значение (pickSense), display.rest здесь -
+                  ровно все other_senses, тем же источником, что и список после ответа ниже. */}
+              {display.rest.length > 0 && (
                 <div className="rev-senses">
                   <div className="rev-senses-label">Ещё значения</div>
-                  {card.other_senses.map((s, i) => <div key={i} className="rev-sense"><span className="rev-sense-pos">{s.pos}</span><span className="rev-sense-en">{s.en}</span><span className="rev-sense-ru">{s.ru}</span></div>)}
+                  {display.rest.map(s => <div key={s.idx} className="rev-sense"><span className="rev-sense-pos">{s.pos}</span><span className="rev-sense-en">{s.en}</span><span className="rev-sense-ru">{s.ru}</span></div>)}
                 </div>
               )}
               {card.roots && <div className="rev-roots"><Sprout size={16} /> {card.roots}</div>}
@@ -1275,10 +1340,11 @@ export default function Review() {
             )}
           </div>
         ) : task.cue === 'meaning' && !revealed ? (
-          /* вспоминаем слово по значению плюс оборот вокруг пропуска — предложения целиком нет */
+          /* вспоминаем слово по значению плюс оборот вокруг пропуска - предложения целиком нет.
+             T6: значение - спрошенный слот (slot), а не обязательно главное значение карточки. */
           <div className="rev-cue">
-            <div className="rev-cue-ru">{card.meaning_ru}</div>
-            {card.meaning_en && <div className="rev-cue-en">{card.meaning_en}</div>}
+            <div className="rev-cue-ru">{slot.ru}</div>
+            {slot.en && <div className="rev-cue-en">{slot.en}</div>}
             {cuePhrase && (
               <Sentence
                 context={cuePhrase}
@@ -1357,13 +1423,21 @@ export default function Review() {
             ) : (
               <div className="rev-word">{isPrep ? `${card.word} ${card.prep}` : card.word}<span className="pos">{card.pos}</span></div>
             )}
+            {/* T6: после ответа показываем значение, которое реально спрашивал этот показ
+                (display.asked), а не всегда главное - иначе при спрошенном other_senses
+                экран отвечал бы главным значением слова, не тем, что проверяли. Спрошенное
+                значение помечено классом rev-sense-asked, когда это не главное (sense > 0);
+                остальные значения карточки (включая главное, если спросили не его, и те, у
+                которых ещё нет контекстов) идут ниже списком «Ещё значения», как раньше. */}
             {!isPrep && isNumeric && verdict === 'correct' && <div className="rev-meaning-ru">Ответ: <Tex text={task.answer} /></div>}
-            {!isPrep && card.meaning_en && <div className="rev-meaning-en">{card.meaning_en}</div>}
-            {!isPrep && card.meaning_ru && <div className="rev-meaning-ru">{card.meaning_ru}</div>}
-            {!isPrep && card.other_senses.length > 0 && (
+            {!isPrep && slot.en && <div className="rev-meaning-en">{slot.en}</div>}
+            {!isPrep && slot.ru && (
+              <div className={`rev-meaning-ru${task.sense > 0 ? ' rev-sense-asked' : ''}`}>{slot.ru}</div>
+            )}
+            {!isPrep && display.rest.length > 0 && (
               <div className="rev-senses">
                 <div className="rev-senses-label">Ещё значения</div>
-                {card.other_senses.map((s, i) => <div key={i} className="rev-sense"><span className="rev-sense-pos">{s.pos}</span><span className="rev-sense-en">{s.en}</span><span className="rev-sense-ru">{s.ru}</span></div>)}
+                {display.rest.map(s => <div key={s.idx} className="rev-sense"><span className="rev-sense-pos">{s.pos}</span><span className="rev-sense-en">{s.en}</span><span className="rev-sense-ru">{s.ru}</span></div>)}
               </div>
             )}
             {!isPrep && card.explain && <div className="rev-explain"><Tex text={card.explain} /></div>}
