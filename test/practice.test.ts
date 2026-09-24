@@ -28,7 +28,8 @@ import { openDB } from 'idb'
 import { parseMd } from '../src/lib/yamlfm'
 import {
   parseQuestionBody, questionView, pickPractice, practiceStats, practiceBreakdown,
-  practiceDue, moduleQueue, MODULE_QUESTIONS, MODULE_SECONDS, PACE_SEC, practiceSummaryLabel
+  practiceDue, moduleQueue, MODULE_QUESTIONS, MODULE_SECONDS, PACE_SEC, practiceSummaryLabel,
+  practiceSectionOf, practiceVerdict, paceSecOf, MODULE_BY_SECTION
 } from '../src/lib/practice'
 import { getAllCards, getAllJournal, getAllReadings, getAllQuestions, applyQuestionsPull, kvGet } from '../src/lib/db'
 import type { JournalLine, QuestionRec, QuestionView } from '../src/lib/types'
@@ -56,12 +57,16 @@ function view(qid: string, over: Partial<QuestionView> = {}): QuestionView {
     domain: 'Expression of Ideas',
     skill: 'Rhetorical Synthesis',
     difficulty: 'Medium',
+    section: 'rw',
+    kind: 'mcq',
+    html: false,
     stem: 'Stem.',
     choices: [
       { letter: 'A', text: 'a' }, { letter: 'B', text: 'b' },
       { letter: 'C', text: 'c' }, { letter: 'D', text: 'd' }
     ],
     answer: 'A',
+    answers: [],
     rationale: 'Rationale.',
     added: '2026-08-24',
     broken: false,
@@ -460,6 +465,139 @@ function breakdownChecks(): void {
   group('practiceBreakdown: пустой журнал не даёт NaN и деления на ноль')
 }
 
+// ---- SPR (математика, answer_type: spr): вопрос с вписываемым ответом, без вариантов --------
+
+const SPR_MD = `---
+type: question
+qid: spr-01
+assessment: SAT
+test: Math
+domain: Algebra
+skill: Linear equations
+difficulty: Medium
+answer_type: spr
+answers:
+  - '7/3'
+  - '2.333'
+added: '2026-09-20'
+---
+
+## Вопрос
+
+Solve for x: 3x = 7.
+
+## Разбор
+
+x = 7/3.
+`
+
+function sprParseChecks(): void {
+  const v = questionView(qrec(SPR_MD))
+  assert(!v.broken, `spr-вопрос без раздела «## Варианты» не битый, получено broken=${v.broken}`)
+  assert(v.kind === 'spr', 'kind = spr у answer_type: spr')
+  assert(v.choices.length === 0, 'у spr-вопроса вариантов нет')
+  assert(v.answers.join(',') === '7/3,2.333', 'принятые формы ответа разобраны из frontmatter answers')
+  assert(v.section === 'math', 'test: Math → раздел math')
+  group('SPR: вопрос без раздела «## Варианты» разбирается целиком, не битый')
+
+  // spr-вопрос, у которого файл всё же содержит раздел «## Варианты» — брак: вариантов у spr
+  // быть не должно по устройству, лишний раздел значит рассинхрон инструмента выгрузки
+  const withChoices = SPR_MD.replace(
+    '## Разбор',
+    '## Варианты\n\nA. one\n\nB. two\n\nC. three\n\nD. four\n\n## Разбор'
+  )
+  const bv = questionView(qrec(withChoices))
+  assert(bv.broken, 'spr-вопрос с разделом «## Варианты» в файле — broken')
+  group('SPR: раздел «## Варианты» у spr-вопроса — брак')
+
+  // spr-вопрос без единой принятой формы ответа — сверять нечем, брак
+  const noAnswers = SPR_MD.replace(/answers:\n(\s+- .+\n)+/, 'answers: []\n')
+  const nv = questionView(qrec(noAnswers))
+  assert(nv.broken, 'spr-вопрос с пустым answers — broken (сверять ответ не с чем)')
+  assert(nv.answers.length === 0, 'пустой answers остаётся пустым списком, а не выдуманным')
+  group('SPR: пустой список answers — брак')
+
+  // parseQuestionBody напрямую с флагом spr — тот же брак на голом разборе
+  const bare = parseQuestionBody('## Вопрос\nSolve.\n\n## Варианты\nA. one\n\nB. two\n\nC. three\n\nD. four\n', true)
+  assert(bare.broken, 'parseQuestionBody(body, spr=true) считает раздел «## Варианты» браком')
+  group('parseQuestionBody: флаг spr запрещает раздел «## Варианты»')
+}
+
+// ---- раздел экзамена (RW/математика): practiceSectionOf ---------------------
+
+function sectionOfChecks(): void {
+  assert(practiceSectionOf({ test: 'Math' }) === 'math', 'test: Math → math')
+  assert(practiceSectionOf({ test: 'math' }) === 'math', 'test сравнивается без учёта регистра')
+  assert(practiceSectionOf({ test: 'Reading and Writing' }) === 'rw', 'test: Reading and Writing → rw')
+
+  // без test — по домену математики банка (коды H/P/Q/S и их названия)
+  assert(practiceSectionOf({ domain: 'H' }) === 'math', 'домен H без test → math')
+  assert(practiceSectionOf({ domain: 'P' }) === 'math', 'домен P без test → math')
+  assert(practiceSectionOf({ domain: 'Q' }) === 'math', 'домен Q без test → math')
+  assert(practiceSectionOf({ domain: 'S' }) === 'math', 'домен S без test → math')
+  assert(practiceSectionOf({ domain: 'Algebra' }) === 'math', 'домен «Algebra» без test → math')
+
+  // ни test, ни математический домен — RW, как весь банк до 24.09.2026
+  assert(practiceSectionOf({ domain: 'Expression of Ideas' }) === 'rw', 'домен RW без test → rw')
+  assert(practiceSectionOf({}) === 'rw', 'ни test, ни домен — по умолчанию rw')
+
+  group('practiceSectionOf: test решает раздел, без test — домен математики банка (H/P/Q/S, Algebra), иначе rw')
+}
+
+// ---- вердикт ответа: буква у mcq, число (с допуском) у spr ------------------
+
+function verdictChecks(): void {
+  const mcq = view('m1', { kind: 'mcq', answer: 'B' })
+  assert(practiceVerdict(mcq, 'b') === true, 'mcq: буква сверяется без учёта регистра')
+  assert(practiceVerdict(mcq, 'B') === true, 'mcq: точное совпадение буквы — верно')
+  assert(practiceVerdict(mcq, 'A') === false, 'mcq: другая буква — неверно')
+  assert(practiceVerdict(view('m2', { kind: 'mcq', answer: '' }), 'A') === null,
+    'mcq без известного ответа (answer пуст) — вердикт неизвестен, null')
+
+  const spr = view('s1', { kind: 'spr', answer: '', answers: ['7/3', '2.333'] })
+  assert(practiceVerdict(spr, '7/3') === true, 'spr: точная дробь из answers — верно')
+  assert(practiceVerdict(spr, '14/6') === true, 'spr: эквивалентная дробь (14/6 = 7/3) — верно')
+  assert(practiceVerdict(spr, '2.333') === true, 'spr: десятичная форма из answers — верно')
+  assert(practiceVerdict(spr, '2.4') === false, 'spr: неверное значение — неверно, не null')
+  assert(practiceVerdict(spr, '') === false, 'spr: пустой ответ — неверно (typed пуст), а не null')
+  assert(practiceVerdict(spr, '   ') === false, 'spr: ответ из одних пробелов — неверно, как пустой')
+
+  const noKey = view('s2', { kind: 'spr', answer: '', answers: [] })
+  assert(practiceVerdict(noKey, '7/3') === null, 'spr без ключа (answers пуст) — вердикт неизвестен, null')
+
+  group('practiceVerdict: mcq по букве, spr по числу с допуском (checkNumeric), нет ключа — null')
+}
+
+// ---- модуль и темп по разделу (математика) -----------------------------------
+
+function moduleAndPaceBySectionChecks(): void {
+  const mathViews = Array.from({ length: 40 }, (_, i) => view(`mm${i}`, { section: 'math', kind: 'spr', answer: '', answers: ['1'] }))
+  const q = moduleQueue(mathViews, [], new Date('2026-09-24T12:00:00+04:00'), 'math')
+  assert(q.length <= 22, `moduleQueue(..., 'math') отдаёт не больше 22 вопросов, получено ${q.length}`)
+  assert(q.length === 22, `при избытке математика заполняет весь модуль (22), получено ${q.length}`)
+  assert(MODULE_BY_SECTION.math.questions === 22 && MODULE_BY_SECTION.math.seconds === 35 * 60,
+    'модуль математики: 22 вопроса, 35 минут')
+
+  assert(paceSecOf(view('r1', { section: 'rw' })) === 71, 'темп RW — 71 с')
+  assert(paceSecOf(view('m1', { section: 'math' })) === 95, 'темп математики — 95 с')
+
+  group('moduleQueue/paceSecOf: у математики свой модуль (≤22 вопросов) и свой темп (95 с) отдельно от RW (71 с)')
+}
+
+// ---- формат html (математика College Board: MathML, рисунки, таблицы) --------
+
+function htmlFormatChecks(): void {
+  const htmlMd = SPR_MD.replace('---\n\n## Вопрос', 'format: html\n---\n\n## Вопрос')
+  const v = questionView(qrec(htmlMd))
+  assert(v.html === true, 'format: html во frontmatter → html: true')
+  assert(!v.broken, 'html-вопрос разбирается как обычный spr, брака формат сам по себе не добавляет')
+
+  const plain = questionView(qrec(SPR_MD))
+  assert(plain.html === false, 'без format: html — html: false')
+
+  group('questionView: format: html → QuestionView.html true, иначе false')
+}
+
 // ---- обновление схемы БД со 2 на 3 -------------------------------------------
 
 async function dbMigrationCheck(): Promise<void> {
@@ -512,6 +650,11 @@ async function main(): Promise<void> {
   noRationaleChecks()
   brokenChecks()
   bareParseChecks()
+  sprParseChecks()
+  sectionOfChecks()
+  verdictChecks()
+  moduleAndPaceBySectionChecks()
+  htmlFormatChecks()
   pickChecks()
   retryScheduleChecks()
   moduleChecks()

@@ -29,12 +29,16 @@ function view(over: Partial<QuestionView> = {}): QuestionView {
     domain: 'Expression of Ideas',
     skill: 'Rhetorical Synthesis',
     difficulty: 'Medium',
+    section: 'rw',
+    kind: 'mcq',
+    html: false,
     stem: 'Stem.',
     choices: [
       { letter: 'A', text: 'a' }, { letter: 'B', text: 'b' },
       { letter: 'C', text: 'c' }, { letter: 'D', text: 'd' }
     ],
     answer: 'A',
+    answers: [],
     rationale: 'Rationale.',
     added: '2026-08-24',
     broken: false,
@@ -116,11 +120,14 @@ function screenChecks(): void {
   assert(/choices\.map\(/.test(prac), 'варианты рисуются прямым map по view.choices — в исходном порядке')
   group('структурно: порядок вариантов A–D не перемешивается')
 
-  // logPractice — ровно один вызов на отвеченный вопрос, с выбранной буквой
+  // logPractice — ровно один вызов на отвеченный вопрос, с выбранным ответом (буква mcq
+  // или вписанное число spr — оба сведены в один `chose`, см. `const chose = spr ? typed... : picked`)
   const calls = prac.match(/logPractice\(/g) ?? []
   assert(calls.length === 1, `logPractice должен вызываться из одного места экрана, найдено ${calls.length}`)
-  assert(/logPractice\(view,\s*picked,/.test(prac),
-    'logPractice получает именно выбранную букву (picked), а не константу или view.answer')
+  assert(/logPractice\(view,\s*chose,/.test(prac),
+    'logPractice получает именно выбранный ответ (chose), а не константу или view.answer')
+  assert(/const chose = spr \? typed\.trim\(\) : picked/.test(prac),
+    'chose собирается из typed (spr) или picked (mcq) — источник выбора ученика виден в одном месте')
   assert(/logged\.current/.test(prac),
     'вызов logPractice защищён флагом от повторной записи на том же вопросе')
   group('структурно: logPractice зовётся один раз на вопрос и получает выбор ученика')
@@ -168,6 +175,19 @@ function screenChecks(): void {
     'до подтверждения вариант остаётся кнопкой выбора без клика по отдельным словам')
   assert(prac.includes('mc-static'), 'отвеченный вариант помечен классом mc-static (правит поведение в styles.css)')
   group('структурно: до ответа разметка есть только в условии, вариант выбирается кнопкой целиком')
+
+  // HTML-вопрос (математика, format: html) рисуется через QHtml, а не сырым innerHTML на месте
+  assert(prac.includes("import QHtml from '../components/QHtml'"), 'экран подключает QHtml')
+  assert(/view\.html\s*\?\s*<QHtml\b/.test(prac), 'условие вопроса рисуется через QHtml при view.html, а не Stem')
+  assert(!/dangerouslySetInnerHTML/.test(prac), 'экран не вставляет HTML напрямую мимо QHtml (санитайзер живёт там)')
+  group('структурно: HTML-вопрос рисуется через QHtml')
+
+  // Desmos-панель — только в разделе математики, не в RW
+  assert(prac.includes("import { DesmosPanel, DesmosTips } from '../components/Desmos'"), 'экран подключает DesmosPanel/DesmosTips')
+  assert(/const math = section === 'math'/.test(prac), 'признак раздела математики вычисляется явно (math = section === \'math\')')
+  assert(/math && desmosMounted && <DesmosPanel/.test(prac),
+    'DesmosPanel монтируется только когда раздел — математика (math), в RW панели нет')
+  group('структурно: DesmosPanel рендерится только в разделе математики')
 }
 
 // ---- мягкий таймер темпа (P6, PACE_SEC) и режим модуля ------------------------
@@ -175,25 +195,31 @@ function screenChecks(): void {
 function paceAndModuleChecks(): void {
   const prac = screenSource('Practice.tsx')
 
-  // индикатор темпа читает константу из lib/practice, а не переносит литерал 71 в экран
-  assert(/from\s+'\.\.\/lib\/practice'/.test(prac) && prac.includes('PACE_SEC'),
-    'экран берёт PACE_SEC из lib/practice, а не заводит собственное число')
-  assert(!/71\s*[,)]/.test(prac.replace(/PACE_SEC/g, '')),
-    'секунды мягкого темпа не продублированы литералом 71 где-то ещё в экране')
-  group('структурно: мягкий таймер темпа читает PACE_SEC из lib/practice')
+  // индикатор темпа читает темп раздела из lib/practice (paceSecOf(view)), а не переносит
+  // литерал 71 в экран — RW и математика идут разным темпом (paceSecOf/MODULE_BY_SECTION)
+  assert(/from\s+'\.\.\/lib\/practice'/.test(prac) && prac.includes('paceSecOf'),
+    'экран берёт темп через paceSecOf(view) из lib/practice, а не заводит собственное число')
+  const importLine = prac.match(/import\s*\{[\s\S]*?\}\s*from\s*'\.\.\/lib\/practice'/)?.[0] ?? ''
+  assert(!/\bPACE_SEC\b/.test(importLine) && !/\bMODULE_SECONDS\b/.test(importLine) && !/\bMODULE_QUESTIONS\b/.test(importLine),
+    'старые константы RW (PACE_SEC/MODULE_SECONDS/MODULE_QUESTIONS) не импортируются: экран берёт темп/бюджет по разделу')
+  assert(!/const overPaceNow = elapsedSec > 71/.test(prac) && !/const paceWidth = .*\/ 71/.test(prac),
+    'сравнение с темпом не захардкожено числом 71 - используется paceSecOf(view)')
+  group('структурно: мягкий таймер темпа читает paceSecOf(view) из lib/practice')
 
-  // таймер не блокирует ответ: кнопка «Ответить» зависит только от выбора варианта
-  assert(/disabled={!picked}/.test(prac),
-    'кнопка «Ответить» отключена только отсутствием выбора, а не таймером')
+  // таймер не блокирует ответ: кнопка «Ответить» зависит только от наличия выбора (chose)
+  assert(/disabled={!chose}/.test(prac),
+    'кнопка «Ответить» отключена только отсутствием выбора (chose), а не таймером')
   assert(!/disabled=\{[^}]*(elapsedSec|overPace|Pace)[^}]*\}/.test(prac),
     'в исходнике нет блокировки ответа по времени (elapsedSec/overPace) - мягкий таймер ничего не запрещает')
   group('структурно: мягкий таймер не блокирует и не отменяет ответ')
 
-  // режим модуля: своя очередь через moduleQueue, свой бюджет времени MODULE_SECONDS
+  // режим модуля: своя очередь через moduleQueue, свой бюджет времени по разделу (MODULE_BY_SECTION)
   assert(prac.includes('moduleQueue('), 'режим модуля строит очередь через moduleQueue, а не вручную')
-  assert(prac.includes('MODULE_SECONDS') && prac.includes('MODULE_QUESTIONS'),
-    'бюджет и число вопросов модуля берутся из констант lib/practice, а не литералами')
-  group('структурно: режим модуля использует moduleQueue и его константы, а не самодельные числа')
+  assert(prac.includes('MODULE_BY_SECTION'),
+    'бюджет и число вопросов модуля берутся из MODULE_BY_SECTION (свои у RW и математики), а не литералами')
+  assert(/moduleQueue\(views,\s*app\.journal,\s*new Date\(\),\s*section\)/.test(prac),
+    'moduleQueue получает раздел текущей сессии практики (section), иначе математика получила бы модуль RW')
+  group('структурно: режим модуля использует moduleQueue и MODULE_BY_SECTION, а не самодельные числа')
 }
 
 function main(): void {
