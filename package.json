@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "npm run test:session && npm run test:metrics && npm run test:journal && npm run test:math && npm run test:sound && npm run test:coach && npm run test:data && npm run test:settings && npm run test:sync-safety && npm run test:reading && npm run test:wordlist && npm run test:synonyms && npm run test:practice && npm run test:practice-screen && npm run test:styles && npm run test:corpus && npm run test:dayplan && npm run test:logic && npm run test:senses && npm run test:drill",
+    "test": "npm run test:session && npm run test:metrics && npm run test:journal && npm run test:math && npm run test:sound && npm run test:coach && npm run test:data && npm run test:settings && npm run test:sync-safety && npm run test:reading && npm run test:wordlist && npm run test:synonyms && npm run test:practice && npm run test:practice-screen && npm run test:styles && npm run test:corpus && npm run test:dayplan && npm run test:logic && npm run test:senses && npm run test:drill && npm run test:qbank",
     "test:session": "esbuild test/session-sim.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/session-sim.mjs && node node_modules/.cache/sat-srs/session-sim.mjs",
     "test:metrics": "esbuild test/metrics.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/metrics.mjs && node node_modules/.cache/sat-srs/metrics.mjs",
     "test:journal": "esbuild test/journal.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/journal.mjs && node node_modules/.cache/sat-srs/journal.mjs",
@@ -29,6 +29,7 @@
     "test:styles": "esbuild test/styles.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/styles.mjs && node node_modules/.cache/sat-srs/styles.mjs",
     "test:corpus": "esbuild test/corpus.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/corpus.mjs && node node_modules/.cache/sat-srs/corpus.mjs",
     "test:drill": "esbuild test/drill.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/drill.mjs && node node_modules/.cache/sat-srs/drill.mjs",
+    "test:qbank": "esbuild test/qbank-import.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/sat-srs/qbank-import-test.mjs && node node_modules/.cache/sat-srs/qbank-import-test.mjs",
     "sounds": "node scripts/sound-wav.mjs"
   },
   "dependencies": {

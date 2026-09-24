@@ -7,3 +7,6 @@ tsconfig.tsbuildinfo
 
 # WAV-ы, отрендеренные `npm run sounds` для прослушивания, — вывод, а не исходник
 sounds/
+
+# сырьё, скачанное scripts/qbank-import.mjs (кэш по файлу на вопрос) — не исходник, не коммитим
+.qbank-cache/
