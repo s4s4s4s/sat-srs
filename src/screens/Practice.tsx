@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useApp, questionViews, logPractice, setScreen, toggleWordMark } from '../lib/store'
+import { useApp, questionViews, logPractice, setScreen, toggleWordMark, openPractice } from '../lib/store'
 import {
-  pickPractice, practiceStats, practiceDue, moduleQueue, MODULE_QUESTIONS, MODULE_SECONDS, PACE_SEC,
+  pickPractice, practiceStats, practiceDue, moduleQueue, MODULE_BY_SECTION, paceSecOf, practiceVerdict,
   type PracticeFilter
 } from '../lib/practice'
 import { parseStemBlocks, rationaleText } from '../lib/practiceView'
 import { questionSrc } from '../lib/journal'
 import { markedLemmas, type Segment } from '../lib/reading'
 import Markable from '../components/Markable'
+import QHtml from '../components/QHtml'
+import { DesmosPanel, DesmosTips } from '../components/Desmos'
 import { ChevronLeft, Check, Close } from '../components/Icon'
-import type { QuestionView } from '../lib/types'
+import type { PracticeSection, QuestionView } from '../lib/types'
 
 /**
  * Практика = настоящие вопросы SAT (`Учёба/Вопросы`) с четырьмя вариантами и разбором.
@@ -52,15 +54,20 @@ function Stem({ text, marked, onWord }: {
 
 /* ---- один вопрос ------------------------------------------------------------ */
 
-function QuestionScreen({ view, index, total, onExit, onDone }: {
+function QuestionScreen({ view, index, total, onExit, onDone, tools }: {
   view: QuestionView
   index: number
   total: number
   onExit: () => void
   onDone: (correct: boolean | null, seconds: number, overPace: boolean) => void
+  tools?: React.ReactNode
 }) {
   const app = useApp()
   const [picked, setPicked] = useState<QuestionView['choices'][number]['letter'] | null>(null)
+  // вписанный ответ SPR (математика): вариантов нет, ответ набирается в поле
+  const [typed, setTyped] = useState('')
+  const spr = view.kind === 'spr'
+  const pace = paceSecOf(view)
   const [confirmed, setConfirmed] = useState(false)
   const shownAt = useRef(Date.now())
   // защита от двойной записи: подтверждение одним тапом уже отсекает случайный ответ на
@@ -79,8 +86,8 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
     return () => clearInterval(id)
   }, [confirmed, view.path])
   const elapsedSec = (Date.now() - shownAt.current) / 1000
-  const overPaceNow = elapsedSec > PACE_SEC
-  const paceWidth = Math.min(100, (elapsedSec / PACE_SEC) * 100)
+  const overPaceNow = elapsedSec > pace
+  const paceWidth = Math.min(100, (elapsedSec / pace) * 100)
 
   /* Отметка незнакомого слова. Источник — `question:<qid>` (journal.questionSrc): слово из
      настоящего вопроса банка College Board — отдельный сигнал от слова из карточки колоды.
@@ -109,6 +116,7 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
 
   useEffect(() => {
     setPicked(null)
+    setTyped('')
     setConfirmed(false)
     logged.current = false
     shownAt.current = Date.now()
@@ -120,26 +128,29 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
   const answeredSec = useRef(0)
   const answeredOver = useRef(false)
 
+  const chose = spr ? typed.trim() : picked ?? ''
   function confirm() {
-    if (!picked || confirmed) return
+    if (!chose || confirmed) return
     setConfirmed(true)
     if (!logged.current) {
       logged.current = true
       const seconds = (Date.now() - shownAt.current) / 1000
       answeredSec.current = seconds
-      answeredOver.current = seconds > PACE_SEC
-      void logPractice(view, picked, seconds)
+      answeredOver.current = seconds > pace
+      void logPractice(view, chose, seconds)
     }
   }
 
-  const known = !!view.answer
-  const correct = confirmed && known ? picked === view.answer : null
+  const verdict = confirmed ? practiceVerdict(view, chose) : null
+  const known = spr ? view.answers.length > 0 : !!view.answer
+  const correct = confirmed && known ? verdict === true : null
 
   return (
     <div className="screen s-practice">
       <div className="page-title">
         <button className="iconbtn" onClick={onExit} aria-label="Завершить сессию"><ChevronLeft /></button>
         <h2>Практика · {index + 1}/{total}</h2>
+        {tools}
       </div>
 
       {/* Мягкий темп: полоса растёт до PACE_SEC (71 с) и меняет цвет по истечении, ответ
@@ -152,19 +163,39 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
 
       <div className="card">
         <div className="prac-meta">{view.skill}{view.difficulty ? ` · ${view.difficulty}` : ''}</div>
-        <Stem text={view.stem} marked={marked} onWord={markWord} />
+        {/* HTML-вопрос (математика: MathML, рисунки, таблицы) рисуется разметкой College Board;
+            отметка слова касанием работает только в текстовом вопросе */}
+        {view.html
+          ? <QHtml className="prac-stem prac-html" html={view.stem} />
+          : <Stem text={view.stem} marked={marked} onWord={markWord} />}
       </div>
       {/* Подсказка живёт в обоих состояниях и меняет текст вместе с границами отметки:
           после ответа отмечать можно БОЛЬШЕ, чем до него, и подсказка, исчезающая ровно
           в этот момент, говорила бы обратное. */}
-      <div className="read-hint">
+      {!view.html && <div className="read-hint">
         {confirmed
           ? 'Незнакомое слово — коснитесь его: в условии, в вариантах и в разборе'
           : 'Незнакомое слово в условии — коснитесь его'}
-      </div>
+      </div>}
       {markError && <div className="why-err">Отметка не сохранилась: {markError}</div>}
 
-      <div className={`mc-stack${confirmed ? ' answered' : ''}`}>
+      {spr && (
+        <input
+          className={`type-input prac-spr${confirmed ? (correct ? ' is-right' : known ? ' is-wrong' : '') : ''}`}
+          value={typed}
+          onChange={e => setTyped(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') confirm() }}
+          readOnly={confirmed}
+          inputMode="text"
+          autoComplete="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          placeholder="Ответ: число или дробь, напр. 3/4"
+          aria-label="Ответ"
+        />
+      )}
+
+      {!spr && <div className={`mc-stack${confirmed ? ' answered' : ''}`}>
         {view.choices.map(c => {
           const isPicked = picked === c.letter
           const isRight = confirmed && known && c.letter === view.answer
@@ -183,7 +214,9 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
               <span className="prac-choice-text">
                 {/* до ответа — вариант это кнопка выбора, разметке слово не подлежит (см. комментарий
                     у markSrc/markWord выше); после ответа он статичен, и слово можно отметить */}
-                {confirmed ? <Markable text={c.text} isMarked={isMarked} onWord={markWord} /> : c.text}
+                {view.html
+                  ? <QHtml as="span" html={c.text} />
+                  : confirmed ? <Markable text={c.text} isMarked={isMarked} onWord={markWord} /> : c.text}
               </span>
             </>
           )
@@ -200,10 +233,10 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
             </button>
           )
         })}
-      </div>
+      </div>}
 
       {!confirmed ? (
-        <button className="btn btn-green btn-lg" onClick={confirm} disabled={!picked}>Ответить</button>
+        <button className="btn btn-green btn-lg" onClick={confirm} disabled={!chose}>Ответить</button>
       ) : (
         <div className="card prac-result">
           <div className="hero-head">
@@ -214,9 +247,11 @@ function QuestionScreen({ view, index, total, onExit, onDone }: {
                   : <><Close size={20} /> Неверно</>
                 : 'Ответ принят'}
             </span>
-            {known && !correct && <span className="hero-sub">правильный ответ — {view.answer}</span>}
+            {known && !correct && <span className="hero-sub">правильный ответ — {spr ? view.answers.join(' или ') : view.answer}</span>}
           </div>
-          <div className="prac-rationale"><Markable text={rationaleText(view)} isMarked={isMarked} onWord={markWord} /></div>
+          {view.html && view.rationale
+            ? <QHtml className="prac-rationale prac-html" html={view.rationale} />
+            : <div className="prac-rationale"><Markable text={rationaleText(view)} isMarked={isMarked} onWord={markWord} /></div>}
           <button className="btn btn-green btn-lg" onClick={() => onDone(correct, answeredSec.current, answeredOver.current)}>
             {index + 1 < total ? 'Следующий вопрос' : 'Итог сессии'}
           </button>
@@ -241,7 +276,11 @@ interface Session {
 
 export default function Practice() {
   const app = useApp()
-  const views = questionViews()
+  const section: PracticeSection = app.practiceSection
+  const spec = MODULE_BY_SECTION[section]
+  const allViews = questionViews()
+  const views = useMemo(() => allViews.filter(v => v.section === section), [allViews, section])
+  const mathTotal = useMemo(() => allViews.filter(v => v.section === 'math').length, [allViews])
   const stats = useMemo(() => practiceStats(views, app.journal), [views, app.journal])
   const due = useMemo(() => practiceDue(views, app.journal), [views, app.journal])
   const freshCount = stats.total - stats.solved
@@ -255,6 +294,8 @@ export default function Practice() {
   )
   const [skill, setSkill] = useState('')
   const [difficulty, setDifficulty] = useState('')
+  // фильтр навыка одного раздела другому ни к чему: смена раздела его сбрасывает
+  useEffect(() => { setSkill(''); setDifficulty('') }, [section])
   const filter: PracticeFilter = { skill, difficulty }
   const available = useMemo(
     () => pickPractice(views, app.journal, filter),
@@ -265,7 +306,7 @@ export default function Practice() {
   function start(mode: 'free' | 'module') {
     // модуль имитирует настоящий проход RW и не сужается фильтром навыка/сложности -
     // это отдельный режим, а не «начать практику» с предустановленными чипами
-    const queue = mode === 'module' ? moduleQueue(views, app.journal) : available
+    const queue = mode === 'module' ? moduleQueue(views, app.journal, new Date(), section) : available
     if (!queue.length) return
     setSession({ queue, idx: 0, answered: 0, correct: 0, mode, startedAt: Date.now(), sumSec: 0, overCount: 0 })
   }
@@ -291,35 +332,43 @@ export default function Practice() {
     return () => clearInterval(id)
   }, [moduleRunning])
   const moduleElapsedSec = session?.mode === 'module' ? (Date.now() - session.startedAt) / 1000 : 0
-  const moduleTimeUp = session?.mode === 'module' && moduleElapsedSec >= MODULE_SECONDS
+  const moduleTimeUp = session?.mode === 'module' && moduleElapsedSec >= spec.seconds
 
-  if (session && session.mode === 'module' && !moduleTimeUp && session.idx < session.queue.length) {
-    const remaining = Math.max(0, Math.round(MODULE_SECONDS - moduleElapsedSec))
+  /* Desmos (математика): тот же калькулятор, что встроен в Bluebook на экзамене. Панель
+     монтируется при первом открытии и живёт до конца сессии - скрытая, а не снятая, иначе
+     закрытие панели стирало бы построенные графики между вопросами. */
+  const [desmosOpen, setDesmosOpen] = useState(false)
+  const [desmosMounted, setDesmosMounted] = useState(false)
+  useEffect(() => { if (!session) { setDesmosOpen(false); setDesmosMounted(false) } }, [session === null])
+  const toggleDesmos = () => { setDesmosMounted(true); setDesmosOpen(o => !o) }
+
+  const running = !!session && session.idx < session.queue.length && !(session.mode === 'module' && moduleTimeUp)
+  if (session && running) {
+    const remaining = Math.max(0, Math.round(spec.seconds - moduleElapsedSec))
+    const math = section === 'math'
     return (
-      <>
-        <div className="prac-module-clock" aria-live="polite">
-          {String(Math.floor(remaining / 60)).padStart(2, '0')}:{String(remaining % 60).padStart(2, '0')} до конца модуля
+      <div className={`prac-split${desmosOpen ? ' is-open' : ''}`}>
+        <div className="prac-main">
+          {session.mode === 'module' && (
+            <div className="prac-module-clock" aria-live="polite">
+              {String(Math.floor(remaining / 60)).padStart(2, '0')}:{String(remaining % 60).padStart(2, '0')} до конца модуля
+            </div>
+          )}
+          <QuestionScreen
+            view={session.queue[session.idx]}
+            index={session.idx}
+            total={session.queue.length}
+            onExit={() => setSession(null)}
+            onDone={done}
+            tools={math ? (
+              <button className={`chip desmos-toggle${desmosOpen ? ' is-active' : ''}`} onClick={toggleDesmos} aria-pressed={desmosOpen}>
+                Desmos
+              </button>
+            ) : undefined}
+          />
         </div>
-        <QuestionScreen
-          view={session.queue[session.idx]}
-          index={session.idx}
-          total={session.queue.length}
-          onExit={() => setSession(null)}
-          onDone={done}
-        />
-      </>
-    )
-  }
-
-  if (session && session.mode === 'free' && session.idx < session.queue.length) {
-    return (
-      <QuestionScreen
-        view={session.queue[session.idx]}
-        index={session.idx}
-        total={session.queue.length}
-        onExit={() => setSession(null)}
-        onDone={done}
-      />
+        {math && desmosMounted && <DesmosPanel open={desmosOpen} onClose={() => setDesmosOpen(false)} />}
+      </div>
     )
   }
 
@@ -341,7 +390,7 @@ export default function Practice() {
             <div className="sum-sub">
               {finishedAll
                 ? `Успел: ${session.answered} из ${session.queue.length}`
-                : `Не успел: ${session.answered} из ${session.queue.length} за ${Math.round(MODULE_SECONDS / 60)} мин`}
+                : `Не успел: ${session.answered} из ${session.queue.length} за ${Math.round(spec.seconds / 60)} мин`}
             </div>
           )}
           <div className="sum-sub">
@@ -352,7 +401,7 @@ export default function Practice() {
           {avgSec !== null && (
             <div className="sum-sub">
               среднее время на вопрос: {avgSec} с
-              {session.mode === 'module' && ` (за бюджетом ${PACE_SEC} с: ${session.overCount})`}
+              {session.mode === 'module' && ` (за бюджетом ${spec.pace} с: ${session.overCount})`}
             </div>
           )}
           <button className="btn btn-green btn-lg" onClick={() => setSession(null)}>К практике</button>
@@ -368,8 +417,21 @@ export default function Practice() {
         <h2>Практика</h2>
       </div>
 
+      {/* Раздел экзамена: вопросы RW и математики - разные очереди, модули и темп */}
+      <div className="stage-chips prac-sections">
+        <button className={`stage-chip${section === 'rw' ? ' is-active' : ''}`} onClick={() => openPractice('rw')}>Reading & Writing</button>
+        <button className={`stage-chip${section === 'math' ? ' is-active' : ''}`} onClick={() => openPractice('math')}>
+          Математика{mathTotal ? <span className="stage-chip-n"> · {mathTotal}</span> : null}
+        </button>
+      </div>
+      {section === 'math' && <DesmosTips />}
+
       {views.length === 0 ? (
-        <div className="card"><div className="syncline">Вопросы появятся после синхронизации с колодой.</div></div>
+        <div className="card"><div className="syncline">
+          {section === 'math'
+            ? 'Вопросов математики в колоде пока нет: их кладёт выгрузка банка College Board (scripts/qbank-import.mjs).'
+            : 'Вопросы появятся после синхронизации с колодой.'}
+        </div></div>
       ) : (
         <>
           <div className="card hero hero-slim">
@@ -437,14 +499,14 @@ export default function Practice() {
                 ? `Повторить · ${due}`
                 : `Начать практику · ${available.length}`}
           </button>
-          {/* Режим модуля (D5): 27 вопросов подряд с общим бюджетом 32 минуты, как модуль RW
+          {/* Режим модуля (D5): модуль раздела подряд под общим бюджетом (RW 27 за 32 мин, математика 22 за 35), как модуль
               настоящего цифрового SAT - независимо от чипов навыка/сложности выше. */}
           <button
             className="btn btn-white btn-lg prac-module-btn"
             onClick={() => start('module')}
             disabled={stats.total === 0}
           >
-            Режим модуля · {Math.min(MODULE_QUESTIONS, stats.total)} вопросов, {Math.round(MODULE_SECONDS / 60)} мин
+            Режим модуля · {Math.min(spec.questions, stats.total)} вопросов, {Math.round(spec.seconds / 60)} мин
           </button>
         </>
       )}

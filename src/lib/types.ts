@@ -87,6 +87,9 @@ export interface QuestionChoice {
   text: string
 }
 
+/** Раздел экзамена у вопроса практики: Reading and Writing или математика. */
+export type PracticeSection = 'rw' | 'math'
+
 /** Типизированное представление вопроса практики для UI/статистики. */
 export interface QuestionView {
   path: string
@@ -96,9 +99,13 @@ export interface QuestionView {
   domain: string
   skill: string
   difficulty: string
+  section: PracticeSection    // из поля test (или доменов математики банка), см. practiceSectionOf
+  kind: 'mcq' | 'spr'         // spr = ответ вписывается числом (answer_type: spr), вариантов нет
+  html: boolean               // format: html - условие, варианты и разбор - HTML с MathML и рисунками
   stem: string                // условие (проза); может содержать строки списка "- "
-  choices: QuestionChoice[]   // ровно 4 варианта A–D у целого вопроса
+  choices: QuestionChoice[]   // ровно 4 варианта A–D у целого вопроса с вариантами, пусто у spr
   answer: 'A' | 'B' | 'C' | 'D' | '' // правильный вариант; пусто, если раздела «## Разбор» нет
+  answers: string[]           // spr: принятые формы ответа («7/3», «2.333»); пусто у вопроса с вариантами
   rationale: string           // разбор; пусто, если раздела не было
   added: string
   broken: boolean

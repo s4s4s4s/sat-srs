@@ -12,8 +12,9 @@
  * не четыре варианта, буквы не по порядку, `answer` на несуществующую букву) обязано ставить
  * `broken`, а не ронять приложение — тем же приёмом, что и `parseMd` для frontmatter.
  */
-import type { JournalLine, QuestionChoice, QuestionRec, QuestionView } from './types'
+import type { JournalLine, PracticeSection, QuestionChoice, QuestionRec, QuestionView } from './types'
 import { addDaysKey, dayKey } from './daytime'
+import { checkNumeric } from './scheduler'
 
 const KNOWN_SECTIONS = new Set(['Вопрос', 'Варианты', 'Разбор'])
 const LETTERS = ['A', 'B', 'C', 'D'] as const
@@ -33,7 +34,7 @@ interface ParsedBody {
  * четырём или буквы не по порядку A/B/C/D — всё это даёт `broken`, но не бросает исключение:
  * вызывающий получает частично разобранные данные и решает сам, показывать вопрос или нет.
  */
-export function parseQuestionBody(body: string): ParsedBody {
+export function parseQuestionBody(body: string, spr = false): ParsedBody {
   const lines = body.replace(/\r\n/g, '\n').split('\n')
   const sections: { name: string; text: string }[] = []
   let current: { name: string; buf: string[] } | null = null
@@ -58,7 +59,11 @@ export function parseQuestionBody(body: string): ParsedBody {
   if (!stemSection) broken = true
 
   const choices: QuestionChoice[] = []
-  if (!choicesSection) {
+  if (spr) {
+    // вопрос с вписываемым ответом (SPR, математика): вариантов нет по устройству, и раздел
+    // вариантов у такого файла - брак, а не лишнее
+    if (choicesSection) broken = true
+  } else if (!choicesSection) {
     broken = true
   } else {
     // вариант — одна строка, варианты разделены пустой строкой
@@ -83,13 +88,30 @@ export function parseQuestionBody(body: string): ParsedBody {
   }
 }
 
+/**
+ * Раздел экзамена у вопроса банка: математика или Reading and Writing. Решает поле `test`
+ * («Math» у выгрузки College Board), а без него - коды доменов математики банка (H, P, Q, S)
+ * и их названия; всё прочее - RW, как все вопросы до 24.09.2026.
+ */
+const MATH_DOMAINS = new Set(['H', 'P', 'Q', 'S', 'Algebra', 'Advanced Math',
+  'Problem-Solving and Data Analysis', 'Geometry and Trigonometry'])
+export function practiceSectionOf(fm: Record<string, any>): PracticeSection {
+  const test = String(fm.test ?? '').trim().toLowerCase()
+  if (test) return test === 'math' ? 'math' : 'rw'
+  return MATH_DOMAINS.has(String(fm.domain ?? '').trim()) ? 'math' : 'rw'
+}
+
 /** Запись вопроса → типизированный вид. Лишние поля frontmatter остаются в `QuestionRec.fm`. */
 export function questionView(rec: QuestionRec): QuestionView {
   const fm = rec.fm ?? {}
-  const { stem, choices, rationale, broken: bodyBroken } = parseQuestionBody(rec.body)
+  const spr = String(fm.answer_type ?? '').trim().toLowerCase() === 'spr'
+  const { stem, choices, rationale, broken: bodyBroken } = parseQuestionBody(rec.body, spr)
 
-  const rawAnswer = typeof fm.answer === 'string' ? fm.answer.trim().toUpperCase() : ''
-  const answerKnown = !rawAnswer || choices.some(c => c.letter === rawAnswer)
+  /* SPR: список принятых форм ответа (`answers`, «7/3», «2.333»); пустой список - брак,
+     сверять не с чем. У вопроса с вариантами `answer` - буква. */
+  const answers = spr && Array.isArray(fm.answers) ? fm.answers.map((a: unknown) => String(a).trim()).filter(Boolean) : []
+  const rawAnswer = !spr && typeof fm.answer === 'string' ? fm.answer.trim().toUpperCase() : ''
+  const answerKnown = spr ? answers.length > 0 : !rawAnswer || choices.some(c => c.letter === rawAnswer)
   const answer = answerKnown && rawAnswer ? (rawAnswer as QuestionView['answer']) : ''
 
   return {
@@ -100,13 +122,31 @@ export function questionView(rec: QuestionRec): QuestionView {
     domain: String(fm.domain ?? ''),
     skill: String(fm.skill ?? ''),
     difficulty: String(fm.difficulty ?? ''),
+    section: practiceSectionOf(fm),
+    kind: spr ? 'spr' : 'mcq',
+    html: String(fm.format ?? '').trim().toLowerCase() === 'html',
     stem,
     choices,
     answer,
+    answers,
     rationale,
     added: String(fm.added ?? ''),
     broken: !!rec.broken || bodyBroken || !answerKnown
   }
+}
+
+/**
+ * Вердикт ответа на вопрос практики: буква против `answer` у вопроса с вариантами, число
+ * против любой принятой формы у SPR (`checkNumeric`: 0.8 = 4/5 = .8). null - ключа нет,
+ * верность неизвестна (вопрос без разбора).
+ */
+export function practiceVerdict(view: QuestionView, chose: string): boolean | null {
+  if (view.kind === 'spr') {
+    if (!view.answers.length) return null
+    const typed = chose.trim()
+    return !!typed && view.answers.some(a => checkNumeric(typed, a) === 'correct')
+  }
+  return view.answer ? chose.trim().toUpperCase() === view.answer : null
 }
 
 /** Узкий фильтр очереди практики: пустое поле — «любой». */
@@ -209,15 +249,25 @@ export function practiceDue(views: QuestionView[], journal: JournalLine[], now: 
  * Режим модуля (D5): 27 вопросов подряд под общим бюджетом времени, как модуль RW
  * настоящего цифрового SAT. `PACE_SEC` - мягкий темп на один вопрос (не жёсткий лимит,
  * экран его не блокирует), согласован с бюджетом модуля: `MODULE_SECONDS / MODULE_QUESTIONS`
- * округляется ровно до него.
+ * округляется ровно до него. У математики модуль свой: 22 вопроса за 35 минут, ≈95 с на вопрос
+ * (`MODULE_BY_SECTION`); константы RW оставлены под прежними именами.
  */
 export const MODULE_QUESTIONS = 27
 export const MODULE_SECONDS = 32 * 60 // 1920 с = 32 мин
 export const PACE_SEC = 71 // MODULE_SECONDS / MODULE_QUESTIONS ≈ 71.1
 
-/** Первые `MODULE_QUESTIONS` из общей очереди практики, очередь не переставляется по-своему. */
-export function moduleQueue(views: QuestionView[], journal: JournalLine[], now: Date = new Date()): QuestionView[] {
-  return pickPractice(views, journal, undefined, now).slice(0, MODULE_QUESTIONS)
+export interface ModuleSpec { questions: number; seconds: number; pace: number }
+export const MODULE_BY_SECTION: Record<PracticeSection, ModuleSpec> = {
+  rw: { questions: MODULE_QUESTIONS, seconds: MODULE_SECONDS, pace: PACE_SEC },
+  math: { questions: 22, seconds: 35 * 60, pace: 95 } // 2100 / 22 ≈ 95.5
+}
+
+/** Мягкий темп одного вопроса по его разделу. */
+export const paceSecOf = (view: QuestionView): number => MODULE_BY_SECTION[view.section].pace
+
+/** Первые вопросы модуля раздела из общей очереди практики, очередь не переставляется по-своему. */
+export function moduleQueue(views: QuestionView[], journal: JournalLine[], now: Date = new Date(), section: PracticeSection = 'rw'): QuestionView[] {
+  return pickPractice(views, journal, undefined, now).slice(0, MODULE_BY_SECTION[section].questions)
 }
 
 /** Сводка по одному разрезу (весь набор или один навык). */

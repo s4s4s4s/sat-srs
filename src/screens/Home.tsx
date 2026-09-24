@@ -1,4 +1,4 @@
-import { useApp, views, readingViews, questionViews, setScreen, startSync, startLesson, logReading, unsyncedCount } from '../lib/store'
+import { useApp, views, readingViews, questionViews, setScreen, openPractice, startSync, startLesson, logReading, unsyncedCount } from '../lib/store'
 import { homeCounts, sectionOf, newBudgetFor, levelStats, activeLevel, type Section } from '../lib/scheduler'
 import {
   streak, minutesToday, floorDays, reviewsByDay, readTextSlugs, readTextsToday, dayUnitsByDay,
@@ -177,7 +177,7 @@ function ReadingBlock({ texts, read, level, onOpen }: {
  * графику практики; показывается рядом со свежими только подписью, зачёт дня в счётчики
  * дневной цели не входит (это делает WS6a).
  */
-function PracticeBlock({ stats, due, onOpen }: { stats: PracticeStats; due: number; onOpen: () => void }) {
+function PracticeBlock({ stats, due, onOpen, title = 'Практика' }: { stats: PracticeStats; due: number; onOpen: () => void; title?: string }) {
   const left = stats.total - stats.solved
   const summaryLabel = practiceSummaryLabel(stats)
   return (
@@ -185,7 +185,7 @@ function PracticeBlock({ stats, due, onOpen }: { stats: PracticeStats; due: numb
       <span className="sec-glyph" style={{ ['--rune-shape' as string]: 'var(--rune-tiwaz)' } as React.CSSProperties} />
       <div className="hero-head">
         <span className="hero-title section-title">
-          <span className="sec-badge badge-blue"><Check size={18} /></span> Практика
+          <span className="sec-badge badge-blue"><Check size={18} /></span> {title}
         </span>
         <span className="hero-sub">
           {stats.total ? `${stats.correct}/${stats.total} верно` : 'пока пусто'}
@@ -329,8 +329,15 @@ export default function Home() {
   const texts = readingViews()
   const readSlugs = readTextSlugs(app.journal)
   const readLevel = readingLevel(texts, readSlugs)
-  const practice = practiceStats(questionViews(), app.journal)
-  const practiceDueCount = practiceDue(questionViews(), app.journal)
+  /* Вопросы банка College Board разведены по разделу экзамена: RW - блок «Практика»,
+     математика - свой блок рядом (с Desmos на экране вопроса), у каждого своя очередь. */
+  const qAll = questionViews()
+  const qRw = qAll.filter(v => v.section === 'rw')
+  const qMath = qAll.filter(v => v.section === 'math')
+  const practice = practiceStats(qRw, app.journal)
+  const practiceDueCount = practiceDue(qRw, app.journal)
+  const practiceMath = practiceStats(qMath, app.journal)
+  const practiceMathDue = practiceDue(qMath, app.journal)
 
   const rwStats = levelStats(rw)
   const rwActive = activeLevel(rw)
@@ -508,7 +515,10 @@ export default function Home() {
         />
       ))}
       <ReadingBlock texts={texts} read={readSlugs} level={readLevel} onOpen={() => setScreen('reading')} />
-      <PracticeBlock stats={practice} due={practiceDueCount} onOpen={() => setScreen('practice')} />
+      <PracticeBlock stats={practice} due={practiceDueCount} onOpen={() => openPractice('rw')} />
+      {qMath.length > 0 && (
+        <PracticeBlock title="Математика · банк CB" stats={practiceMath} due={practiceMathDue} onOpen={() => openPractice('math')} />
+      )}
 
       <div className="home-actions">
         <div className="row">

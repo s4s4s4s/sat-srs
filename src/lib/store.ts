@@ -4,7 +4,7 @@ import * as db from './db'
 import { sync, syncIdle, type SyncStatus } from './sync'
 import { GitHubClient, tokenExpiration } from './github'
 import { cardView, fsrsFromKey, fsrsToFm, readingView, slugFromPath } from './yamlfm'
-import { questionView, PACE_SEC } from './practice'
+import { questionView, practiceVerdict, paceSecOf } from './practice'
 import { makeScheduler, effectiveRetention, holdExerciseToNextDay, holdOnIntroDay, homeCounts, isLevelled, isLogicCard, newBudgetTotal, dueCap, type Section, type TypeVerdict } from './scheduler'
 import { logicReviewLine } from './logic'
 import { drillLine } from './drill'
@@ -16,7 +16,7 @@ import {
   readingSrc, isMarked, markCount, readingPassed, deckHasWord, normWord, MARK_SENTENCE_MAX,
   RUN_MIN_REVIEWS
 } from './journal'
-import type { CardRec, CardView, Format, JournalRec, QuestionRec, QuestionView, ReadingRec, ReadingView, Screen, SessionResult, Settings, StudyItem } from './types'
+import type { CardRec, CardView, Format, JournalRec, PracticeSection, QuestionRec, QuestionView, ReadingRec, ReadingView, Screen, SessionResult, Settings, StudyItem } from './types'
 import { DEFAULT_SETTINGS } from './types'
 import { newPerDay } from './norms'
 import { setSoundEnabled } from './sound'
@@ -28,6 +28,8 @@ interface AppState {
   ready: boolean
   screen: Screen
   sessionSection: Section
+  /** Раздел экрана практики: вопросы RW или математики (openPractice). */
+  practiceSection: PracticeSection
   sessionReviewOnly: boolean
   /* Урок сверх нормы: квота новых берётся из максимума дня, а не из оптимума.
      Взводится только с главного экрана кнопкой «Ещё», когда повторять нечего, а
@@ -67,6 +69,7 @@ let state: AppState = {
   ready: false,
   screen: 'home',
   sessionSection: 'rw',
+  practiceSection: 'rw',
   sessionReviewOnly: false,
   sessionOverNorm: false,
   sessionGoal: RUN_MIN_REVIEWS,
@@ -319,6 +322,13 @@ export function views(): CardView[] {
 /** Тексты для чтения — типизированные виды. Битый frontmatter отсеивается: показывать нечего. */
 export function readingViews(): ReadingView[] {
   return state.readings.map(readingView).filter(v => !v.broken)
+}
+
+/** Экран практики в разделе: вопросы RW или математики. */
+export function openPractice(section: PracticeSection) {
+  state.practiceSection = section
+  state.screen = 'practice'
+  emit()
 }
 
 /** Вопросы практики — типизированные виды. Битый разбор отсеивается: показывать нечего. */
@@ -758,15 +768,17 @@ export async function logTextRead(text: ReadingView, seconds = 0): Promise<void>
  */
 export async function logPractice(view: QuestionView, chose: string, seconds = 0): Promise<void> {
   const now = new Date()
-  const letter = chose.trim().toUpperCase()
+  // буква варианта - заглавной, как раньше; вписанный ответ SPR - как введён
+  const answer = view.kind === 'spr' ? chose.trim() : chose.trim().toUpperCase()
+  const correct = practiceVerdict(view, answer)
   const line: JournalRec = {
     id: newId(),
     v: 1, type: 'practice', ts: isoLocal(now), ms: now.getMilliseconds(), day: dayKey(),
-    qid: view.qid, skill: view.skill, difficulty: view.difficulty, chose: letter, synced: 0,
-    ...(view.answer ? { correct: letter === view.answer } : {}),
+    qid: view.qid, skill: view.skill, difficulty: view.difficulty, chose: answer, synced: 0,
+    ...(correct !== null ? { correct } : {}),
     ...(seconds > 0 ? { sec: Math.round(seconds) } : {}),
-    // мягкий таймер (PACE_SEC, D5): флаг темпа, а не запрет - ответ пишется как есть
-    ...(seconds > PACE_SEC ? { slow: true } : {})
+    // мягкий таймер (D5): флаг темпа, а не запрет - ответ пишется как есть; темп свой у раздела
+    ...(seconds > paceSecOf(view) ? { slow: true } : {})
   }
   await pushJournal(line)
   void startSync()
