@@ -430,7 +430,7 @@ export default function Practice() {
       {views.length === 0 ? (
         <div className="card"><div className="syncline">
           {section === 'math'
-            ? 'Вопросов математики в колоде пока нет: их кладёт выгрузка банка College Board (scripts/qbank-import.mjs).'
+            ? 'Вопросов математики в колоде пока нет: их кладёт конвертер банка College Board в колоде (tools/банк-конвертация.mjs).'
             : 'Вопросы появятся после синхронизации с колодой.'}
         </div></div>
       ) : (
