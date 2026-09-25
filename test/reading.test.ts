@@ -36,7 +36,7 @@ import {
   markDigest
 } from '../src/lib/journal'
 import { readingsDeletionPlan } from '../src/lib/db'
-import { isCardPath, isReadingPath, readingBase } from '../src/lib/sync'
+import { isCardPath, isReadingPath, isQuestionPath, readingBase } from '../src/lib/sync'
 import {
   splitSentences, paragraphs, segmentText, markedLemmas, glossFor, lemmaOf,
   readingLevel, orderReadings, chunkPassages, CHUNK_MIN_WORDS, CHUNK_MAX_WORDS, type Segment
@@ -449,6 +449,11 @@ function pathChecks(): void {
   assert(readingBase('Карточки') === 'Чтение', 'колода в корне репозитория тоже даёт соседний каталог')
   assert(isReadingPath('Учёба/Чтение/2-01-reef.md', base), 'текст опознаётся')
   assert(!isReadingPath('Учёба/Чтение/_черновик.md', base), 'служебный файл текстом не считается')
+  // Q-M8: математика банка College Board живёт соседом `Учёба/Математика-банк` и приезжает вопросами практики
+  assert(isQuestionPath('Учёба/Вопросы/boundaries-easy-02871a0d.md', base), 'вопрос RW опознаётся')
+  assert(isQuestionPath('Учёба/Математика-банк/area-and-volume-easy-02b02213.md', base), 'вопрос математики банка опознаётся')
+  assert(!isQuestionPath('Учёба/Математика-банк/_readme.md', base), 'служебный файл вопросом не считается')
+  assert(!isQuestionPath('Учёба/Чтение/2-01-reef.md', base), 'текст вопросом не считается')
   assert(!isReadingPath('Учёба/Чтение/2-01-reef.txt', base), 'не-md текстом не считается')
   assert(!isReadingPath('Учёба/Карточки/abstract.md', base), 'карточка текстом не считается')
   assert(!isCardPath('Учёба/Чтение/2-01-reef.md', base), 'текст карточкой не считается')

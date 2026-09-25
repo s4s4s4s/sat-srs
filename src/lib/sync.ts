@@ -88,9 +88,16 @@ export function questionBase(base: string): string {
   return (cut >= 0 ? clean.slice(0, cut + 1) : '') + QUESTION_DIR
 }
 
+/* Математика банка College Board лежит отдельным соседом `Учёба/Математика-банк` (так её пишет
+   конвертер колоды `tools/банк-конвертация.mjs`), но для приложения это те же вопросы практики:
+   раздел решает поле `test` файла, а не каталог. */
+const MATH_BANK_DIR = 'Математика-банк'
+
 export const isQuestionPath = (p: string, base: string) => {
   const path = db.nfcPath(p)
-  return path.startsWith(db.nfcPath(questionBase(base)) + '/') && path.endsWith('.md')
+  const q = db.nfcPath(questionBase(base))
+  const math = q.slice(0, q.length - QUESTION_DIR.length) + MATH_BANK_DIR
+  return (path.startsWith(q + '/') || path.startsWith(db.nfcPath(math) + '/')) && path.endsWith('.md')
     && !path.split('/').pop()!.startsWith('_')
 }
 
